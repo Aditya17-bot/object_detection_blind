@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlindAssist</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <h1>BlindAssist</h1>
+    <span class="tagline">camera guidance for visually impaired users</span>
+  </div>
+  <div class="pills" role="status">
+    <span class="pill" id="pill-source" title="video source">source —</span>
+    <span class="pill" id="pill-model" title="detection model">model —</span>
+    <span class="pill" id="pill-fps" title="frames per second">— FPS</span>
+    <span class="pill" id="pill-voice" title="voice commands">🎤 —</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="video-panel" aria-label="Live camera view">
+    <div class="video-frame">
+      <img id="video" src="/video" alt="Live annotated camera feed">
+      <div class="live-badge" aria-hidden="true"><span class="live-dot"></span>LIVE</div>
+    </div>
+    <div class="detections" id="detections" aria-label="Current detections"></div>
+    <p class="error-line" id="error-line" hidden></p>
+  </section>
+
+  <aside class="controls">
+    <div class="card" aria-labelledby="mode-title">
+      <h2 id="mode-title">Mode</h2>
+      <div class="segmented" role="tablist" aria-label="Guidance mode">
+        <button id="btn-walk" class="seg active" role="tab" aria-selected="true"
+                accesskey="w">Walk <kbd>W</kbd></button>
+        <button id="btn-find" class="seg" role="tab" aria-selected="false"
+                accesskey="f">Find <kbd>F</kbd></button>
+      </div>
+      <div class="find-row" id="find-row" hidden>
+        <label for="target-select">Looking for</label>
+        <select id="target-select">
+          <optgroup label="Find items">
+            {% for c in find_classes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </optgroup>
+          <optgroup label="Large objects">
+            {% for c in obstacle_classes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </optgroup>
+        </select>
+      </div>
+      <p class="mode-status" id="mode-status">Walk mode — warning about obstacles ahead.</p>
+      <p class="hint" id="voice-hint">Voice commands: say
+      <em>“find bottle”</em>, <em>“walk mode”</em> or <em>“describe”</em>.</p>
+    </div>
+
+    <div class="card" aria-labelledby="actions-title">
+      <h2 id="actions-title">Actions</h2>
+      <button class="action primary" id="btn-describe">
+        Describe scene <kbd>D</kbd>
+      </button>
+      <button class="action toggle" id="btn-sonar" aria-pressed="false">
+        <span class="toggle-label">Sonar beeps</span>
+        <span class="toggle-state">off</span>
+        <kbd>S</kbd>
+      </button>
+      <button class="action toggle" id="btn-mute" aria-pressed="false">
+        <span class="toggle-label">Voice (laptop)</span>
+        <span class="toggle-state">on</span>
+        <kbd>M</kbd>
+      </button>
+      <button class="action toggle" id="btn-local-speech" aria-pressed="false">
+        <span class="toggle-label">Speak on this device</span>
+        <span class="toggle-state">off</span>
+        <kbd>V</kbd>
+      </button>
+      <div class="rate-row">
+        <label for="rate">Voice speed</label>
+        <input type="range" id="rate" min="120" max="260" step="10" value="175">
+        <span id="rate-value">175 wpm</span>
+      </div>
+      <p class="hint">Sonar pans left/right and ticks faster as the object
+      gets closer — obstacles in Walk mode, the searched object in Find
+      mode. Best with earphones.</p>
+      <p class="hint">Testing from a phone? Turn ON “Speak on this device”
+      and turn OFF “Voice (laptop)” — announcements then come out of the
+      phone, not the laptop.</p>
+    </div>
+
+    <div class="card feed-card" aria-labelledby="feed-title">
+      <h2 id="feed-title">Announcements</h2>
+      <ol class="feed" id="feed" reversed></ol>
+    </div>
+  </aside>
+</main>
+
+<!-- screen readers hear every new announcement without watching the feed -->
+<div id="sr-live" class="sr-only" aria-live="assertive"></div>
+
+<footer class="footer">
+  <span>Shortcuts: <kbd>W</kbd> walk · <kbd>F</kbd> find · <kbd>D</kbd> describe
+  · <kbd>S</kbd> sonar · <kbd>M</kbd> laptop voice · <kbd>V</kbd> speak here</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

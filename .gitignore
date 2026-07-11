@@ -1,0 +1,20 @@
+# environment
+venv/
+__pycache__/
+*.pyc
+.claude/
+
+# auto-downloaded weights (ultralytics fetches these on first run;
+# door_dustbin_stairs.pt is OUR trained model and IS committed)
+yolov8n.pt
+yolov8s.pt
+yolo11n.pt
+
+# offline speech model — grab it once from
+# https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+# and unzip next to voice.py
+vosk-model-small-en-us-0.15/
+
+# local test footage (personal room videos) + generated frames/logs
+test_output/
+sync_log.txt
