@@ -18,3 +18,19 @@ vosk-model-small-en-us-0.15/
 # local test footage (personal room videos) + generated frames/logs
 test_output/
 sync_log.txt
+
+# TFLite export-pipeline artifacts — regenerate from the .pt via the wsl_export
+# scripts; too large / derived to track
+*.onnx
+*_saved_model/
+calibration_*.npy
+
+# Flutter app bundled model assets (derived from the .pt export + the Vosk
+# download); large binaries, regenerate before building the app
+blindassist_app/assets/models/*.tflite
+blindassist_app/assets/models/*.zip
+dart_port/
+
+# generated Gradle build output
+blindassist_app/android/build/
+blindassist_app/build/

@@ -48,11 +48,27 @@ expected strings — instant correctness check for the port).
   TalkBack labels on everything; volume keys as backup mute. Field test
   with the phone protocol from EVALUATION.md.
 
-## Open decisions (ask the user when starting)
+## Decisions made
 
-1. Minimum phone to target (their own Android? version?).
-2. Camera resolution/imgsz trade-off after first on-device FPS numbers.
-3. Whether dustbin/door retraining (more own-photos + room-background
+- **No cloud LLM / no Claude API** (user decision 2026-07-12): user wants
+  zero-cost only. On-device VLMs (Moondream/Gemma/LLaVA) rejected for now —
+  1-4 GB download + 10-30 s/description on mid-range phones beats the
+  purpose; the offline detection-based describe stays. "Local VLM rich
+  scene description" goes in the report as future work.
+- **Target phone**: **Samsung Galaxy S20 FE** (user's device, 2026-07-12).
+  Flagship-tier SoC (Snapdragon 865 / Exynos 990 depending on region) —
+  start at yolov8n TFLite fp16 @ 416 px, try the GPU delegate
+  (tflite_flutter supports it); expect comfortably ≥5 FPS. Android 13
+  max on this device — no compatibility concerns for any planned plugin.
+- **Laptop toolchain** (checked 2026-07-12): Android Studio + Android SDK
+  + adb already installed (`%LOCALAPPDATA%\Android\Sdk`). Flutter SDK was
+  NOT installed (user thought it was) — installed to `C:\src\flutter`,
+  added to user PATH.
+
+## Open decisions (ask the user when relevant)
+
+1. Camera resolution/imgsz trade-off after first on-device FPS numbers.
+2. Whether dustbin/door retraining (more own-photos + room-background
    negatives; stairs re-enable) happens before or after the port.
 
 ## Prototype quirks to NOT copy to Android

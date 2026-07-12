@@ -3,7 +3,8 @@
 import unittest
 
 from decision import (GuidanceEngine, find_message, find_target,
-                      pick_obstacle, summarize_scene, walk_message)
+                      pick_obstacle, recall_message, summarize_scene,
+                      walk_message)
 from position import ObjectInfo, direction_phrase
 
 _CENTER_X = {"left": 0.15, "center": 0.5, "right": 0.85}
@@ -134,12 +135,30 @@ class TestEngineFind(unittest.TestCase):
         e.update([bottle], 0.0)
         self.assertEqual(e.update([bottle], 0.1), "Bottle top right, close")
 
-    def test_not_visible_said_once(self):
+    def test_not_visible_said_once_then_periodic_reminder(self):
         e = GuidanceEngine("find", "bottle")
         self.assertIsNone(e.update([], 0.0))               # absence persistence
         self.assertEqual(e.update([], 0.1), "Bottle not visible")
-        self.assertIsNone(e.update([], 5.0))               # not repeated
-        self.assertIsNone(e.update([], 10.0))
+        self.assertIsNone(e.update([], 5.0))               # not repeated...
+        # ...but after reminder_interval the engine says it is still trying
+        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
+        self.assertIsNone(e.update([], 15.0))              # next one waits too
+        self.assertEqual(e.update([], 20.3), "Still looking for bottle")
+
+    def test_reminder_resets_when_target_found(self):
+        e = GuidanceEngine("find", "bottle")
+        e.update([], 0.0)
+        self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        bottle = info("bottle", "left", proximity="medium", area=0.005)
+        e.update([bottle], 5.0)
+        self.assertEqual(e.update([bottle], 5.1), "Bottle left, medium")
+        # gone again -> fresh "not visible" first (now enriched by object
+        # memory since the bottle was just seen), reminder only later
+        e.update([], 8.0)
+        self.assertEqual(e.update([], 8.1),
+                         "Bottle not visible, last seen on your left")
+        self.assertIsNone(e.update([], 12.0))
+        self.assertEqual(e.update([], 18.2), "Still looking for bottle")
 
     def test_reappearing_target_reported_again(self):
         e = GuidanceEngine("find", "bottle")
@@ -148,9 +167,10 @@ class TestEngineFind(unittest.TestCase):
         bottle = info("bottle", "left", proximity="medium", area=0.005)
         e.update([bottle], 5.0)
         self.assertEqual(e.update([bottle], 5.1), "Bottle left, medium")
-        # gone again -> "not visible" is armed again
+        # gone again -> "not visible" is armed again (enriched by memory)
         e.update([], 10.0)
-        self.assertEqual(e.update([], 10.1), "Bottle not visible")
+        self.assertEqual(e.update([], 10.1),
+                         "Bottle not visible, last seen on your left")
 
     def test_find_mode_requires_target(self):
         with self.assertRaises(ValueError):
@@ -181,6 +201,68 @@ class TestFindMessage(unittest.TestCase):
     def test_not_visible_wording(self):
         self.assertEqual(find_message(None, "cell phone"),
                          "Cell phone not visible")
+
+
+class TestClockBearings(unittest.TestCase):
+    # info() maps left->0.15, center->0.5, right->0.85 => 10, 12, 2 o'clock
+    def test_find_message_clock(self):
+        bottle = info("bottle", "right", v_zone="top", proximity="close",
+                      area=0.02)
+        self.assertEqual(find_message(bottle, "bottle", use_clock=True),
+                         "Bottle at 2 o'clock, close")
+
+    def test_walk_message_clock(self):
+        chair = info("chair", "left", proximity="close")
+        self.assertEqual(walk_message(chair, use_clock=True),
+                         "Chair at 10 o'clock")
+
+    def test_walk_message_clock_center_ahead(self):
+        person = info("person", "center", proximity="close")
+        self.assertEqual(walk_message(person, use_clock=True),
+                         "Person at 12 o'clock")
+
+    def test_engine_toggle_switches_wording(self):
+        e = GuidanceEngine("walk")
+        chair = info("chair", "right", proximity="close")
+        e.update([chair], 0.0)
+        self.assertEqual(e.update([chair], 0.1), "Chair on right")
+        e.set_clock(True)
+        # same obstacle, new phrasing -> not a repeat, speaks immediately
+        self.assertEqual(e.update([chair], 2.0), "Chair at 2 o'clock")
+
+
+class TestObjectMemory(unittest.TestCase):
+    def test_recall_message_zone(self):
+        cup = info("cup", "right", proximity="close", area=0.02)
+        self.assertEqual(recall_message(cup, 5, "cup"),
+                         "Cup last seen on your right, 5 seconds ago")
+
+    def test_recall_message_clock(self):
+        cup = info("cup", "left", proximity="close", area=0.02)
+        self.assertEqual(recall_message(cup, 1, "cup", use_clock=True),
+                         "Cup last seen at 10 o'clock, a moment ago")
+
+    def test_recall_no_memory(self):
+        self.assertEqual(recall_message(None, 0, "apple"),
+                         "No memory of an apple")
+
+    def test_engine_recall_after_object_leaves(self):
+        e = GuidanceEngine("walk")
+        cup = info("cup", "right", proximity="close", area=0.02)
+        e.update([cup], 0.0)          # seen
+        e.update([], 3.0)             # gone
+        self.assertEqual(e.recall("cup", 3.0),
+                         "Cup last seen on your right, 3 seconds ago")
+
+    def test_engine_recall_expires(self):
+        e = GuidanceEngine("walk", memory_ttl=10.0)
+        cup = info("cup", "left", area=0.02)
+        e.update([cup], 0.0)
+        self.assertEqual(e.recall("cup", 100.0), "No memory of a cup")
+
+    def test_engine_recall_unseen_class(self):
+        e = GuidanceEngine("walk")
+        self.assertEqual(e.recall("laptop", 1.0), "No memory of a laptop")
 
 
 if __name__ == "__main__":

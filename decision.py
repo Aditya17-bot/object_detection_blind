@@ -15,7 +15,7 @@ between messages, and an escalation override so a closing obstacle is never
 silenced by a cooldown.
 """
 
-from position import OBSTACLE_CLASSES, PROXIMITY_LEVELS
+from position import OBSTACLE_CLASSES, PROXIMITY_LEVELS, clock_phrase
 
 # "very close" -> 3 ... "far" -> 0
 _PROX_RANK = {level: rank for rank, level in enumerate(reversed(PROXIMITY_LEVELS))}
@@ -78,11 +78,12 @@ def _freer_side(chosen, infos):
     return "left" if chosen.center_x >= 0.5 else "right"
 
 
-def walk_message(info, all_infos=()):
+def walk_message(info, all_infos=(), use_clock=False):
     """Spoken warning for the chosen obstacle. Short on purpose; vertical
-    zone is irrelevant for walking, so only left/ahead/right is spoken."""
+    zone is irrelevant for walking, so only left/ahead/right (or the clock
+    bearing when use_clock) is spoken."""
     name = info.name if info.confidence >= NAME_CONFIDENCE else "obstacle"
-    side = _SIDE_WORD[info.h_zone]
+    side = clock_phrase(info.center_x) if use_clock else _SIDE_WORD[info.h_zone]
     if info.proximity == "very close":
         if info.h_zone == "center":
             dodge = _freer_side(info, all_infos)
@@ -103,10 +104,11 @@ def find_target(infos, target):
     return max(matches, key=lambda i: i.area) if matches else None
 
 
-def find_message(info, target):
+def find_message(info, target, use_clock=False):
     if info is None:
         return _cap(f"{target} not visible")
-    return _cap(f"{info.name} {info.phrase}, {info.proximity}")
+    where = clock_phrase(info.center_x) if use_clock else info.phrase
+    return _cap(f"{info.name} {where}, {info.proximity}")
 
 
 # --------------------------------------------------------------------------
@@ -150,6 +152,39 @@ def summarize_scene(infos):
 
 
 # --------------------------------------------------------------------------
+# Object memory (innovation feature: recall where a thing was last seen)
+# --------------------------------------------------------------------------
+# A blind user often loses track of an object the moment it leaves the frame.
+# The engine remembers the last sighting of every class and can answer "where
+# is my cup?" — or volunteer "last seen on your right" the instant a Find target
+# drops out of view. Deliberately coarse (zone + how-long-ago, never metric):
+# a memory older than memory_ttl is treated as stale and forgotten.
+
+_MEM_WORD = {"left": "on your left", "center": "ahead", "right": "on your right"}
+
+
+def _ago_phrase(seconds):
+    """Human 'how long ago', spoken and vague on purpose."""
+    s = int(round(seconds))
+    if s <= 1:
+        return "a moment ago"
+    if s < 60:
+        return f"{s} seconds ago"
+    m = s // 60
+    return f"{m} minute{'s' if m > 1 else ''} ago"
+
+
+def recall_message(info, seconds_ago, name, use_clock=False):
+    """Spoken memory of a class, or that there is none. `info` is the last
+    ObjectInfo seen for `name` (None if never/expired)."""
+    if info is None:
+        article = "an" if name[0] in "aeiou" else "a"
+        return _cap(f"no memory of {article} {name}")
+    where = clock_phrase(info.center_x) if use_clock else _MEM_WORD[info.h_zone]
+    return _cap(f"{name} last seen {where}, {_ago_phrase(seconds_ago)}")
+
+
+# --------------------------------------------------------------------------
 # Stateful engine: what to say NOW (phases 4/5 call this once per frame)
 # --------------------------------------------------------------------------
 
@@ -162,17 +197,27 @@ class GuidanceEngine:
     """
 
     def __init__(self, mode="walk", target=None,
-                 repeat_cooldown=3.0, min_gap=1.5, persistence=2):
+                 repeat_cooldown=3.0, min_gap=1.5, persistence=2,
+                 reminder_interval=10.0, use_clock=False, memory_ttl=30.0):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
         self.persistence = persistence          # frames a class must persist
+        self.reminder_interval = reminder_interval  # s between "still looking"
+        self.use_clock = use_clock              # clock bearings vs left/right
+        self.memory_ttl = memory_ttl            # s before a sighting goes stale
         self._streaks = {}        # class name -> consecutive frames seen
+        self._memory = {}         # class name -> (last ObjectInfo, time seen)
         self._last_msg = None
         self._last_time = None
         self._last_obstacle = None  # (name, prox rank) of last walk warning
         self._absent = 0            # find mode: consecutive frames w/o target
         self._said_not_visible = False
+        self._not_visible_time = None  # when "not visible"/reminder last said
         self.set_mode(mode, target)
+
+    def set_clock(self, on):
+        """Toggle clock-face bearings (voice: 'clock mode' / 'zone mode')."""
+        self.use_clock = bool(on)
 
     def set_mode(self, mode, target=None):
         """Switch walk/find (future voice-command hook). Resets per-mode
@@ -187,6 +232,7 @@ class GuidanceEngine:
         self._last_obstacle = None
         self._absent = 0
         self._said_not_visible = False
+        self._not_visible_time = None
 
     # -- helpers ----------------------------------------------------------
 
@@ -207,12 +253,32 @@ class GuidanceEngine:
 
     # -- per-frame update -------------------------------------------------
 
+    def _remember(self, infos, now):
+        """Store the most visible sighting of each class this frame, so the
+        object memory survives after things leave the frame."""
+        best = {}
+        for i in infos:
+            if i.name not in best or i.area > best[i.name].area:
+                best[i.name] = i
+        for name, info in best.items():
+            self._memory[name] = (info, now)
+
+    def recall(self, name, now):
+        """Object-memory query: where `name` was last seen. Runs in any mode
+        (voice: 'where is my cup?'). Stale memories (> memory_ttl) are gone."""
+        entry = self._memory.get(name)
+        if entry is None or now - entry[1] > self.memory_ttl:
+            return recall_message(None, 0, name, self.use_clock)
+        info, seen = entry
+        return recall_message(info, now - seen, name, self.use_clock)
+
     def update(self, infos, now):
         # persistence is tracked per class name (not per zone) so an object
         # keeps its streak while the user walks and it drifts across zones;
         # one-frame misdetections never reach `persistence` and stay silent.
         self._streaks = {i.name: self._streaks.get(i.name, 0) + 1
                          for i in infos}
+        self._remember(infos, now)
         if self.mode == "walk":
             return self._update_walk(infos, now)
         return self._update_find(infos, now)
@@ -230,7 +296,7 @@ class GuidanceEngine:
         urgent = (self._last_obstacle is not None
                   and self._last_obstacle[0] == obstacle.name
                   and rank > self._last_obstacle[1])
-        msg = walk_message(obstacle, infos)
+        msg = walk_message(obstacle, infos, self.use_clock)
         if not self._clear_to_speak(msg, now, urgent):
             return None
         self._last_obstacle = (obstacle.name, rank)
@@ -240,19 +306,39 @@ class GuidanceEngine:
         match = find_target(infos, self.target)
         if match is None:
             self._absent += 1
-            # say "not visible" once (after it is REALLY gone, not a flicker)
-            if self._said_not_visible or self._absent < self.persistence:
+            if self._absent < self.persistence:  # flicker, not really gone
                 return None
-            msg = find_message(None, self.target)
+            if self._said_not_visible:
+                # target still missing: remind periodically so long silence
+                # never reads as "the app stopped working" (a blind user
+                # cannot glance at the screen to check)
+                if now - self._not_visible_time < self.reminder_interval:
+                    return None
+                msg = _cap(f"still looking for {self.target}")
+                if not self._clear_to_speak(msg, now):
+                    return None
+                self._not_visible_time = now
+                return self._speak(msg, now)
+            # object memory: the instant the target drops out, say where it
+            # was — turns a dead-end "not visible" into a lead to follow.
+            entry = self._memory.get(self.target)
+            if entry is not None and now - entry[1] <= self.memory_ttl:
+                info = entry[0]
+                where = (clock_phrase(info.center_x) if self.use_clock
+                         else _MEM_WORD[info.h_zone])
+                msg = _cap(f"{self.target} not visible, last seen {where}")
+            else:
+                msg = find_message(None, self.target)
             if not self._clear_to_speak(msg, now):
                 return None
             self._said_not_visible = True
+            self._not_visible_time = now
             return self._speak(msg, now)
         self._absent = 0
         if self._streaks.get(self.target, 0) < self.persistence:
             return None
         self._said_not_visible = False
-        msg = find_message(match, self.target)
+        msg = find_message(match, self.target, self.use_clock)
         if not self._clear_to_speak(msg, now):
             return None
         return self._speak(msg, now)

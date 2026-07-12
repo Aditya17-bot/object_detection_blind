@@ -40,31 +40,51 @@ _FINDABLE = {name: name for name in TARGET_CLASSES}
 _FINDABLE.update(SYNONYMS)
 
 
+def _match_object(rest):
+    """Longest findable phrase inside `rest`, mapped to its COCO class, or
+    None. Longest first so 'cell phone' beats 'phone'."""
+    for phrase in sorted(_FINDABLE, key=len, reverse=True):
+        if phrase in rest:
+            return _FINDABLE[phrase]
+    return None
+
+
 def parse_command(text):
-    """Recognized utterance -> ("walk"|"find"|"describe", target) or None.
-    Tolerant of filler words: 'please find the bottle' works."""
+    """Recognized utterance -> (action, target) or None. Actions:
+    walk / find / describe / clock / zones / recall. Tolerant of filler
+    words: 'please find the bottle' works."""
     words = text.lower().split()
     if not words:
         return None
     if "describe" in words or "scene" in words or "summary" in words:
         return ("describe", None)
+    if "clock" in words:
+        return ("clock", None)
+    if "zone" in words or "zones" in words:
+        return ("zones", None)
+    if "where" in words:  # object-memory query: "where is my cup"
+        rest = " ".join(words[words.index("where") + 1:])
+        obj = _match_object(rest)
+        if obj:
+            return ("recall", obj)
     if "walk" in words:
         return ("walk", None)
     if "find" in words:
-        rest = " ".join(words[words.index("find") + 1:])
-        # try the longest match first so "cell phone" beats "phone"
-        for phrase in sorted(_FINDABLE, key=len, reverse=True):
-            if phrase in rest:
-                return ("find", _FINDABLE[phrase])
+        obj = _match_object(" ".join(words[words.index("find") + 1:]))
+        if obj:
+            return ("find", obj)
     return None
 
 
 def grammar_phrases():
     """Every phrase the recognizer should be able to hear."""
-    phrases = ["walk mode", "walk", "describe", "describe scene", "summary"]
+    phrases = ["walk mode", "walk", "describe", "describe scene", "summary",
+               "clock mode", "zone mode"]
     for name in sorted(_FINDABLE):
         phrases.append(f"find {name}")
         phrases.append(f"find the {name}")
+        phrases.append(f"where is {name}")
+        phrases.append(f"where is the {name}")
     return phrases
 
 

@@ -2,7 +2,8 @@
 
 import unittest
 
-from position import analyze_box, direction_phrase, proximity_bucket
+from position import (analyze_box, clock_hour, clock_phrase,
+                      direction_phrase, proximity_bucket)
 
 W, H = 1280, 720  # pretend frame size; logic must not care about actual size
 
@@ -100,6 +101,22 @@ class TestAnalyzeBox(unittest.TestCase):
         b = analyze_box("chair", 0.9, 128, 72, 384, 216, 1280, 720)
         self.assertEqual((a.h_zone, a.v_zone, a.proximity),
                          (b.h_zone, b.v_zone, b.proximity))
+
+
+class TestClockHour(unittest.TestCase):
+    def test_center_is_twelve(self):
+        self.assertEqual(clock_hour(0.5), 12)
+
+    def test_far_left_and_right(self):
+        self.assertEqual(clock_hour(0.0), 10)
+        self.assertEqual(clock_hour(0.99), 2)
+
+    def test_bands_in_order(self):
+        hours = [clock_hour(x) for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        self.assertEqual(hours, [10, 11, 12, 1, 2])
+
+    def test_phrase(self):
+        self.assertEqual(clock_phrase(0.85), "at 2 o'clock")
 
 
 if __name__ == "__main__":

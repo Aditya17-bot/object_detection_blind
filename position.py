@@ -96,6 +96,26 @@ def direction_phrase(h_zone, v_zone):
     return f"{v_zone} {h_zone}"
 
 
+# Clock-face bearing. Orientation & Mobility instructors teach blind travelers
+# to locate things by clock position ("your cup is at 2 o'clock"), so speaking
+# bearings this way matches training people already have. A forward phone camera
+# sees roughly a 60-70 degree cone, so the visible frame width maps to 10
+# through 2 o'clock, 12 straight ahead — finer than the 3 left/center/right
+# zones. Derived from center_x on demand; not stored on ObjectInfo.
+_CLOCK_HOURS = (10, 11, 12, 1, 2)
+
+
+def clock_hour(center_x):
+    """Horizontal position (0..1) -> clock hour in {10, 11, 12, 1, 2}."""
+    idx = min(int(center_x * len(_CLOCK_HOURS)), len(_CLOCK_HOURS) - 1)
+    return _CLOCK_HOURS[idx]
+
+
+def clock_phrase(center_x):
+    """Spoken bearing, e.g. 'at 2 o'clock'."""
+    return f"at {clock_hour(center_x)} o'clock"
+
+
 def proximity_bucket(name, area):
     very_close, close, medium = _AREA_THRESHOLDS.get(name, _DEFAULT_THRESHOLDS)
     if area >= very_close:

@@ -62,8 +62,17 @@ flutter_tts, phases A0-A6. Not started yet.
    "walk mode", "describe" etc. Hands-free operation.
 3. **Smart scene summary** — on-demand spoken overview that groups and counts:
    "A table ahead with two chairs, a person on your right."
+4. **Clock-face directions** (added 2026-07-12) — speak bearings the O&M way
+   ("bottle at 2 o'clock"); frame width maps to 10-11-12-1-2 o'clock, 12 ahead.
+   Toggle (default off): Clock button / voice "clock mode" / "zone mode".
+5. **Object memory** (added 2026-07-12 — user reversed the earlier "not
+   selected" call) — engine remembers each class's last sighting (zone +
+   how-long-ago, stale after 30 s). Auto: Find "not visible" becomes "last seen
+   on your left"; on-demand: voice "where is my cup". Full write-up in
+   **`INNOVATION_CLOCK_MEMORY.md`**.
 
-(Object memory was pitched but NOT selected.)
+Both #4 and #5 live in the pure-logic layer and are mirrored 1:1 in Python and
+the Dart port (Python 78 tests / Dart 67 tests, all passing).
 
 ## Tech stack
 
@@ -293,9 +302,38 @@ position.py explains how to re-enable after retraining with
 room-background negatives). Voice commands CONFIRMED WORKING live by the
 user this session ("find door" etc.) — the earlier walk-test failure did
 not recur; root cause never pinned down (suspect: speaking while TTS was
-talking / distance from mic). Find-mode UX gap still open: "not visible"
-is said once then silence — planned fix: periodic "still looking for X"
-reminder in GuidanceEngine.
+talking / distance from mic). Find-mode UX gap FIXED 2026-07-12: after
+"not visible", GuidanceEngine now says "Still looking for X" every
+`reminder_interval` (default 10 s) until the target reappears — so long
+silence never reads as "the app died". Implemented identically in
+decision.py AND the Dart port (decision.dart); tests updated in both
+(64 Python / 52 Dart tests, all passing).
+
+## Android app status (2026-07-12 — phases A0-A5 CODED, see ANDROID_PLAN.md)
+
+`blindassist_app/` (Flutter) exists and is feature-complete in code:
+- A0 done: yolov8n + door_dustbin_stairs exported to TFLite (fp32, in
+  `blindassist_app/assets/models/` along with the Vosk model zip).
+- A1-A5 done in code: `lib/detector.dart` (both TFLite models, YUV420
+  rotation-aware preprocessing, per-class NMS, same conf thresholds as
+  webapp.py), `lib/logic/` = direct ports of position/decision/voice
+  parsing, `lib/speaker.dart` (flutter_tts, stop-before-speak),
+  `lib/sonar.dart`, `lib/voice_listener.dart` (vosk_flutter, same
+  grammar). Ports covered by 52 Dart tests (mirrors of the Python ones).
+- A6 partial: gestures in main.dart (tap=describe, double-tap=sonar
+  toggle, long-press=repeat last); TalkBack semantics + volume-key mute
+  still open.
+- A6 UI (2026-07-12): touch-complete control row so testing needs no mic —
+  Walk / Find… / Clock / Mute, active state on the button; Find… opens a
+  big-tile target picker.
+- Innovation features #4 (clock-face directions) + #5 (object memory) added
+  2026-07-12 in both Python and Dart — see `INNOVATION_CLOCK_MEMORY.md`.
+  Dart tests now 67 (was 52).
+- Gradle compat fix in `android/build.gradle.kts`: injects the missing
+  `namespace` into old plugins (vosk_flutter 0.3.48 predates AGP 8) via
+  reflection — don't remove it or release builds break.
+- Phone (Galaxy S20 FE, RZCR906FDTD) authorized over USB 2026-07-12;
+  `flutter install` not yet run. On-device FPS check + field test still open.
 
 ## Environment notes
 
@@ -304,8 +342,9 @@ reminder in GuidanceEngine.
   sometime before 2026-07-11 (likely OneDrive free-up-space) and was rebuilt
   from scratch 2026-07-11 — if imports fail again, recreate with
   `py -3.9 -m venv venv` + pip install the four deps.
-- Repo note: this folder is inside a git repo rooted at the user's home dir;
-  consider `git init` here for a dedicated repo before committing work.
+- Repo: dedicated git repo in this folder, remote
+  `github.com/Aditya17-bot/object_detection_blind` (branch `main`). Large
+  model/export binaries are gitignored (see `.gitignore`) — regenerate locally.
 
 ## Storage / Google Drive sync (2026-07-10)
 

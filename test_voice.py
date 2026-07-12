@@ -34,9 +34,19 @@ class TestParseCommand(unittest.TestCase):
         self.assertEqual(parse_command("describe the scene"),
                          ("describe", None))
 
+    def test_clock_and_zone_toggle(self):
+        self.assertEqual(parse_command("clock mode"), ("clock", None))
+        self.assertEqual(parse_command("zone mode"), ("zones", None))
+
+    def test_recall_where_is(self):
+        self.assertEqual(parse_command("where is the cup"), ("recall", "cup"))
+        self.assertEqual(parse_command("where is my phone"),
+                         ("recall", "cell phone"))
+
     def test_unknown_utterances_ignored(self):
         self.assertIsNone(parse_command("hello there"))
         self.assertIsNone(parse_command("find unicorn"))
+        self.assertIsNone(parse_command("where is the unicorn"))
         self.assertIsNone(parse_command(""))
 
     def test_grammar_covers_all_commands(self):
@@ -44,6 +54,8 @@ class TestParseCommand(unittest.TestCase):
         self.assertIn("walk mode", phrases)
         self.assertIn("find bottle", phrases)
         self.assertIn("find the fridge", phrases)
+        self.assertIn("clock mode", phrases)
+        self.assertIn("where is cup", phrases)
         # every grammar phrase must parse to a command (no dead phrases)
         for p in phrases:
             self.assertIsNotNone(parse_command(p), p)
