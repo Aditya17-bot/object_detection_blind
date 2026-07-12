@@ -29,6 +29,15 @@ subprojects {
                     .getMethod("setNamespace", String::class.java)
                     .invoke(ext, project.group.toString())
             }
+            // Old plugins (vosk_flutter) pin compileSdk 33, but their AndroidX
+            // deps (fragment 1.7.1, window 1.2.0, ...) require >= 34. Bump any
+            // stale module so AAR metadata validation passes.
+            val currentSdk = ext.javaClass.getMethod("getCompileSdk").invoke(ext) as? Int
+            if (currentSdk != null && currentSdk < 35) {
+                ext.javaClass
+                    .getMethod("setCompileSdkVersion", String::class.java)
+                    .invoke(ext, "android-35")
+            }
         }
     }
 }

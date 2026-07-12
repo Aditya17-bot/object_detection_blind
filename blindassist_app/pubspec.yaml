@@ -39,7 +39,15 @@ dependencies:
   flutter_tts: ^4.2.5
   audioplayers: ^6.8.1
   vosk_flutter: ^0.3.48
-  permission_handler: ^10.4.5
+  permission_handler: ^12.0.0
+
+# vosk_flutter 0.3.48 pins permission_handler ^10.2.0, but 10.x references the
+# Flutter v1-embedding class PluginRegistry.Registrar which was removed in
+# Flutter 3.29+ and fails to compile here (3.44). vosk only uses the stable
+# Dart-level Permission.microphone API, unchanged across 10->12, so forcing the
+# v2-only 12.x is safe.
+dependency_overrides:
+  permission_handler: ^12.0.0
 
 dev_dependencies:
   flutter_test:
