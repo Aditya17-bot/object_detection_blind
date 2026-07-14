@@ -3,7 +3,7 @@
 import unittest
 
 from position import (analyze_box, clock_hour, clock_phrase,
-                      direction_phrase, proximity_bucket)
+                      direction_phrase, distance_meters, proximity_bucket)
 
 W, H = 1280, 720  # pretend frame size; logic must not care about actual size
 
@@ -101,6 +101,27 @@ class TestAnalyzeBox(unittest.TestCase):
         b = analyze_box("chair", 0.9, 128, 72, 384, 216, 1280, 720)
         self.assertEqual((a.h_zone, a.v_zone, a.proximity),
                          (b.h_zone, b.v_zone, b.proximity))
+
+
+class TestDistanceMeters(unittest.TestCase):
+    def test_pinhole_estimate(self):
+        # 1.7 m person filling half the frame height: 1.7 * 0.85 / 0.5 ~= 2.9 m
+        self.assertAlmostEqual(distance_meters("person", 0.5), 2.9, places=1)
+
+    def test_smaller_box_is_further(self):
+        near = distance_meters("person", 0.5)
+        far = distance_meters("person", 0.1)
+        self.assertGreater(far, near)
+
+    def test_unknown_class_has_no_distance(self):
+        self.assertIsNone(distance_meters("dog", 0.5))
+
+    def test_degenerate_box(self):
+        self.assertIsNone(distance_meters("person", 0.0))
+
+    def test_analyze_box_populates_distance(self):
+        info = analyze_box("person", 0.9, *box_at(0.5, 0.5, 0.1, 0.5), W, H)
+        self.assertIsNotNone(info.distance_m)
 
 
 class TestClockHour(unittest.TestCase):

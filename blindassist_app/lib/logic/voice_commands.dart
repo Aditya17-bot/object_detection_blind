@@ -57,6 +57,18 @@ VoiceCommand? parseCommand(String text) {
   if (words.contains('zone') || words.contains('zones')) {
     return (action: 'zones', target: null);
   }
+  if (words.contains('path') ||
+      (words.contains('which') && words.contains('way'))) {
+    return (action: 'path', target: null); // clear-path finder
+  }
+  if (words.contains('read')) {
+    return (action: 'read', target: null); // OCR: read printed text aloud
+  }
+  final manyIdx = words.indexOf('many'); // count query: "how many chairs"
+  if (words.contains('how') && manyIdx >= 0) {
+    final obj = _matchObject(words.sublist(manyIdx + 1).join(' '));
+    if (obj != null) return (action: 'count', target: obj);
+  }
   final whereIdx = words.indexOf('where'); // object-memory query
   if (whereIdx >= 0) {
     final obj = _matchObject(words.sublist(whereIdx + 1).join(' '));
@@ -74,13 +86,14 @@ VoiceCommand? parseCommand(String text) {
 /// Every phrase the recognizer should be able to hear.
 List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
-    'clock mode', 'zone mode'];
+    'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text'];
   final names = _findable.keys.toList()..sort();
   for (final name in names) {
     phrases.add('find $name');
     phrases.add('find the $name');
     phrases.add('where is $name');
     phrases.add('where is the $name');
+    phrases.add('how many $name');
   }
   return phrases;
 }

@@ -62,6 +62,14 @@ def parse_command(text):
         return ("clock", None)
     if "zone" in words or "zones" in words:
         return ("zones", None)
+    if "path" in words or ("which" in words and "way" in words):
+        return ("path", None)  # clear-path finder: "which way is clear"
+    if "read" in words:
+        return ("read", None)  # OCR: read printed text aloud
+    if "how" in words and "many" in words:  # count query: "how many chairs"
+        obj = _match_object(" ".join(words[words.index("many") + 1:]))
+        if obj:
+            return ("count", obj)
     if "where" in words:  # object-memory query: "where is my cup"
         rest = " ".join(words[words.index("where") + 1:])
         obj = _match_object(rest)
@@ -79,12 +87,14 @@ def parse_command(text):
 def grammar_phrases():
     """Every phrase the recognizer should be able to hear."""
     phrases = ["walk mode", "walk", "describe", "describe scene", "summary",
-               "clock mode", "zone mode"]
+               "clock mode", "zone mode", "clear path", "which way",
+               "read", "read text"]
     for name in sorted(_FINDABLE):
         phrases.append(f"find {name}")
         phrases.append(f"find the {name}")
         phrases.append(f"where is {name}")
         phrases.append(f"where is the {name}")
+        phrases.append(f"how many {name}")
     return phrases
 
 

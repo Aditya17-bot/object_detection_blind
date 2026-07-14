@@ -54,9 +54,12 @@ void main() {
   });
 
   group('walkMessage', () {
+    // hand-built infos have distanceM=null, so the proximity BUCKET is
+    // appended ("close"); real analyzeBox infos say "about N meters" for
+    // medium/far — see the distance messages group.
     test('side and center wording', () {
-      expect(walkMessage(info('chair', hZone: 'right')), 'Chair on right');
-      expect(walkMessage(info('person')), 'Person ahead');
+      expect(walkMessage(info('chair', hZone: 'right')), 'Chair on right, close');
+      expect(walkMessage(info('person')), 'Person ahead, close');
     });
     test('very close side says dodge other way', () {
       expect(walkMessage(info('chair', hZone: 'left', proximity: 'very close')),
@@ -70,61 +73,63 @@ void main() {
     });
     test('low confidence becomes generic obstacle', () {
       expect(walkMessage(info('toilet', hZone: 'right', conf: 0.65)),
-          'Obstacle on right');
+          'Obstacle on right, close');
       expect(walkMessage(info('refrigerator', hZone: 'left', conf: 0.75)),
-          'Obstacle on left');
+          'Obstacle on left, close');
       final vc =
           info('refrigerator', hZone: 'left', proximity: 'very close', conf: 0.62);
       expect(walkMessage(vc), 'Obstacle very close on left, move slightly right');
     });
     test('confident detection keeps its name', () {
       expect(walkMessage(info('chair', hZone: 'right', conf: 0.85)),
-          'Chair on right');
+          'Chair on right, close');
     });
   });
 
   group('engine walk mode', () {
+    // these pin the anti-spam LOGIC, so they force zone wording (useClock:
+    // false) and use hand-built infos (distanceM null -> bucket "close").
     test('persistence blocks one-frame flicker', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       final chair = info('chair', hZone: 'right');
       expect(e.update([chair], 0.0), isNull); // 1st frame: wait
-      expect(e.update([chair], 0.1), 'Chair on right');
+      expect(e.update([chair], 0.1), 'Chair on right, close');
     });
     test('flicker then gone stays silent', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       expect(e.update([info('tv', hZone: 'left')], 0.0), isNull);
       expect(e.update([], 0.1), isNull); // misdetection gone
     });
     test('only top priority spoken', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       final scene = [info('person'), info('chair', hZone: 'right')];
       e.update(scene, 0.0);
-      expect(e.update(scene, 0.1), 'Person ahead');
+      expect(e.update(scene, 0.1), 'Person ahead, close');
     });
     test('repeat cooldown', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       final chair = info('chair', hZone: 'right');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), 'Chair on right');
+      expect(e.update([chair], 0.1), 'Chair on right, close');
       expect(e.update([chair], 1.0), isNull); // too soon to repeat
-      expect(e.update([chair], 3.5), 'Chair on right');
+      expect(e.update([chair], 3.5), 'Chair on right, close');
     });
     test('min gap between different messages', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       final chair = info('chair', hZone: 'right');
       final person = info('person');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), 'Chair on right');
+      expect(e.update([chair], 0.1), 'Chair on right, close');
       // person walks in: higher priority, but 0.3s after last message
       expect(e.update([chair, person], 0.2), isNull);
       expect(e.update([chair, person], 0.3), isNull);
-      expect(e.update([chair, person], 1.7), 'Person ahead');
+      expect(e.update([chair, person], 1.7), 'Person ahead, close');
     });
     test('escalation bypasses cooldown', () {
-      final e = GuidanceEngine();
+      final e = GuidanceEngine(useClock: false);
       final chair = info('chair', hZone: 'right', proximity: 'close');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), 'Chair on right');
+      expect(e.update([chair], 0.1), 'Chair on right, close');
       final closer = info('chair', hZone: 'right', proximity: 'very close');
       expect(e.update([closer], 0.3),
           'Chair very close on right, move slightly left');
@@ -138,7 +143,7 @@ void main() {
       expect(findTarget([small, big], 'bottle'), same(big));
     });
     test('found message', () {
-      final e = GuidanceEngine(mode: 'find', target: 'bottle');
+      final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle = info('bottle',
           hZone: 'right', vZone: 'top', proximity: 'close', area: 0.02);
       e.update([bottle], 0.0);
@@ -155,7 +160,7 @@ void main() {
       expect(e.update([], 20.3), 'Still looking for bottle');
     });
     test('reminder resets when target found', () {
-      final e = GuidanceEngine(mode: 'find', target: 'bottle');
+      final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       e.update([], 0.0);
       expect(e.update([], 0.1), 'Bottle not visible');
       final bottle =
@@ -170,7 +175,7 @@ void main() {
       expect(e.update([], 18.2), 'Still looking for bottle');
     });
     test('reappearing target reported again', () {
-      final e = GuidanceEngine(mode: 'find', target: 'bottle');
+      final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       e.update([], 0.0);
       expect(e.update([], 0.1), 'Bottle not visible');
       final bottle =
@@ -221,19 +226,26 @@ void main() {
     });
     test('walk message clock', () {
       final chair = info('chair', hZone: 'left', proximity: 'close');
-      expect(walkMessage(chair, const [], true), "Chair at 10 o'clock");
+      expect(walkMessage(chair, const [], true), "Chair at 10 o'clock, close");
     });
     test('walk message clock center ahead', () {
       final person = info('person', proximity: 'close');
-      expect(walkMessage(person, const [], true), "Person at 12 o'clock");
+      expect(walkMessage(person, const [], true), "Person at 12 o'clock, close");
     });
-    test('engine toggle switches wording', () {
+    test('clock is the default', () {
+      // user decision 2026-07-14: clock bearings are the default wording
       final e = GuidanceEngine(mode: 'walk');
       final chair = info('chair', hZone: 'right', proximity: 'close');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), 'Chair on right');
+      expect(e.update([chair], 0.1), "Chair at 2 o'clock, close");
+    });
+    test('engine toggle switches wording', () {
+      final e = GuidanceEngine(mode: 'walk', useClock: false);
+      final chair = info('chair', hZone: 'right', proximity: 'close');
+      e.update([chair], 0.0);
+      expect(e.update([chair], 0.1), 'Chair on right, close');
       e.setClock(true);
-      expect(e.update([chair], 2.0), "Chair at 2 o'clock");
+      expect(e.update([chair], 2.0), "Chair at 2 o'clock, close");
     });
   });
 
@@ -252,7 +264,7 @@ void main() {
       expect(recallMessage(null, 0, 'apple'), 'No memory of an apple');
     });
     test('engine recall after object leaves', () {
-      final e = GuidanceEngine(mode: 'walk');
+      final e = GuidanceEngine(mode: 'walk', useClock: false);
       final cup = info('cup', hZone: 'right', proximity: 'close', area: 0.02);
       e.update([cup], 0.0);
       e.update([], 3.0);
@@ -267,6 +279,135 @@ void main() {
     test('engine recall unseen class', () {
       final e = GuidanceEngine(mode: 'walk');
       expect(e.recall('laptop', 1.0), 'No memory of a laptop');
+    });
+  });
+
+  group('distance messages', () {
+    // real analyzeBox infos carry a metric estimate; medium/far speak meters.
+    ObjectInfo personAt(double heightFrac, {double width = 0.1}) => analyzeBox(
+        'person', 0.9, 0.5 - width / 2, 0.5 - heightFrac / 2, 0.5 + width / 2,
+        0.5 + heightFrac / 2, 1, 1);
+
+    test('far person speaks meters', () {
+      final p = personAt(0.2); // small box -> far
+      expect(p.proximity, 'far');
+      expect(findMessage(p, 'person'), contains('meter'));
+    });
+    test('near person keeps bucket', () {
+      final p = personAt(0.9, width: 0.6); // big box -> close/very close
+      expect(['close', 'very close'], contains(p.proximity));
+      expect(findMessage(p, 'person'), isNot(contains('meter')));
+    });
+    test('meters value is reasonable', () {
+      expect(findMessage(personAt(0.2), 'person'),
+          matches(RegExp(r'about \d+ meters')));
+    });
+    test('meters are find-mode only, not walk', () {
+      final p = personAt(0.2);
+      expect(walkMessage(p), isNot(contains('meter')));
+      expect(walkMessage(p), contains('far'));
+    });
+    test('clipped box suppresses meters', () {
+      // person box jammed against the bottom edge -> height untrustworthy
+      final p = analyzeBox('person', 0.9, 0.45, 0.6, 0.55, 1.0, 1, 1);
+      expect(p.distanceM, isNull);
+      expect(findMessage(p, 'person'), isNot(contains('meter')));
+    });
+    test('low confidence suppresses meters', () {
+      final p = personAt(0.2);
+      final low = ObjectInfo(
+        name: p.name,
+        confidence: 0.7,
+        hZone: p.hZone,
+        vZone: p.vZone,
+        proximity: p.proximity,
+        area: p.area,
+        centerX: p.centerX,
+        phrase: p.phrase,
+        distanceM: p.distanceM,
+      );
+      expect(findMessage(low, 'person'), isNot(contains('meter')));
+    });
+  });
+
+  group('clear path', () {
+    test('open ahead when obstacles on sides', () {
+      final scene = [
+        info('chair', hZone: 'left', proximity: 'close', area: 0.2),
+        info('chair', hZone: 'right', proximity: 'close', area: 0.2),
+      ];
+      expect(clearPath(scene), 'Path clear ahead');
+    });
+    test('steers away from center block', () {
+      final scene = [
+        info('person', proximity: 'very close', area: 0.4),
+        info('chair', hZone: 'right', proximity: 'close', area: 0.1),
+      ];
+      expect(clearPath(scene), 'Clearest on your left');
+    });
+    test('far obstacles ignored', () {
+      expect(clearPath([info('person', proximity: 'far', area: 0.01)]),
+          'Path clear ahead');
+    });
+    test('near small hazard beats far bulk', () {
+      // small CLOSE stool ahead avoided for bulky but only-MEDIUM side couches
+      final scene = [
+        info('chair', proximity: 'close', area: 0.05),
+        info('couch', hZone: 'left', proximity: 'medium', area: 0.4),
+        info('couch', hZone: 'right', proximity: 'medium', area: 0.4),
+      ];
+      expect(clearPath(scene), 'Clearest on your left');
+    });
+    test('all blocked says stop', () {
+      final scene = [
+        info('chair', hZone: 'left', proximity: 'close', area: 0.1),
+        info('person', proximity: 'close', area: 0.1),
+        info('chair', hZone: 'right', proximity: 'close', area: 0.1),
+      ];
+      expect(clearPath(scene), 'Stop, no clear path');
+    });
+    test('door is not an obstacle for path', () {
+      expect(clearPath([info('door', proximity: 'close', area: 0.3)]),
+          'Path clear ahead');
+    });
+    test('empty scene is ahead', () {
+      expect(clearPath([]), 'Path clear ahead');
+    });
+    test('engine path stamps clock', () {
+      final e = GuidanceEngine(mode: 'walk');
+      final scene = [
+        info('chair', hZone: 'left', proximity: 'close', area: 0.2),
+        info('person', proximity: 'very close', area: 0.4),
+      ];
+      expect(e.path(scene, 0.0), 'Clearest on your right');
+    });
+  });
+
+  group('toothbrush findable', () {
+    test('toothbrush is a find class', () {
+      expect(findClasses, contains('toothbrush'));
+      expect(targetClasses, contains('toothbrush'));
+    });
+  });
+
+  group('count', () {
+    test('none', () => expect(countMessage([], 'chair'), 'No chairs'));
+    test('one', () => expect(countMessage([info('chair')], 'chair'), '1 chair'));
+    test('many counts only target', () {
+      final scene = [
+        info('chair', hZone: 'left'),
+        info('chair', hZone: 'right'),
+        info('person'),
+      ];
+      expect(countMessage(scene, 'chair'), '2 chairs');
+    });
+    test('person plural', () {
+      expect(countMessage([info('person'), info('person')], 'person'),
+          '2 people');
+    });
+    test('engine count stamps clock', () {
+      final e = GuidanceEngine();
+      expect(e.count([info('chair'), info('chair')], 'chair', 0.0), '2 chairs');
     });
   });
 }

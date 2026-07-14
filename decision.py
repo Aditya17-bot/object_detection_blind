@@ -22,6 +22,24 @@ _PROX_RANK = {level: rank for rank, level in enumerate(reversed(PROXIMITY_LEVELS
 
 _SIDE_WORD = {"left": "on left", "center": "ahead", "right": "on right"}
 
+
+def _distance_or_bucket(info):
+    """What to say after a Find location: a rough "about N meters" for a
+    medium/far object when we have a TRUSTWORTHY metric estimate, otherwise the
+    coarse proximity bucket. Guards (all must hold to speak meters):
+      - a distance exists (known class height, box not edge-clipped),
+      - confidence >= NAME_CONFIDENCE (a misdetected class = wrong real-height
+        = confidently wrong meters),
+      - the object is medium/far (up close the pinhole estimate is worst and
+        the bucket already means "here").
+    Deliberately Find-mode only — Walk warnings stay short and bucket-based."""
+    d = getattr(info, "distance_m", None)
+    if (d is not None and info.confidence >= NAME_CONFIDENCE
+            and info.proximity in ("medium", "far")):
+        m = max(1, int(round(d)))
+        return f"about {m} meter" + ("s" if m != 1 else "")
+    return info.proximity
+
 # Below this confidence an obstacle warning says just "obstacle" instead of
 # the class name: COCO misnames lookalikes (dustbin->"toilet",
 # wardrobe->"refrigerator") and a wrong name costs the user's trust, while
@@ -90,7 +108,51 @@ def walk_message(info, all_infos=(), use_clock=False):
         else:  # obstacle on a side: step to the other side
             dodge = "right" if info.h_zone == "left" else "left"
         return _cap(f"{name} very close {side}, move slightly {dodge}")
-    return _cap(f"{name} {side}")
+    # Walk stays short + bucket-based (no meters): the actionable token is the
+    # direction, and metric range would only lengthen a continuous warning.
+    return _cap(f"{name} {side}, {info.proximity}")
+
+
+# --------------------------------------------------------------------------
+# Clear-path finder (innovation feature: "which way is open?")
+# --------------------------------------------------------------------------
+# On demand (voice "clear path" / "which way"), report the emptiest of the
+# three walking directions. Sums the box area of every near obstacle per
+# horizontal third; the third with the least obstacle mass wins, straight
+# ahead preferred on a tie. Coarse and cheap — reuses the same ObjectInfo list.
+
+_PATH_WORD = {
+    "center": "Path clear ahead",
+    "left": "Clearest on your left",
+    "right": "Clearest on your right",
+}
+
+
+def clear_path(infos):
+    """Spoken guidance toward the most open direction, or "Stop" if none is.
+
+    Each third is scored by its CLOSEST obstacle (proximity rank), not summed
+    box area — a nearby small hazard must outweigh a far bulky one. Doors are
+    excluded (a doorway is the thing you want to walk THROUGH, not around), and
+    far obstacles are ignored. If even the emptiest third has a close/very-close
+    obstacle, we refuse to call it "clear" and say to stop.
+    Known limit: ObjectInfo carries only the box center, so a wide object that
+    straddles thirds is scored in its center third only (add box extent later).
+    """
+    ranks = {"left": -1, "center": -1, "right": -1}  # -1 = nothing near
+    for i in infos:
+        if i.name not in OBSTACLE_CLASSES or i.name == "door":
+            continue
+        if i.proximity == "far":
+            continue
+        r = _PROX_RANK[i.proximity]
+        if r > ranks[i.h_zone]:
+            ranks[i.h_zone] = r
+    # emptiest third wins; center-first so ties resolve to "ahead"
+    best = min(("center", "left", "right"), key=lambda z: ranks[z])
+    if ranks[best] >= _PROX_RANK["close"]:
+        return "Stop, no clear path"
+    return _PATH_WORD[best]
 
 
 # --------------------------------------------------------------------------
@@ -108,7 +170,7 @@ def find_message(info, target, use_clock=False):
     if info is None:
         return _cap(f"{target} not visible")
     where = clock_phrase(info.center_x) if use_clock else info.phrase
-    return _cap(f"{info.name} {where}, {info.proximity}")
+    return _cap(f"{info.name} {where}, {_distance_or_bucket(info)}")
 
 
 # --------------------------------------------------------------------------
@@ -130,6 +192,16 @@ def _plural(name):
 
 def _article(name):
     return "an" if name[0] in "aeiou" else "a"
+
+
+def count_message(infos, target):
+    """Spoken count of one class currently visible (voice: 'how many chairs')."""
+    n = sum(1 for i in infos if i.name == target)
+    if n == 0:
+        return _cap(f"no {_plural(target)}")
+    if n == 1:
+        return _cap(f"1 {target}")
+    return _cap(f"{n} {_plural(target)}")
 
 
 def summarize_scene(infos):
@@ -198,7 +270,7 @@ class GuidanceEngine:
 
     def __init__(self, mode="walk", target=None,
                  repeat_cooldown=3.0, min_gap=1.5, persistence=2,
-                 reminder_interval=10.0, use_clock=False, memory_ttl=30.0):
+                 reminder_interval=10.0, use_clock=True, memory_ttl=30.0):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
         self.persistence = persistence          # frames a class must persist
@@ -347,3 +419,12 @@ class GuidanceEngine:
         """On-demand scene summary; stamps the clock so the next walk/find
         message still respects min_gap."""
         return self._speak(summarize_scene(infos), now)
+
+    def count(self, infos, target, now):
+        """On-demand count of one class ('how many chairs'); stamps the clock
+        like describe()."""
+        return self._speak(count_message(infos, target), now)
+
+    def path(self, infos, now):
+        """On-demand clear-path guidance; stamps the clock like describe()."""
+        return self._speak(clear_path(infos), now)

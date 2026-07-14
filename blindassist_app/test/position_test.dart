@@ -90,6 +90,28 @@ void main() {
     });
   });
 
+  group('distance meters', () {
+    test('pinhole estimate', () {
+      // 1.7 m person filling half the frame height: 1.7 * 0.85 / 0.5 ~= 2.9 m
+      expect(distanceMeters('person', 0.5), closeTo(2.9, 0.1));
+    });
+    test('smaller box is further', () {
+      expect(distanceMeters('person', 0.1)!,
+          greaterThan(distanceMeters('person', 0.5)!));
+    });
+    test('unknown class has no distance', () {
+      expect(distanceMeters('dog', 0.5), isNull);
+    });
+    test('degenerate box', () {
+      expect(distanceMeters('person', 0.0), isNull);
+    });
+    test('analyzeBox populates distance', () {
+      final b = boxAt(0.5, 0.5, 0.1, 0.5);
+      final info = analyzeBox('person', 0.9, b[0], b[1], b[2], b[3], w, h);
+      expect(info.distanceM, isNotNull);
+    });
+  });
+
   group('clock hour', () {
     test('center is twelve', () => expect(clockHour(0.5), 12));
     test('far left and right', () {

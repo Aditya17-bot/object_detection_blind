@@ -37,6 +37,19 @@ void main() {
       expect(parseCommand('clock mode'), (action: 'clock', target: null));
       expect(parseCommand('zone mode'), (action: 'zones', target: null));
     });
+    test('clear path finder', () {
+      expect(parseCommand('clear path'), (action: 'path', target: null));
+      expect(parseCommand('which way'), (action: 'path', target: null));
+    });
+    test('count query', () {
+      expect(parseCommand('how many chairs'), (action: 'count', target: 'chair'));
+      expect(parseCommand('how many bottles are there'),
+          (action: 'count', target: 'bottle'));
+    });
+    test('read ocr', () {
+      expect(parseCommand('read'), (action: 'read', target: null));
+      expect(parseCommand('read text'), (action: 'read', target: null));
+    });
     test('recall where is', () {
       expect(parseCommand('where is the cup'), (action: 'recall', target: 'cup'));
       expect(parseCommand('where is my phone'),

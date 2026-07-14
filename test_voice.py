@@ -38,6 +38,19 @@ class TestParseCommand(unittest.TestCase):
         self.assertEqual(parse_command("clock mode"), ("clock", None))
         self.assertEqual(parse_command("zone mode"), ("zones", None))
 
+    def test_clear_path_finder(self):
+        self.assertEqual(parse_command("clear path"), ("path", None))
+        self.assertEqual(parse_command("which way"), ("path", None))
+
+    def test_count_query(self):
+        self.assertEqual(parse_command("how many chairs"), ("count", "chair"))
+        self.assertEqual(parse_command("how many bottles are there"),
+                         ("count", "bottle"))
+
+    def test_read_ocr(self):
+        self.assertEqual(parse_command("read"), ("read", None))
+        self.assertEqual(parse_command("read text"), ("read", None))
+
     def test_recall_where_is(self):
         self.assertEqual(parse_command("where is the cup"), ("recall", "cup"))
         self.assertEqual(parse_command("where is my phone"),

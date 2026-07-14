@@ -312,8 +312,21 @@ decision.py AND the Dart port (decision.dart); tests updated in both
 ## Android app status (2026-07-12 — phases A0-A5 CODED, see ANDROID_PLAN.md)
 
 `blindassist_app/` (Flutter) exists and is feature-complete in code:
-- A0 done: yolov8n + door_dustbin_stairs exported to TFLite (fp32, in
+- A0 done: yolov8n + door_dustbin_stairs exported to TFLite (fp16, in
   `blindassist_app/assets/models/` along with the Vosk model zip).
+  DETECTION FIX 2026-07-13 (user report: "nothing much detected" on device):
+  root cause = yolov8n.tflite was exported at 416 px AND detector.dart used
+  stretch resize instead of ultralytics-style letterbox — together they cost
+  ~0.2 confidence, so the 0.6 threshold filtered nearly everything. Fixed:
+  re-exported yolov8n at 640 fp16 (`wsl_export_run.sh`, now imgsz=640;
+  custom model was already 640) and detector.dart now letterboxes (gray 114
+  pad) and un-letterboxes the output boxes. Validated on the 2026-07-13
+  WhatsApp clip: TFLite letterbox pipeline now matches ultralytics yolov8n
+  frame-for-frame (chair 0.88, bed 0.75/0.69); a Python port of _fillInput
+  (YUV int math, rotation 0 and 90) reproduces ultralytics boxes to 3
+  decimals. Remaining gap vs yolov8s is model capability (one far bed at
+  0.36), not a bug — revisit model size only if on-device results still
+  disappoint.
 - A1-A5 done in code: `lib/detector.dart` (both TFLite models, YUV420
   rotation-aware preprocessing, per-class NMS, same conf thresholds as
   webapp.py), `lib/logic/` = direct ports of position/decision/voice
@@ -334,6 +347,90 @@ decision.py AND the Dart port (decision.dart); tests updated in both
   reflection — don't remove it or release builds break.
 - Phone (Galaxy S20 FE, RZCR906FDTD) authorized over USB 2026-07-12;
   `flutter install` not yet run. On-device FPS check + field test still open.
+
+## Final-checklist pass (2026-07-14 — user "final checklist"; all mirrored
+## Python + Dart, 100 Python / 89 Dart tests passing)
+
+A batch of UX/latency changes, each REVIEWED by a critique subagent before
+landing — several were redesigned in response (notes below). Full technical
+write-up + patent material in **`PATENT_RESEARCH.md`** (maintained ongoing).
+
+- **Clock mode is now the DEFAULT** (`GuidanceEngine use_clock=True`, was
+  False). User decision 2026-07-14, overrides the earlier "default off".
+  CAVEAT (from review): the mapping is a *camera-frame* clock — frame width
+  spans 10-11-12-1-2 o'clock over the ~60 deg view, so "2 o'clock" = right
+  frame edge (~30 deg), NOT the literal O&M clock where 3 o'clock = 90 deg.
+  Relabel or remap if a trained user over-rotates.
+- **Walk warnings now speak proximity** ("Chair on right, close"). Walk was
+  previously silent on proximity except "very close". Bucket only, never
+  meters (keeps continuous warnings short — the actionable token is
+  direction).
+- **Rough distance in METERS** (reverses the old "deliberately NOT metric"
+  note, at user request). Monocular pinhole in `position.py`:
+  `distance = real_height * CAMERA_FOCAL_NORM(0.85) / box_height_fraction`,
+  per-class `_REAL_HEIGHTS`. Spoken as "about N meters" ONLY in Find mode,
+  and ONLY when trustworthy — three safety guards added after review:
+  (1) suppressed when the box is edge-clipped (top<=0.02 or bottom>=0.98 of
+  frame — a clipped box reads falsely FAR, which would under-warn for the
+  nearest objects); (2) suppressed when confidence < NAME_CONFIDENCE (a
+  misdetected class picks the wrong real-height); (3) medium/far only (up
+  close the estimate is worst and the bucket already means "here"). Focal
+  const is the single calibration knob. NOT metric-grade — ~±30-40% at 5 m.
+- **Clear-path finder** (innovation feature #6) — voice "which way" / "clear
+  path", `clear_path()` in decision.py. Scores each of left/center/right by
+  its CLOSEST obstacle's proximity rank (NOT summed box area — a near small
+  hazard must beat a far bulky one), excludes `door` (a doorway is to walk
+  THROUGH), ignores far; says "Stop, no clear path" when even the emptiest
+  third has a close obstacle. Known limit: ObjectInfo carries only box
+  center, so a wide straddling object is scored in its center third only
+  (add box extent later).
+- **Haptic direction** (main.dart) — single vibrator, SIDE encoded by PULSE
+  COUNT (1=left, 2=ahead, 3=right; counting taps beats judging amplitude,
+  which the S20 FE can't resolve). Fires ONLY on a zone change (no
+  time-throttled re-buzz). Upgrade path: `vibration` package for richer
+  patterns. Sonar still carries continuous stereo L/R.
+- **`toothbrush` enabled as a Find class** (COCO #79, no training) — a demo
+  of the general "personal small object" case; real favorites/beacon feature
+  is still TODO (see below).
+- **Latency work** (detector.dart, targets user's "1 second max"):
+  • GPU delegate (`GpuDelegateV2`) now created INSIDE the worker isolate
+    (GL context is thread-bound → must be built on the isolate that runs
+    inference), with try/catch → CPU threads=1 fallback. The old
+    create-on-main-run-on-worker-by-address pattern is gone.
+  • First-frame WARMUP inference in each `_WModel` (mobile TFLite's first
+    run pays graph-opt + delegate-init, often 1-2 s).
+  • De-dupe: the 640px YUV->RGB letterbox was computed TWICE per frame (both
+    models, identical output). Now computed once for COCO and reused for the
+    custom model when sizes match (~2x preprocessing cut).
+  UNVERIFIED ON DEVICE: whether the GPU delegate `.so` ships with
+  tflite_flutter 0.12.1 (may silently fall back to CPU). Proof = the
+  `BlindAssist TIMING`/`GPU delegate active`/`warmup` logcat lines, NOT the
+  print alone. If GPU no-ops, wire NNAPI or bundle the GPU lib.
+- **Count query** ("how many chairs") — voice `("count", <class>)` +
+  `count_message()` in decision.py/dart; speaks "2 chairs" / "1 chair" /
+  "No chairs". Engine `count()` stamps the clock like `describe()`.
+- **OCR text reader** DONE 2026-07-14 (user request). `blindassist_app/lib/
+  ocr.dart` = `OcrReader` (Google ML Kit on-device Latin text recognition,
+  offline). Voice "read" / "read text" + a **Read** control button →
+  `_readText()` in main.dart: pauses the image stream, `takePicture()`,
+  OCRs the still, speaks the text (or "No text found"), resumes the stream.
+  Dep added: `google_mlkit_text_recognition ^0.15.0` (resolved 0.15.1).
+- **Favorites beacon DROPPED** 2026-07-14 (user: "doesn't look nice") —
+  fully reverted, not in the codebase. Camera-only beacon (pin classes,
+  sonar+voice guide when in view) remains a possible future feature; true
+  "navigate to where I left it out of view" needs ARCore/SLAM.
+- **Implementation-review fixes** (from a critique subagent) applied to
+  detector.dart + main.dart: (a) native interpreter + GPU-delegate handles
+  are now freed on `Detector.close()` via a `dispose` message to the worker
+  (isolate death alone doesn't run the C-API destructors); (b) worker-init
+  failure now sends `init-failed` → surfaced as an app error instead of
+  silently detecting nothing forever (which looked identical to an empty
+  room); (c) haptic pulse trains no longer interleave when the tracked
+  object identity thrashes between two objects (`_pulsing` guard +
+  `unawaited`). The reviewer CONFIRMED as correct: the input-reuse dedupe,
+  the 3 s watchdog, the clip-guard math, the clear_path tie-break, and the
+  distance gating.
+- Test counts after this batch: **107 Python / 96 Dart**, all passing.
 
 ## Environment notes
 

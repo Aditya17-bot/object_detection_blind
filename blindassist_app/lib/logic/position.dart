@@ -19,7 +19,11 @@ const Set<String> obstacleClasses = {
 };
 
 /// Small items a user searches for → Find Mode only, never obstacle warnings.
-const Set<String> findClasses = {'bottle', 'cup', 'laptop', 'cell phone', 'book'};
+/// "toothbrush" is COCO class 79 (already in the model) — added so it can be a
+/// Find / favorites-beacon target; small + often edge-clipped, so best-effort.
+const Set<String> findClasses = {
+  'bottle', 'cup', 'laptop', 'cell phone', 'book', 'toothbrush',
+};
 
 final Set<String> targetClasses = {...obstacleClasses, ...findClasses};
 
@@ -53,10 +57,40 @@ const Map<String, List<double>> _areaThresholds = {
   'cell phone':   [0.03, 0.010, 0.003],
   'book':         [0.05, 0.020, 0.006],
   'laptop':       [0.15, 0.060, 0.020],
+  'toothbrush':   [0.03, 0.010, 0.003],
 };
 const List<double> _defaultThresholds = [0.35, 0.15, 0.05];
 
 const List<String> proximityLevels = ['very close', 'close', 'medium', 'far'];
+
+/// Rough monocular distance (meters) from a box's height via the pinhole model:
+///   distance = realHeight * focal / boxHeightFraction
+/// [cameraFocalNorm] is the vertical focal length as a fraction of frame
+/// height (~1 / (2*tan(VFOV/2))); 0.85 suits a typical phone rear camera in
+/// portrait. Single calibration knob — raise if meters read short, lower if
+/// long. Coarse: only used for "about N meters" on medium/far objects.
+const double cameraFocalNorm = 0.85;
+
+/// Typical real vertical size (m) per class. Classes with an inconsistent or
+/// usually edge-clipped extent (e.g. bed) are omitted → no meters, bucket used.
+const Map<String, double> _realHeights = {
+  'person': 1.7, 'chair': 0.9, 'couch': 0.8, 'dining table': 0.75,
+  'bench': 0.85, 'toilet': 0.7, 'sink': 0.85, 'refrigerator': 1.7,
+  'tv': 0.6, 'potted plant': 0.6, 'suitcase': 0.7, 'backpack': 0.5,
+  'door': 2.0, 'dustbin': 0.6, 'bottle': 0.25, 'cup': 0.1,
+  'laptop': 0.20, 'book': 0.24, 'cell phone': 0.14, 'toothbrush': 0.19,
+};
+
+/// Rough distance in meters from a box's height (fraction of frame height).
+/// null when the class has no known height, the box is degenerate, or the box
+/// is edge-[clipped] — a clipped box has a truncated height the pinhole model
+/// would read as "much farther" (dangerous: under-warns for the closest
+/// objects), so we refuse to guess rather than mislead.
+double? distanceMeters(String name, double heightFrac, {bool clipped = false}) {
+  final real = _realHeights[name];
+  if (real == null || heightFrac <= 0 || clipped) return null;
+  return (real * cameraFocalNorm / heightFrac * 10).round() / 10.0;
+}
 
 /// Everything the decision logic needs about one detection.
 class ObjectInfo {
@@ -68,6 +102,7 @@ class ObjectInfo {
   final double area;      // box area as fraction of frame (0..1)
   final double centerX;   // 0..1, drives sonar panning
   final String phrase;    // human-friendly location, e.g. "top right"
+  final double? distanceM; // rough meters (pinhole), null if not estimable
 
   const ObjectInfo({
     required this.name,
@@ -78,6 +113,7 @@ class ObjectInfo {
     required this.area,
     required this.centerX,
     required this.phrase,
+    this.distanceM,
   });
 }
 
@@ -129,6 +165,9 @@ ObjectInfo analyzeBox(String name, double confidence, double x1, double y1,
   final area = ((x2 - x1) * (y2 - y1)) / (frameW * frameH);
   final hZone = _zone(cx, _hZones);
   final vZone = _zone(cy, _vZones);
+  // a box hugging the top or bottom edge is probably cut off → untrustworthy
+  // height for the distance estimate
+  final clipped = (y1 / frameH) <= 0.02 || (y2 / frameH) >= 0.98;
   return ObjectInfo(
     name: name,
     confidence: confidence,
@@ -138,5 +177,6 @@ ObjectInfo analyzeBox(String name, double confidence, double x1, double y1,
     area: area,
     centerX: cx,
     phrase: directionPhrase(hZone, vZone),
+    distanceM: distanceMeters(name, (y2 - y1) / frameH, clipped: clipped),
   );
 }

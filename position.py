@@ -22,7 +22,10 @@ OBSTACLE_CLASSES = {
     "door", "dustbin",
 }
 # Small items a user searches for → Find Mode only, never obstacle warnings.
-FIND_CLASSES = {"bottle", "cup", "laptop", "cell phone", "book"}
+# "toothbrush" is COCO class 79 (already in the model) — added so it can be a
+# Find / favorites-beacon target; small + often edge-clipped, so detection is
+# best-effort.
+FIND_CLASSES = {"bottle", "cup", "laptop", "cell phone", "book", "toothbrush"}
 
 TARGET_CLASSES = OBSTACLE_CLASSES | FIND_CLASSES
 
@@ -59,10 +62,43 @@ _AREA_THRESHOLDS = {
     "cell phone":   (0.03, 0.010, 0.003),
     "book":         (0.05, 0.020, 0.006),
     "laptop":       (0.15, 0.060, 0.020),
+    "toothbrush":   (0.03, 0.010, 0.003),
 }
 _DEFAULT_THRESHOLDS = (0.35, 0.15, 0.05)
 
 PROXIMITY_LEVELS = ("very close", "close", "medium", "far")
+
+# Rough monocular distance (meters) from a box's height via the pinhole model:
+#   distance = real_height * FOCAL / box_height_fraction
+# FOCAL is the vertical focal length expressed as a fraction of the frame
+# height (~1 / (2 * tan(VFOV/2))); 0.85 suits a typical phone rear camera in
+# portrait. It is the single calibration knob — raise it if meters read
+# consistently short, lower it if long. Deliberately coarse: only used to say
+# "about N meters" for medium/far objects; near objects keep the area buckets.
+CAMERA_FOCAL_NORM = 0.85
+
+# Typical real vertical size (m) per class. Classes whose vertical extent is
+# inconsistent or usually edge-clipped (e.g. bed) are omitted → no meters, the
+# proximity bucket is spoken instead.
+_REAL_HEIGHTS = {
+    "person": 1.7, "chair": 0.9, "couch": 0.8, "dining table": 0.75,
+    "bench": 0.85, "toilet": 0.7, "sink": 0.85, "refrigerator": 1.7,
+    "tv": 0.6, "potted plant": 0.6, "suitcase": 0.7, "backpack": 0.5,
+    "door": 2.0, "dustbin": 0.6, "bottle": 0.25, "cup": 0.1,
+    "laptop": 0.20, "book": 0.24, "cell phone": 0.14, "toothbrush": 0.19,
+}
+
+
+def distance_meters(name, height_frac, clipped=False):
+    """Rough distance in meters from a box's height (fraction of frame height).
+    None when the class has no known height, the box is degenerate, or the box
+    is edge-CLIPPED — a clipped box has a truncated height, which the pinhole
+    model would read as "much farther" (dangerous: it under-warns for the
+    closest objects), so we refuse to guess rather than mislead."""
+    real = _REAL_HEIGHTS.get(name)
+    if real is None or height_frac <= 0 or clipped:
+        return None
+    return round(real * CAMERA_FOCAL_NORM / height_frac, 1)
 
 
 @dataclass
@@ -76,6 +112,7 @@ class ObjectInfo:
     area: float          # box area as fraction of frame (0..1)
     center_x: float      # 0..1, for sonar panning later
     phrase: str          # human-friendly location, e.g. "top right"
+    distance_m: float = None  # rough meters (pinhole), None if not estimable
 
 
 def _zone(value, zones):
@@ -134,6 +171,9 @@ def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h):
     area = ((x2 - x1) * (y2 - y1)) / (frame_w * frame_h)
     h_zone = _zone(cx, _H_ZONES)
     v_zone = _zone(cy, _V_ZONES)
+    # a box hugging the top or bottom edge is probably cut off → its height is
+    # untrustworthy for the distance estimate
+    clipped = (y1 / frame_h) <= 0.02 or (y2 / frame_h) >= 0.98
     return ObjectInfo(
         name=name,
         confidence=confidence,
@@ -143,4 +183,5 @@ def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h):
         area=area,
         center_x=cx,
         phrase=direction_phrase(h_zone, v_zone),
+        distance_m=distance_meters(name, (y2 - y1) / frame_h, clipped),
     )

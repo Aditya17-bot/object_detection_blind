@@ -30,6 +30,13 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Keep R8 off: vosk_flutter uses JNA, whose native code looks up
+            // the com.sun.jna.Pointer.peer field by name at runtime. Shrinking
+            // renames/strips it -> UnsatisfiedLinkError crash on launch. The
+            // APK size is dominated by bundled models, not code, so leaving
+            // minification off costs little.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
