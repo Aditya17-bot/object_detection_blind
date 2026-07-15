@@ -439,8 +439,27 @@ F2/F4 commit messages):
   startup speaks immediately, Vosk loads in parallel; webapp voice-dispatch
   crash fixed ("clock mode" used to silently kill the voice thread);
   haptic zone-swallow + sonar-during-OCR fixes.
-- **F5 OPEN**: install on the S20 FE, measure real FPS + end-to-end latency
-  (laptop console prints per-frame ms; app pill shows FPS). JPEG frame
+- **F5 OPEN — session paused 2026-07-15 mid-debug.** Fresh release APK IS
+  installed on the S20 FE (earlier `flutter install` accidentally pushed a
+  stale 07-12 build first — the current one is `ab4771c`-era, all F1-F4 in).
+  App correctly loops "waiting for laptop server". Diagnosis so far:
+  (1) release build initially failed with AccessDeniedException on stale
+  build intermediates (OneDrive placeholder locks) — fix was `rm -rf
+  blindassist_app/build` + clean build; (2) firewall WAS blocking — inbound
+  rules for TCP 5001 + UDP 5002 now added (elevated netsh, named
+  "BlindAssist ..."); (3) STILL no discovery pings/HTTP at the server.
+  Facts: laptop on phone hotspot = 10.250.253.247; phone swlan0 =
+  10.250.253.244/24 brd 10.250.253.255; phone->laptop ping 100% loss is
+  NOT conclusive (Windows drops inbound ICMP echo by default).
+  PRIME SUSPECT: Android hotspot mode default-routes 255.255.255.255
+  broadcasts to the CELLULAR interface, not swlan0. NEXT FIX: discovery.dart
+  should enumerate NetworkInterface.list() and send the ping to each
+  interface's DIRECTED broadcast (e.g. 10.250.253.255) as well as
+  255.255.255.255 — then rebuild + reinstall. Also verify TCP works at all:
+  from the phone, `adb shell` has no curl, so just watch the server log for
+  /health once discovery lands (or temporarily set config.dart kServerHost
+  to the laptop's current IP as a discovery-independent check).
+  Then: measure FPS (app pill) + per-frame ms (server console). JPEG frame
   compression is the prepared fallback ONLY if measured too slow.
 - **F6**: `FIELD_TEST.md` = the user's validation walk protocol (includes
   the server-kill failure drill and pocket drill). PATENT_RESEARCH.md
