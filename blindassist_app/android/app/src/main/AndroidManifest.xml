@@ -8,9 +8,14 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
+        <!-- Portrait lock: all direction math (left/right zones, clock
+             bearings, sidestep advice) assumes an upright frame. A blind user
+             can't see that the phone rotated to landscape — unlocked, every
+             "on your left" would flip and steer them INTO the obstacle. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
             android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"

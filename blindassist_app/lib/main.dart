@@ -14,6 +14,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'config.dart';
 import 'detector.dart';
@@ -52,7 +53,8 @@ class AssistantScreen extends StatefulWidget {
   State<AssistantScreen> createState() => _AssistantScreenState();
 }
 
-class _AssistantScreenState extends State<AssistantScreen> {
+class _AssistantScreenState extends State<AssistantScreen>
+    with WidgetsBindingObserver {
   CameraController? _camera;
   // Laptop-tethered inference by default (config.kUseRemote) — on-device TFLite
   // is ~2.5 s/frame on this phone. Flip kUseRemote to false for on-device.
@@ -86,15 +88,21 @@ class _AssistantScreenState extends State<AssistantScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _voice = VoiceListener(onCommand: _onVoiceCommand);
     _init();
   }
 
   Future<void> _init() async {
     try {
+      // speaker FIRST: every later failure must be audible — the user can't
+      // read the screen, so a silent error is indistinguishable from a hang.
       await _speaker.init();
       await _sonar.init();
-      await _detector.load();
+      // a field walk outlasts the 30-60 s screen timeout; a paused activity
+      // stops the camera stream and the app goes silently dead mid-walk
+      unawaited(WakelockPlus.enable());
+      await _loadDetectorWithRetry();
 
       final cameras = await availableCameras();
       final back = cameras.firstWhere(
@@ -123,10 +131,81 @@ class _AssistantScreenState extends State<AssistantScreen> {
           : 'Walk mode started. Voice commands unavailable.');
     } catch (e) {
       setState(() => _error = '$e');
+      // spoken, not just shown: the target user cannot see the error text
+      _speaker.say('Start up failed. $e');
+    }
+  }
+
+  /// The laptop server is often started AFTER the app (or the hotspot is
+  /// still coming up). Instead of dying to the error screen, keep retrying
+  /// with spoken progress so the user knows the app is alive and what to fix.
+  Future<void> _loadDetectorWithRetry() async {
+    var attempt = 0;
+    while (true) {
+      try {
+        await _detector.load();
+        return;
+      } catch (e) {
+        attempt++;
+        if (!mounted) rethrow;
+        if (attempt == 1) {
+          _speaker.say('Cannot reach the laptop server. Retrying.');
+          setState(() => _banner = 'Waiting for laptop server…');
+        } else if (attempt % 4 == 0) {
+          // every ~20 s, so silence never reads as a crash
+          _speaker.say('Still waiting for the laptop server.');
+        }
+        await Future.delayed(const Duration(seconds: 5));
+      }
+    }
+  }
+
+  // --- app lifecycle: Android pauses the activity (screen off, task switch)
+  // and the camera plugin requires an explicit dispose/re-init cycle around
+  // that, or the stream comes back dead with no error.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      final cam = _camera;
+      if (cam == null) return;
+      _camera = null; // _onFrame checks _camera — frames stop immediately
+      cam.dispose();
+    } else if (state == AppLifecycleState.resumed && _ready) {
+      _resumeCamera();
+    }
+  }
+
+  Future<void> _resumeCamera() async {
+    if (_camera != null) return;
+    try {
+      final cameras = await availableCameras();
+      final back = cameras.firstWhere(
+          (c) => c.lensDirection == CameraLensDirection.back,
+          orElse: () => cameras.first);
+      final controller = CameraController(back, ResolutionPreset.medium,
+          enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
+      await controller.initialize();
+      _camera = controller;
+      await controller.startImageStream(_onFrame);
+      if (mounted) setState(() {});
+      _speaker.say('Resuming');
+    } catch (e) {
+      _speaker.say('Camera failed to resume');
+      // ignore: avoid_print
+      print('BlindAssist resume failed: $e');
     }
   }
 
   double _now() => _clock.elapsedMilliseconds / 1000.0;
+
+  // Consecutive detect() failures (null = no data, network down). Distinct
+  // from "no detections": guidance must PAUSE, not act on a fake empty scene
+  // — [] would silence sonar (silence means "path clear"), reset walk
+  // escalation, and let find mode announce "not visible" during a Wi-Fi blip.
+  int _failStreak = 0;
+  double _lastFailReminder = 0;
+  static const int _failStreakToAnnounce = 5;
 
   Future<void> _onFrame(CameraImage image) async {
     if (_busy || !mounted || _camera == null) return;
@@ -135,6 +214,25 @@ class _AssistantScreenState extends State<AssistantScreen> {
       final rotation = _camera!.description.sensorOrientation;
       final detections = await _detector.detect(image, rotation);
       if (!mounted) return;
+      if (detections == null) {
+        _failStreak++;
+        if (_failStreak == _failStreakToAnnounce) {
+          _lastFailReminder = _now();
+          _speaker.say('Connection lost, guidance paused');
+          _sonar.update(0, 0); // stale beeps would keep implying an obstacle
+          setState(() => _banner = 'Connection lost…');
+        } else if (_failStreak > _failStreakToAnnounce &&
+            _now() - _lastFailReminder > 10) {
+          _lastFailReminder = _now();
+          _speaker.say('Still no connection');
+        }
+        return; // skip engine/sonar/haptics — no data is not an empty room
+      }
+      if (_failStreak >= _failStreakToAnnounce) {
+        _speaker.say('Guidance restored');
+        setState(() => _banner = 'Walk mode');
+      }
+      _failStreak = 0;
       _frameLog++;
       if (_frameLog % 30 == 1) {
         // liveness breadcrumb for logcat field debugging
@@ -367,6 +465,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WakelockPlus.disable();
     _camera?.dispose();
     _detector.close();
     _speaker.dispose();

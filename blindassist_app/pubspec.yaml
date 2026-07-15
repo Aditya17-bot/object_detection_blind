@@ -45,6 +45,9 @@ dependencies:
   # vosk_flutter 0.3.48 pins http ^0.13.5, and the MultipartRequest/Client API
   # we use is identical across 0.13 -> 1.x.
   http: ^0.13.6
+  # keep the screen (and so the camera stream) alive for the whole walk —
+  # Android's screen timeout would otherwise pause the activity mid-route
+  wakelock_plus: ^1.2.8
 
 # vosk_flutter 0.3.48 pins permission_handler ^10.2.0, but 10.x references the
 # Flutter v1-embedding class PluginRegistry.Registrar which was removed in
@@ -57,6 +60,9 @@ dependency_overrides:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # remote_detector_test builds fake CameraImages via the platform-interface
+  # data classes (CameraImage has no public constructor of its own)
+  camera_platform_interface: ^2.8.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

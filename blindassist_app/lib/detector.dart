@@ -83,9 +83,15 @@ Interpreter _buildInterpreter(Uint8List bytes) {
 
 /// Common surface for the on-device [Detector] and the [RemoteDetector], so
 /// main.dart can pick either behind one field (see config.kUseRemote).
+///
+/// [detect] returns null when NO DATA was obtained for the frame (network
+/// failure on the remote path). Null is NOT the same as an empty list: an
+/// empty list is a verified-clear scene the guidance engine may act on, while
+/// null means the caller must NOT update guidance — treating a dead link as
+/// "path clear" would silence every warning mid-walk.
 abstract interface class FrameDetector {
   Future<void> load();
-  Future<List<Detection>> detect(CameraImage image, int rotation);
+  Future<List<Detection>?> detect(CameraImage image, int rotation);
   void close();
 }
 
@@ -145,6 +151,7 @@ class Detector implements FrameDetector {
   int _frameId = 0;
   int _frameCount = 0;
 
+  @override
   Future<void> load() async {
     final cocoBytes =
         (await rootBundle.load('assets/models/yolov8n.tflite')).buffer.asUint8List();
@@ -195,6 +202,7 @@ class Detector implements FrameDetector {
   }
 
   /// Run detection for one camera frame off the UI isolate.
+  @override
   Future<List<Detection>> detect(CameraImage image, int rotation) async {
     if (_toWorker == null) return const [];
     final id = _frameId++;
@@ -226,6 +234,7 @@ class Detector implements FrameDetector {
     });
   }
 
+  @override
   void close() {
     // ask the worker to free native interpreter + GPU-delegate handles first
     // (isolate death alone does NOT run the C-API destructors), then kill it.
@@ -320,7 +329,7 @@ class _Worker {
   /// Free native handles: close every interpreter, then delete the GPU
   /// delegates (interpreter.close() does not release the delegate).
   void dispose() {
-    for (final m in [..._models, if (_custom != null) _custom!]) {
+    for (final m in [..._models, ?_custom]) {
       try {
         m.interpreter.close();
       } catch (_) {}
