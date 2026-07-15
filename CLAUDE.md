@@ -8,12 +8,9 @@ messages. It is NOT a full navigation system — no depth in meters, no 3D
 mapping, no face recognition.
 
 Target classes (expanded 2026-07-09 after real-room testing showed the original
-5 were too narrow; defined in `position.py`, single source of truth):
-- **OBSTACLE_CLASSES** (Walk Mode warns): person, chair, couch, bed,
-  dining table, bench, toilet, sink, refrigerator, tv, potted plant,
-  suitcase, backpack
-- **FIND_CLASSES** (Find Mode only, never obstacle warnings): bottle, cup,
-  laptop, cell phone, book
+5 were too narrow): read **OBSTACLE_CLASSES** (Walk Mode warns) and
+**FIND_CLASSES** (Find Mode only, never obstacle warnings) in `position.py` —
+single source of truth.
 - **Doors are NOT in COCO** — user asked about other models / self-training.
   Options discussed but NOTHING downloaded/trained yet — user explicitly wants
   to be asked before any model download or training. See "Door detection" below.
@@ -240,38 +237,12 @@ camera instead, laptop still does detection + speech:
   seen by model but were filtered before class expansion → led to the expanded
   class list above.
 
-## Recorded-video test results (2026-07-10, yolov8s @ conf 0.6)
+## Recorded-video test results (phases 2 and 3)
 
-Phase 2 run on the 4 clips in `test_output/`; annotated keyframes saved as
-`test_output/clipN_frameXXXX.jpg`. **All zone + proximity labels visually
-correct** — remaining errors are model classification, not position logic:
-- Bedroom clip: bed/chair/suitcase/bottle/laptop all detected w/ correct zones.
-  One misdetection: wall calendar labeled "laptop".
-- Couch clip: couch "center ahead, close" — correct. Doors in frame ignored
-  (expected, not COCO).
-- Dustbin clip: blue dustbin consistently detected as **"toilet"** — dustbin is
-  not a COCO class. Position/proximity still right, and "toilet" is in
-  OBSTACLE_CLASSES so Walk Mode would still warn (wrong name, right behavior).
-  Candidate for the same future fine-tune as doors (user confirmed 2026-07-10:
-  fine-tuning deferred until after core phases).
-- Dark/blurry clip: maroon suitcase misread as "cell phone, very close";
-  upside-down chair on table missed entirely. Confirms lighting/motion-blur
-  limits already noted — worth a sentence in the report.
-
-## Phase 3 recorded-video results (2026-07-11, walk mode unless noted)
-
-Announcement logs in `test_output/phase3_*.log`, one annotated jpg saved per
-announcement. Behavior correct on all 4 clips — sparse, one-at-a-time,
-sensible messages (e.g. bedroom clip: 8 announcements across 471 frames):
-- Bedroom: bed tracked around the room, "Bed very close ahead, move slightly
-  right" etc.; chair/bottle/laptop present but correctly outranked by the bed.
-- Bedroom find-mode (`--target bottle`): "not visible" once → location updates
-  as camera moves ("Bottle top right, close" → "left, medium") → "not
-  visible" once when it exits. Exactly per spec.
-- Couch: "Couch ahead" → escalates "very close, move slightly right".
-- Dustbin: "Toilet ahead" (known COCO name limit; warning itself correct).
-- Dark clip: big dark cupboard read as "refrigerator very close on left" —
-  wrong name, correct warning (same story as dustbin; fine for prototype).
+Moved to `EVALUATION.md` — "Appendix: earlier clip logs (phases 2-3)"
+(clip-by-clip zone/proximity and announcement results, 2026-07-10/11;
+headline: all zone+proximity labels correct, remaining errors are COCO
+naming, e.g. dustbin→"toilet" — wrong name, right warning).
 
 ## Door detection (open question — ASK USER before downloading/training anything)
 
