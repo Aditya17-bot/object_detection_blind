@@ -12,6 +12,7 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -100,6 +101,9 @@ class _AssistantScreenState extends State<AssistantScreen>
       // speaker FIRST: every later failure must be audible — the user can't
       // read the screen, so a silent error is indistinguishable from a hang.
       await _speaker.init();
+      // speak IMMEDIATELY: server discovery + camera + Vosk unzip add up to
+      // many seconds, and dead air at launch reads as "the app crashed"
+      _speaker.say('Starting BlindAssist');
       await _sonar.init();
       // a field walk outlasts the 30-60 s screen timeout; a paused activity
       // stops the camera stream and the app goes silently dead mid-walk
@@ -118,23 +122,44 @@ class _AssistantScreenState extends State<AssistantScreen>
       _camera = controller;
       await controller.startImageStream(_onFrame);
 
-      // voice is optional — the app keeps working without the mic
-      final mic = await Permission.microphone.request();
-      var voiceOk = false;
-      if (mic.isGranted) voiceOk = await _voice.start();
+      // voice is optional AND slow (the Vosk model unzips ~40 MB on first
+      // run) — start it in parallel instead of gating the welcome message
+      unawaited(_startVoice());
 
       setState(() {
         _ready = true;
-        _voiceActive = voiceOk;
         _banner = 'Walk mode';
       });
-      await _speaker.say(voiceOk
-          ? 'Walk mode. Say find bottle, walk mode, or describe.'
-          : 'Walk mode started. Voice commands unavailable.');
+      // the user trained the door model specifically — its silent absence on
+      // the server would look exactly like "door detection is broken"
+      final det = _detector;
+      final doorWarning =
+          (det is RemoteDetector && det.customModelAvailable == false)
+              ? ' Warning: door detection unavailable on the server.'
+              : '';
+      await _speaker.say(
+          'Walk mode. Say find bottle, walk mode, or describe.$doorWarning');
     } catch (e) {
       setState(() => _error = '$e');
       // spoken, not just shown: the target user cannot see the error text
       _speaker.say('Start up failed. $e');
+    }
+  }
+
+  /// Mic permission + Vosk start, off the critical startup path. Speaks the
+  /// outcome so the user knows whether voice control is live.
+  Future<void> _startVoice() async {
+    var ok = false;
+    try {
+      final mic = await Permission.microphone.request();
+      if (mic.isGranted) ok = await _voice.start();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _voiceActive = ok);
+    if (!ok) {
+      // let the welcome sentence finish first (say() replaces, not queues)
+      await Future.delayed(const Duration(seconds: 4));
+      if (mounted) _speaker.say('Voice commands unavailable');
     }
   }
 
@@ -266,7 +291,11 @@ class _AssistantScreenState extends State<AssistantScreen>
           analyzeBox(d.name, d.confidence, d.x1, d.y1, d.x2, d.y2, 1, 1)
       ];
       final msg = _engine.update(infos, _now());
-      if (msg != null) _speaker.say(msg);
+      // routine guidance is droppable while an on-demand read-out plays;
+      // a "very close" escalation is safety and always cuts through
+      if (msg != null) {
+        _speaker.say(msg, urgent: msg.contains('very close'));
+      }
 
       // sonar tracks the walking obstacle — or the searched object in find
       // mode, so the beeps lead the user to it (same rule as webapp.py)
@@ -314,8 +343,11 @@ class _AssistantScreenState extends State<AssistantScreen>
       return;
     }
     if (tracked.hZone == _lastHapticZone) return; // only on a real zone change
+    // busy pulsing: do NOT record the zone — recording it here swallowed the
+    // change (next frame matches _lastHapticZone and never buzzes). Leaving
+    // it unrecorded retries on the next frame once the train finishes.
+    if (_pulsing) return;
     _lastHapticZone = tracked.hZone;
-    if (_pulsing) return; // don't interleave two pulse trains (object thrash)
     final pulses = tracked.hZone == 'left' ? 1 : (tracked.hZone == 'center' ? 2 : 3);
     unawaited(_pulse(pulses));
   }
@@ -364,20 +396,36 @@ class _AssistantScreenState extends State<AssistantScreen>
         _countClass(command.target!);
       case 'recall':
         _recall(command.target!);
+      case 'stop':
+        _speaker.stop(); // halt a long read-out without issuing a new command
+      case 'repeat':
+        _speaker.say(_banner, onDemand: true);
+      case 'sonar':
+        if (command.target == 'on') {
+          if (!_sonar.enabled) _toggleSonar();
+        } else if (command.target == 'off') {
+          if (_sonar.enabled) _toggleSonar();
+        } else {
+          _toggleSonar();
+        }
+      case 'mute':
+        // "mute"/"unmute" must work by voice: the mute BUTTON is the one
+        // control a blind user can't find while walking
+        if ((command.target == 'on') != _speaker.muted) _toggleMute();
     }
   }
 
   // Clear-path finder: speak the most open walking direction, on demand.
   void _clearPath() {
     final msg = _engine.path(_infos, _now());
-    _speaker.say(msg);
+    _speaker.say(msg, onDemand: true);
     setState(() => _banner = msg);
   }
 
   // Count query: "how many chairs" -> spoken count of that class.
   void _countClass(String target) {
     final msg = _engine.count(_infos, target, _now());
-    _speaker.say(msg);
+    _speaker.say(msg, onDemand: true);
     setState(() => _banner = msg);
   }
 
@@ -387,16 +435,19 @@ class _AssistantScreenState extends State<AssistantScreen>
   Future<void> _readText() async {
     if (_reading || _camera == null) return;
     _reading = true;
-    _speaker.say('Reading');
+    _speaker.say('Reading', onDemand: true);
     try {
       await _camera!.stopImageStream();
+      // the stream is paused but the last obstacle's beeps would keep
+      // implying "something approaching" while the user holds still reading
+      _sonar.update(0, 0);
       final shot = await _camera!.takePicture();
       final text = await _ocr.readFile(shot.path);
       final msg = text.isEmpty ? 'No text found' : text;
-      _speaker.say(msg);
+      _speaker.say(msg, onDemand: true);
       setState(() => _banner = msg);
     } catch (e) {
-      _speaker.say('Could not read text');
+      _speaker.say('Could not read text', onDemand: true);
     } finally {
       // resume the live detection loop
       try {
@@ -415,13 +466,13 @@ class _AssistantScreenState extends State<AssistantScreen>
   // Object memory: speak where a class was last seen, on demand.
   void _recall(String target) {
     final msg = _engine.recall(target, _now());
-    _speaker.say(msg);
+    _speaker.say(msg, onDemand: true);
     setState(() => _banner = msg);
   }
 
   void _describe() {
     final summary = _engine.describe(_infos, _now());
-    _speaker.say(summary);
+    _speaker.say(summary, onDemand: true);
     setState(() => _banner = summary);
   }
 
@@ -510,11 +561,23 @@ class _AssistantScreenState extends State<AssistantScreen>
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      body: GestureDetector(
+      // TalkBack: name the surface, expose the gestures as discoverable
+      // actions (TalkBack swallows raw double-taps/long-presses), and make
+      // every action reachable without vision or voice.
+      body: Semantics(
+        label: 'BlindAssist camera view',
+        hint: 'Double tap to describe the scene',
+        customSemanticsActions: {
+          const CustomSemanticsAction(label: 'Toggle sonar beeps'):
+              _toggleSonar,
+          const CustomSemanticsAction(label: 'Repeat last announcement'): () =>
+              _speaker.say(_banner, onDemand: true),
+        },
+        child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _describe,
         onDoubleTap: _toggleSonar,
-        onLongPress: () => _speaker.say(_banner),
+        onLongPress: () => _speaker.say(_banner, onDemand: true),
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -532,12 +595,16 @@ class _AssistantScreenState extends State<AssistantScreen>
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Text(
-                    '${_engine.mode == 'find' ? 'FIND ${_engine.target}' : 'WALK'}'
-                    '  ·  ${_fps.toStringAsFixed(1)} FPS'
-                    '  ·  ${_voiceActive ? '🎤 on' : '🎤 off'}'
-                    '${_sonar.enabled ? '  ·  sonar' : ''}',
-                    style: const TextStyle(fontSize: 13),
+                  // status pill is sighted-tester chrome — keep TalkBack off
+                  // it so focus lands on the controls and the live banner
+                  child: ExcludeSemantics(
+                    child: Text(
+                      '${_engine.mode == 'find' ? 'FIND ${_engine.target}' : 'WALK'}'
+                      '  ·  ${_fps.toStringAsFixed(1)} FPS'
+                      '  ·  ${_voiceActive ? '🎤 on' : '🎤 off'}'
+                      '${_sonar.enabled ? '  ·  sonar' : ''}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
                   ),
                 ),
               ),
@@ -584,19 +651,25 @@ class _AssistantScreenState extends State<AssistantScreen>
                     width: double.infinity,
                     color: Colors.black87,
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-                    child: Text(
-                      _banner,
-                      style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFFFFC247)),
-                      textAlign: TextAlign.center,
+                    // liveRegion: TalkBack announces every new guidance
+                    // message on its own — same job as aria-live in webapp
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        _banner,
+                        style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFFFC247)),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
           ],
+        ),
         ),
       ),
     );

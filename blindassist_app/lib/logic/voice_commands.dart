@@ -22,10 +22,31 @@ const Map<String, String> synonyms = {
   'woman': 'person',
 };
 
-final Map<String, String> _findable = {
-  for (final name in targetClasses) name: name,
-  ...synonyms,
-};
+/// Naive English plural of the LAST word ('cell phone' -> 'cell phones').
+/// Good enough for the constrained grammar; irregulars are added explicitly.
+String _plural(String phrase) {
+  if (phrase.endsWith('s') ||
+      phrase.endsWith('sh') ||
+      phrase.endsWith('ch') ||
+      phrase.endsWith('x')) {
+    return '${phrase}es';
+  }
+  return '${phrase}s';
+}
+
+final Map<String, String> _findable = () {
+  final base = {
+    for (final name in targetClasses) name: name,
+    ...synonyms,
+  };
+  // plurals: "how many chairs" is what people actually say — without these
+  // the constrained grammar can't even HEAR the plural form
+  return {
+    ...base,
+    for (final e in base.entries) _plural(e.key): e.value,
+    'people': 'person',
+  };
+}();
 
 /// A parsed voice command: action is walk / find / describe.
 typedef VoiceCommand = ({String action, String? target});
@@ -48,6 +69,19 @@ VoiceCommand? parseCommand(String text) {
   final words = text.toLowerCase().split(RegExp(r'\s+'))
     ..removeWhere((w) => w.isEmpty);
   if (words.isEmpty) return null;
+  if (words.contains('stop')) {
+    return (action: 'stop', target: null); // halt current speech
+  }
+  if (words.contains('repeat') || words.contains('again')) {
+    return (action: 'repeat', target: null); // last announcement again
+  }
+  if (words.contains('sonar')) { // hands-free toggle for the earphone beeps
+    final target =
+        words.contains('on') ? 'on' : (words.contains('off') ? 'off' : null);
+    return (action: 'sonar', target: target);
+  }
+  if (words.contains('unmute')) return (action: 'mute', target: 'off');
+  if (words.contains('mute')) return (action: 'mute', target: 'on');
   if (words.contains('describe') ||
       words.contains('scene') ||
       words.contains('summary')) {
@@ -86,7 +120,9 @@ VoiceCommand? parseCommand(String text) {
 /// Every phrase the recognizer should be able to hear.
 List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
-    'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text'];
+    'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
+    'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
+    'mute', 'unmute'];
   final names = _findable.keys.toList()..sort();
   for (final name in names) {
     phrases.add('find $name');

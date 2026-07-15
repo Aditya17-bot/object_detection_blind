@@ -56,6 +56,28 @@ class TestParseCommand(unittest.TestCase):
         self.assertEqual(parse_command("where is my phone"),
                          ("recall", "cell phone"))
 
+    def test_stop_and_repeat(self):
+        self.assertEqual(parse_command("stop"), ("stop", None))
+        self.assertEqual(parse_command("repeat"), ("repeat", None))
+        self.assertEqual(parse_command("say again"), ("repeat", None))
+
+    def test_sonar_toggle(self):
+        self.assertEqual(parse_command("sonar"), ("sonar", None))
+        self.assertEqual(parse_command("sonar on"), ("sonar", "on"))
+        self.assertEqual(parse_command("turn sonar off"), ("sonar", "off"))
+
+    def test_mute_unmute(self):
+        self.assertEqual(parse_command("mute"), ("mute", "on"))
+        self.assertEqual(parse_command("unmute"), ("mute", "off"))
+
+    def test_plurals(self):
+        # "how many chairs" is what people actually say
+        self.assertEqual(parse_command("how many chairs"), ("count", "chair"))
+        self.assertEqual(parse_command("how many people"), ("count", "person"))
+        self.assertEqual(parse_command("how many couches"),
+                         ("count", "couch"))
+        self.assertEqual(parse_command("find bottles"), ("find", "bottle"))
+
     def test_unknown_utterances_ignored(self):
         self.assertIsNone(parse_command("hello there"))
         self.assertIsNone(parse_command("find unicorn"))

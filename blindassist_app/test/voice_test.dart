@@ -75,5 +75,25 @@ void main() {
     test('door is findable by voice (custom model class)', () {
       expect(parseCommand('find door'), (action: 'find', target: 'door'));
     });
+    test('stop and repeat', () {
+      expect(parseCommand('stop'), (action: 'stop', target: null));
+      expect(parseCommand('repeat'), (action: 'repeat', target: null));
+      expect(parseCommand('say again'), (action: 'repeat', target: null));
+    });
+    test('sonar toggle', () {
+      expect(parseCommand('sonar'), (action: 'sonar', target: null));
+      expect(parseCommand('sonar on'), (action: 'sonar', target: 'on'));
+      expect(parseCommand('turn sonar off'), (action: 'sonar', target: 'off'));
+    });
+    test('mute and unmute', () {
+      expect(parseCommand('mute'), (action: 'mute', target: 'on'));
+      expect(parseCommand('unmute'), (action: 'mute', target: 'off'));
+    });
+    test('plurals parse to the singular class', () {
+      expect(parseCommand('how many chairs'), (action: 'count', target: 'chair'));
+      expect(parseCommand('how many people'), (action: 'count', target: 'person'));
+      expect(parseCommand('how many couches'), (action: 'count', target: 'couch'));
+      expect(parseCommand('find bottles'), (action: 'find', target: 'bottle'));
+    });
   });
 }

@@ -36,8 +36,21 @@ SYNONYMS = {
     "bag": "backpack", "man": "person", "woman": "person",
 }
 
+
+def _plural(phrase):
+    """Naive English plural of the LAST word ('cell phone' -> 'cell phones').
+    Good enough for the constrained grammar; irregulars are added explicitly."""
+    if phrase.endswith(("s", "sh", "ch", "x")):
+        return phrase + "es"
+    return phrase + "s"
+
+
 _FINDABLE = {name: name for name in TARGET_CLASSES}
 _FINDABLE.update(SYNONYMS)
+# plurals: "how many chairs" is what people actually say — without these the
+# constrained grammar can't even HEAR the plural form
+_FINDABLE.update({_plural(k): v for k, v in list(_FINDABLE.items())})
+_FINDABLE["people"] = "person"
 
 
 def _match_object(rest):
@@ -51,11 +64,22 @@ def _match_object(rest):
 
 def parse_command(text):
     """Recognized utterance -> (action, target) or None. Actions:
-    walk / find / describe / clock / zones / recall. Tolerant of filler
-    words: 'please find the bottle' works."""
+    walk / find / describe / clock / zones / recall / stop / repeat /
+    sonar / mute. Tolerant of filler words: 'please find the bottle' works."""
     words = text.lower().split()
     if not words:
         return None
+    if "stop" in words:            # halt current speech (e.g. a long OCR read)
+        return ("stop", None)
+    if "repeat" in words or "again" in words:
+        return ("repeat", None)    # say the last announcement again
+    if "sonar" in words:           # hands-free toggle for the earphone beeps
+        target = "on" if "on" in words else ("off" if "off" in words else None)
+        return ("sonar", target)
+    if "unmute" in words:
+        return ("mute", "off")
+    if "mute" in words:
+        return ("mute", "on")
     if "describe" in words or "scene" in words or "summary" in words:
         return ("describe", None)
     if "clock" in words:
@@ -88,7 +112,9 @@ def grammar_phrases():
     """Every phrase the recognizer should be able to hear."""
     phrases = ["walk mode", "walk", "describe", "describe scene", "summary",
                "clock mode", "zone mode", "clear path", "which way",
-               "read", "read text"]
+               "read", "read text",
+               "stop", "repeat", "say again", "sonar", "sonar on", "sonar off",
+               "mute", "unmute"]
     for name in sorted(_FINDABLE):
         phrases.append(f"find {name}")
         phrases.append(f"find the {name}")

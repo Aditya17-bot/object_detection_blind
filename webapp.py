@@ -136,15 +136,42 @@ class AssistantEngine:
 
     def _on_voice_command(self, command):
         """VoiceListener thread -> same actions as the UI buttons, plus a
-        short spoken confirmation so the user knows they were heard."""
+        short spoken confirmation so the user knows they were heard.
+        MUST swallow unknown actions: an exception here propagates into the
+        VoiceListener worker and silently kills voice for the whole session
+        (that is exactly what happened when 'clock mode' arrived before this
+        dispatch knew about it)."""
         action, target = command
+        t = time.monotonic() - self._started
+        with self._lock:
+            infos = list(self._last_infos)
         if action == "describe":
             self.describe()
-            return
-        self.set_mode(action, target)
-        confirm = ("Walk mode" if action == "walk"
-                   else f"Finding {target}")
-        self._announce(confirm, time.monotonic() - self._started, "voice")
+        elif action in ("walk", "find"):
+            self.set_mode(action, target)
+            confirm = "Walk mode" if action == "walk" else f"Finding {target}"
+            self._announce(confirm, t, "voice")
+        elif action in ("clock", "zones"):
+            with self._lock:
+                self._engine.set_clock(action == "clock")
+            self._announce("Clock mode" if action == "clock" else "Zone mode",
+                           t, "voice")
+        elif action == "path":
+            with self._lock:
+                msg = self._engine.path(infos, t)
+            self._announce(msg, t, "voice")
+        elif action == "count":
+            with self._lock:
+                msg = self._engine.count(infos, target, t)
+            self._announce(msg, t, "voice")
+        elif action == "recall":
+            with self._lock:
+                msg = self._engine.recall(target, t)
+            self._announce(msg, t, "voice")
+        else:
+            # read (OCR), sonar (browser-side), stop/repeat/mute: phone-app
+            # features — ignore here rather than crash the voice thread
+            pass
 
     # -- worker ------------------------------------------------------------
 
