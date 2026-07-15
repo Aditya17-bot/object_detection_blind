@@ -18,6 +18,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'config.dart';
 import 'detector.dart';
+import 'discovery.dart';
 import 'remote_detector.dart';
 import 'logic/decision.dart';
 import 'logic/position.dart';
@@ -56,10 +57,11 @@ class AssistantScreen extends StatefulWidget {
 class _AssistantScreenState extends State<AssistantScreen>
     with WidgetsBindingObserver {
   CameraController? _camera;
-  // Laptop-tethered inference by default (config.kUseRemote) — on-device TFLite
-  // is ~2.5 s/frame on this phone. Flip kUseRemote to false for on-device.
-  final FrameDetector _detector =
-      kUseRemote ? RemoteDetector(kServerHost, kServerPort) : Detector();
+  // Laptop-tethered inference by default (config.kUseRemote) — on-device
+  // TFLite is ~2.5 s/frame on this phone. Created in _loadDetectorWithRetry:
+  // the remote host comes from UDP discovery (falls back to config), so it
+  // can't be constructed at field-init time. Null until load succeeds.
+  FrameDetector? _detector;
   final GuidanceEngine _engine = GuidanceEngine();
   final Speaker _speaker = Speaker();
   final Sonar _sonar = Sonar();
@@ -139,13 +141,30 @@ class _AssistantScreenState extends State<AssistantScreen>
   /// The laptop server is often started AFTER the app (or the hotspot is
   /// still coming up). Instead of dying to the error screen, keep retrying
   /// with spoken progress so the user knows the app is alive and what to fix.
+  /// Each attempt re-runs UDP discovery — the server's IP is only knowable
+  /// once it is actually up, and it changes every hotspot session.
   Future<void> _loadDetectorWithRetry() async {
+    if (!kUseRemote) {
+      final d = Detector();
+      await d.load();
+      _detector = d;
+      return;
+    }
     var attempt = 0;
     while (true) {
+      final found = await discoverServer();
+      final remote = found != null
+          ? RemoteDetector(found.host, found.port)
+          : RemoteDetector(kServerHost, kServerPort); // baked-in fallback
       try {
-        await _detector.load();
+        await remote.load();
+        _detector = remote;
+        // ignore: avoid_print
+        print('BlindAssist: server via '
+            '${found != null ? 'discovery' : 'config fallback'}');
         return;
       } catch (e) {
+        remote.close();
         attempt++;
         if (!mounted) rethrow;
         if (attempt == 1) {
@@ -208,11 +227,12 @@ class _AssistantScreenState extends State<AssistantScreen>
   static const int _failStreakToAnnounce = 5;
 
   Future<void> _onFrame(CameraImage image) async {
-    if (_busy || !mounted || _camera == null) return;
+    final detector = _detector;
+    if (_busy || !mounted || _camera == null || detector == null) return;
     _busy = true;
     try {
       final rotation = _camera!.description.sensorOrientation;
-      final detections = await _detector.detect(image, rotation);
+      final detections = await detector.detect(image, rotation);
       if (!mounted) return;
       if (detections == null) {
         _failStreak++;
@@ -468,7 +488,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
     _camera?.dispose();
-    _detector.close();
+    _detector?.close();
     _speaker.dispose();
     _sonar.dispose();
     _ocr.dispose();

@@ -11,7 +11,10 @@ library;
 /// false -> on-device Detector (TFLite; only viable on faster hardware).
 const bool kUseRemote = true;
 
-/// The laptop's LAN IP and the infer_server.py port. Phone and laptop must be
-/// on the same Wi-Fi/hotspot. Update the IP to match `ipconfig` on the laptop.
+/// FALLBACK ONLY: the app finds the laptop via UDP broadcast at startup
+/// (discovery.dart — infer_server.py answers with its port, its IP comes from
+/// the reply packet). These constants are used only when discovery times out,
+/// e.g. on a network that filters broadcast. Phone and laptop must be on the
+/// same Wi-Fi/hotspot either way.
 const String kServerHost = '172.17.77.158';
 const int kServerPort = 5001;

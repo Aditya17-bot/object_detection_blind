@@ -2,12 +2,13 @@
 (same philosophy as test_webapp.py's fake engine)."""
 import io
 import json
+import socket
 import unittest
 
 import numpy as np
 
-import infer_server
-from infer_server import build_app, yuv420_to_bgr
+from infer_server import (DISCOVER_MSG, REPLY_PREFIX, build_app,
+                          start_discovery_responder, yuv420_to_bgr)
 
 
 class _FakeBox:
@@ -128,6 +129,26 @@ class ServerTest(unittest.TestCase):
     def test_warmup_runs_at_startup(self):
         _, coco = self._client()
         self.assertEqual(coco.seen_shapes, [(640, 640, 3)])
+
+
+class DiscoveryTest(unittest.TestCase):
+    def test_responder_replies_with_http_port(self):
+        server_sock = start_discovery_responder(5001, port=0)
+        port = server_sock.getsockname()[1]
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client.settimeout(2)
+        try:
+            client.sendto(DISCOVER_MSG, ("127.0.0.1", port))
+            data, _ = client.recvfrom(64)
+            self.assertEqual(data, REPLY_PREFIX + b"5001")
+            # garbage must be ignored, not crash the thread
+            client.sendto(b"garbage", ("127.0.0.1", port))
+            client.sendto(DISCOVER_MSG, ("127.0.0.1", port))
+            data2, _ = client.recvfrom(64)
+            self.assertEqual(data2, REPLY_PREFIX + b"5001")
+        finally:
+            client.close()
+            server_sock.close()
 
 
 if __name__ == "__main__":

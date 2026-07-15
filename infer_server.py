@@ -19,6 +19,7 @@ Run:  python infer_server.py --host 0.0.0.0
 Then point the app's kServerHost at this laptop's LAN IP.
 """
 import argparse
+import socket
 import threading
 import time
 
@@ -69,6 +70,37 @@ def yuv420_to_bgr(y, u, v, w, h, y_stride, uv_stride, uv_pixel_stride):
     B = Y + 1.772 * U
     bgr = np.clip(np.stack([B, G, R], axis=-1), 0, 255).astype(np.uint8)
     return bgr
+
+
+# --- UDP auto-discovery -----------------------------------------------------
+# The hotspot IP changes every session; baking it into the app meant an APK
+# rebuild per session. Instead the app broadcasts DISCOVER_MSG on
+# DISCOVERY_PORT and we reply with the HTTP port — the app takes the server's
+# IP from the reply packet itself.
+DISCOVERY_PORT = 5002
+DISCOVER_MSG = b"BLINDASSIST_DISCOVER"
+REPLY_PREFIX = b"BLINDASSIST_INFER "
+
+
+def start_discovery_responder(http_port, port=DISCOVERY_PORT):
+    """Listen for app discovery broadcasts, reply with our HTTP port.
+    Returns the socket (tests close it; the daemon thread dies with it)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", port))
+
+    def _serve():
+        while True:
+            try:
+                data, addr = sock.recvfrom(64)
+            except OSError:  # socket closed — shut down
+                return
+            if data.strip() == DISCOVER_MSG:
+                sock.sendto(REPLY_PREFIX + str(http_port).encode(), addr)
+                print(f"discovery ping from {addr[0]} — replied")
+
+    threading.Thread(target=_serve, daemon=True).start()
+    return sock
 
 
 _AUTO = object()  # sentinel: custom_model=None must mean "explicitly none"
@@ -161,5 +193,7 @@ if __name__ == "__main__":
     ap.add_argument("--extra-model", default="door_dustbin_stairs.pt")
     args = ap.parse_args()
     app = build_app(args.model, args.extra_model)
-    print(f"BlindAssist inference server on http://{args.host}:{args.port}")
+    start_discovery_responder(args.port)
+    print(f"BlindAssist inference server on http://{args.host}:{args.port} "
+          f"(UDP discovery on {DISCOVERY_PORT})")
     app.run(host=args.host, port=args.port, threaded=True)
