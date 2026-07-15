@@ -34,3 +34,4 @@ dart_port/
 # generated Gradle build output
 blindassist_app/android/build/
 blindassist_app/build/
+blindassist_app/android/.kotlin/

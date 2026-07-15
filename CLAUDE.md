@@ -460,20 +460,20 @@ Test counts: **121 Python / 112 Dart**, all passing.
   `github.com/Aditya17-bot/object_detection_blind` (branch `main`). Large
   model/export binaries are gitignored (see `.gitignore`) — regenerate locally.
 
-## Storage / Google Drive sync (2026-07-10)
+## Storage / backup (updated 2026-07-15 — user decision)
 
-- OneDrive is out of space. Working copy stays LOCAL at
+- **Google Drive sync is RETIRED**: Drive is full (user 2026-07-15 — "don't
+  sync there"). Do NOT run `sync_to_drive.ps1` anymore. The old Drive
+  snapshot (2026-07-09/10) still exists but is stale.
+- OneDrive is also out of space. Working copy stays LOCAL at
   `C:\Users\rober\OneDrive\Desktop\object_detection_blind` (fast, runnable) —
   OneDrive simply can't upload new files, nothing is lost locally.
-- Backup lives in Google Drive: user uploaded a snapshot via browser 2026-07-09
-  (includes a stale useless venv — user should delete that folder inside the
-  Drive copy once, at drive.google.com, to free ~26k files).
-- Google Drive for Desktop was already installed; we started it 2026-07-10,
-  `G:` mounts as "Google Drive", account already signed in. First indexing is
-  slow — `G:\My Drive\object_detection_blind` may take a while to appear.
-- **Pipeline**: run `.\sync_to_drive.ps1` to mirror the project to
-  `G:\My Drive\object_detection_blind` (robocopy /MIR, excludes venv,
-  __pycache__, .git). Run it after each work session.
+- **Backup = GitHub**: push to `origin main` after each work session.
+  Covers all code + docs + the user-trained `door_dustbin_stairs.pt`
+  (committed on purpose). NOT covered (gitignored): auto-downloaded weights
+  and the Vosk model (redownloadable), TFLite exports (regenerate from the
+  .pt), and **`test_output/` (~27 MB of eval clips/keyframes/logs — the
+  report + patent evidence; only copy is this laptop + the stale 07-10
+  Drive snapshot — worth an occasional USB copy)**.
 - Fine-tune plan for door + dustbin written up for the user's friend in
-  `finetune_handoff.md` (Option A: separate small model; nothing downloaded
-  or trained yet — still requires user go-ahead, after phases 3-5).
+  `finetune_handoff.md`.
