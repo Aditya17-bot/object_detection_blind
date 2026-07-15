@@ -15,7 +15,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'config.dart';
 import 'detector.dart';
+import 'remote_detector.dart';
 import 'logic/decision.dart';
 import 'logic/position.dart';
 import 'logic/voice_commands.dart';
@@ -52,7 +54,10 @@ class AssistantScreen extends StatefulWidget {
 
 class _AssistantScreenState extends State<AssistantScreen> {
   CameraController? _camera;
-  final Detector _detector = Detector();
+  // Laptop-tethered inference by default (config.kUseRemote) — on-device TFLite
+  // is ~2.5 s/frame on this phone. Flip kUseRemote to false for on-device.
+  final FrameDetector _detector =
+      kUseRemote ? RemoteDetector(kServerHost, kServerPort) : Detector();
   final GuidanceEngine _engine = GuidanceEngine();
   final Speaker _speaker = Speaker();
   final Sonar _sonar = Sonar();

@@ -84,6 +84,13 @@ void main() {
       expect(walkMessage(info('chair', hZone: 'right', conf: 0.85)),
           'Chair on right, close');
     });
+    test('custom-model classes named below threshold', () {
+      // door/dustbin come from the DEDICATED model (no COCO lookalike), so
+      // they keep their name even at 0.5 conf — never spoken as "obstacle".
+      expect(walkMessage(info('door', conf: 0.5)), 'Door ahead, close');
+      expect(walkMessage(info('dustbin', hZone: 'left', conf: 0.55)),
+          'Dustbin on left, close');
+    });
   });
 
   group('engine walk mode', () {

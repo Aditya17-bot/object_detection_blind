@@ -79,6 +79,14 @@ class TestWalkMessage(unittest.TestCase):
         self.assertEqual(walk_message(info("chair", "right", conf=0.85)),
                          "Chair on right, close")
 
+    def test_custom_model_classes_named_below_threshold(self):
+        # door/dustbin come from the DEDICATED model (no COCO lookalike), so
+        # they keep their name even at 0.5 conf — never spoken as "obstacle".
+        self.assertEqual(walk_message(info("door", "center", conf=0.5)),
+                         "Door ahead, close")
+        self.assertEqual(walk_message(info("dustbin", "left", conf=0.55)),
+                         "Dustbin on left, close")
+
 
 class TestEngineWalk(unittest.TestCase):
     # these pin the anti-spam LOGIC, so they force zone wording (use_clock=

@@ -41,6 +41,10 @@ dependencies:
   vosk_flutter: ^0.3.48
   permission_handler: ^12.0.0
   google_mlkit_text_recognition: ^0.15.0
+  # remote inference: POST raw YUV frames to the laptop server. 0.13.x not 1.x:
+  # vosk_flutter 0.3.48 pins http ^0.13.5, and the MultipartRequest/Client API
+  # we use is identical across 0.13 -> 1.x.
+  http: ^0.13.6
 
 # vosk_flutter 0.3.48 pins permission_handler ^10.2.0, but 10.x references the
 # Flutter v1-embedding class PluginRegistry.Registrar which was removed in

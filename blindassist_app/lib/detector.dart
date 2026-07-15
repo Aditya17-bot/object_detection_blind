@@ -22,11 +22,19 @@ import 'logic/position.dart';
 const double kNmsIou = 0.45;
 const int _customEvery = 3; // run the custom door/dustbin model 1 frame in N
 
-// Try the TFLite GPU delegate first (Adreno on the S20 FE): ~5x faster than
-// single-thread CPU and it sidesteps the multi-thread-XNNPACK-in-isolate
-// deadlock entirely (GPU isn't XNNPACK). Falls back to CPU automatically if
-// the delegate can't be created on the device. Flip to false to force CPU.
-const bool _useGpu = true;
+// Inference backend, flip and re-measure on device. On the S20 FE the GPU
+// delegate benchmarked ~2.5 s/inference (graph badly partitioned — the
+// yolov8 head ops fall back to CPU, so every frame pays CPU<->GPU tensor
+// copies). NNAPI hands the graph to the Android NN runtime (Hexagon DSP /
+// GPU driver) and is usually far faster for this model. CPU = XNNPACK with
+// _cpuThreads (multi-thread XNNPACK is safe here because it runs in the
+// worker isolate that OWNS the interpreter — the old deadlock was calling a
+// UI-isolate interpreter from the worker, which we no longer do).
+// ignore: unused_field — cpu is the config value that selects the fallback arm
+enum _Backend { gpu, nnapi, cpu }
+
+const _Backend _backend = _Backend.nnapi;
+const int _cpuThreads = 4;
 
 /// GPU delegates created in the worker isolate, kept so they can be explicitly
 /// deleted on dispose (closing the interpreter does NOT free the delegate's
@@ -38,7 +46,7 @@ final List<GpuDelegateV2> _workerDelegates = [];
 /// whichever isolate calls this — the worker — so the GPU GL context lives on
 /// the same thread that runs inference.
 Interpreter _buildInterpreter(Uint8List bytes) {
-  if (_useGpu) {
+  if (_backend == _Backend.gpu) {
     try {
       final delegate = GpuDelegateV2();
       final interp = Interpreter.fromBuffer(bytes,
@@ -52,11 +60,33 @@ Interpreter _buildInterpreter(Uint8List bytes) {
       // ignore: avoid_print
       print('BlindAssist: GPU delegate unavailable, CPU fallback ($e)');
     }
+  } else if (_backend == _Backend.nnapi) {
+    try {
+      final interp = Interpreter.fromBuffer(bytes,
+          options: InterpreterOptions()..useNnApiForAndroid = true);
+      interp.allocateTensors();
+      // ignore: avoid_print
+      print('BlindAssist: NNAPI delegate active');
+      return interp;
+    } catch (e) {
+      // ignore: avoid_print
+      print('BlindAssist: NNAPI unavailable, CPU fallback ($e)');
+    }
   }
   final interp = Interpreter.fromBuffer(bytes,
-      options: InterpreterOptions()..threads = 1);
+      options: InterpreterOptions()..threads = _cpuThreads);
   interp.allocateTensors();
+  // ignore: avoid_print
+  print('BlindAssist: CPU backend, threads=$_cpuThreads');
   return interp;
+}
+
+/// Common surface for the on-device [Detector] and the [RemoteDetector], so
+/// main.dart can pick either behind one field (see config.kUseRemote).
+abstract interface class FrameDetector {
+  Future<void> load();
+  Future<List<Detection>> detect(CameraImage image, int rotation);
+  void close();
 }
 
 /// One detection in normalized portrait coordinates. Plain fields so it is
@@ -107,7 +137,7 @@ class _ResultMsg {
 }
 
 /// Public API is unchanged apart from detect() now returning a Future.
-class Detector {
+class Detector implements FrameDetector {
   Isolate? _isolate;
   SendPort? _toWorker;
   final Completer<void> _ready = Completer<void>();
@@ -125,7 +155,11 @@ class Detector {
               .load('assets/models/door_dustbin_stairs.tflite'))
           .buffer
           .asUint8List();
-      custom = _ModelSpec(customBytes, customLabels, 0.5);
+      // 0.4 not 0.5: door/dustbin are a SAFETY obstacle — a partial or far
+      // doorway lives in the 0.4-0.5 band live (peak ~0.9 only head-on), and
+      // 0.5 filtered those out entirely. door has no COCO lookalike so a lower
+      // gate does not risk misnamed warnings.
+      custom = _ModelSpec(customBytes, customLabels, 0.4);
     } catch (_) {
       // custom model missing — app still works with COCO classes only
     }

@@ -47,6 +47,13 @@ def _distance_or_bucket(info):
 # known misnames scored 0.65-0.75, correct names >= 0.85.
 NAME_CONFIDENCE = 0.8
 
+# Classes from the DEDICATED custom model (door_dustbin_stairs), not COCO. The
+# NAME_CONFIDENCE gate exists only because COCO misnames lookalikes; these have
+# no lookalike to confuse, so their name is always trustworthy and bypasses the
+# gate — otherwise a real door at 0.5-0.79 conf is spoken as generic "obstacle"
+# and the user thinks door detection failed.
+TRUSTED_NAME_CLASSES = {"door", "dustbin"}
+
 
 def _cap(text):
     return text[0].upper() + text[1:]
@@ -100,7 +107,10 @@ def walk_message(info, all_infos=(), use_clock=False):
     """Spoken warning for the chosen obstacle. Short on purpose; vertical
     zone is irrelevant for walking, so only left/ahead/right (or the clock
     bearing when use_clock) is spoken."""
-    name = info.name if info.confidence >= NAME_CONFIDENCE else "obstacle"
+    name = (info.name
+            if info.name in TRUSTED_NAME_CLASSES
+            or info.confidence >= NAME_CONFIDENCE
+            else "obstacle")
     side = clock_phrase(info.center_x) if use_clock else _SIDE_WORD[info.h_zone]
     if info.proximity == "very close":
         if info.h_zone == "center":

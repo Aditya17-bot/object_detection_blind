@@ -45,6 +45,13 @@ String _distanceOrBucket(ObjectInfo info) {
 /// known misnames scored 0.65-0.75, correct names >= 0.85.
 const double nameConfidence = 0.8;
 
+/// Classes from the DEDICATED custom model (door_dustbin_stairs), not COCO.
+/// The nameConfidence gate exists only because COCO misnames lookalikes; these
+/// have no lookalike to confuse, so their name is always trustworthy and must
+/// bypass the gate — otherwise a real door at 0.5-0.79 conf is spoken as the
+/// generic "obstacle" and the user thinks door detection failed.
+const Set<String> trustedNameClasses = {'door', 'dustbin'};
+
 String _cap(String text) => text[0].toUpperCase() + text.substring(1);
 
 // ---------------------------------------------------------------------------
@@ -100,7 +107,10 @@ String _freerSide(ObjectInfo chosen, List<ObjectInfo> infos) {
 /// useClock) is spoken.
 String walkMessage(ObjectInfo info,
     [List<ObjectInfo> allInfos = const [], bool useClock = false]) {
-  final name = info.confidence >= nameConfidence ? info.name : 'obstacle';
+  final name = (trustedNameClasses.contains(info.name) ||
+          info.confidence >= nameConfidence)
+      ? info.name
+      : 'obstacle';
   final side = useClock ? clockPhrase(info.centerX) : _sideWord[info.hZone]!;
   if (info.proximity == 'very close') {
     final String dodge;

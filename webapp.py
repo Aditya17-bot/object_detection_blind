@@ -56,7 +56,7 @@ class AssistantEngine:
     def __init__(self, source="0", mode="walk", target=None,
                  model_name="yolov8s.pt", conf=0.6, rate=175, muted=False,
                  voice=True, extra_model="door_dustbin_stairs.pt",
-                 extra_conf=0.5):
+                 extra_conf=0.4):
         self.source = source
         self.model_name = model_name
         self.conf = conf
@@ -340,8 +340,9 @@ def main():
     ap.add_argument("--extra-model", default="door_dustbin_stairs.pt",
                     help="custom door/dustbin/stairs weights "
                          "(skipped if the file is missing)")
-    ap.add_argument("--extra-conf", type=float, default=0.5,
-                    help="confidence threshold for the custom model")
+    ap.add_argument("--extra-conf", type=float, default=0.4,
+                    help="confidence threshold for the custom model "
+                         "(0.4: partial/far doors live in the 0.4-0.5 band)")
     ap.add_argument("--rate", type=int, default=175)
     ap.add_argument("--mute", action="store_true")
     ap.add_argument("--no-voice", action="store_true",
