@@ -403,6 +403,52 @@ write-up + patent material in **`PATENT_RESEARCH.md`** (maintained ongoing).
   distance gating.
 - Test counts after this batch: **107 Python / 96 Dart**, all passing.
 
+## Remote-inference pivot + finish-up phases (2026-07-15)
+
+On-device TFLite on the S20 FE measured **~2.5 s/inference for BOTH GPU and
+NNAPI delegates** (yolov8 head ops partition badly; every frame pays
+CPU<->GPU copies) — unusable against the 1 s guidance budget. User decision:
+**remote-primary architecture** — the app POSTs each frame's raw YUV420
+planes to `infer_server.py` on the laptop (yolov8s + door model, ~140 ms/
+frame), keeps sonar/haptics/voice/OCR native. `config.kUseRemote=false`
+still selects the on-device path (NNAPI backend coded, unverified).
+
+Finish-up phases (each committed separately, all reviewed against a
+zero-added-latency rule by a critique subagent — its 12 findings are in the
+F2/F4 commit messages):
+- **F1** `74bdb1f`: pivot committed; http pinned ^0.13.6 (vosk_flutter
+  conflict); TRUSTED_NAME_CLASSES {door, dustbin} bypass the NAME_CONFIDENCE
+  gate (dedicated-model classes have no COCO lookalike — a 0.5-0.79 door
+  must never be spoken as generic "obstacle"); custom conf 0.5→0.4
+  everywhere (partial/far doors live in 0.4-0.5).
+- **F2** `cafc44c` safety net: `FrameDetector.detect` returns **null on NO
+  DATA vs [] for verified-clear** — guidance PAUSES on network failure
+  ("Connection lost, guidance paused" after 5 misses, sonar silenced,
+  "Guidance restored" on recovery) instead of acting on a fake empty room.
+  Portrait lock (landscape would flip left/right advice), wakelock +
+  lifecycle re-init (screen timeout killed the stream mid-walk), infer
+  timeout 3 s→1.2 s, server warmup + predict lock + Y-plane pad fix,
+  startup errors SPOKEN with a 5 s retry loop.
+- **F3** `0d143f3`: **UDP auto-discovery** (app broadcasts on 5002,
+  server replies, IP comes from the reply packet) — no more per-hotspot
+  config.dart edits/rebuilds; baked IP is fallback only.
+- **F4** `ca878ef`: TalkBack (liveRegion banner, custom actions, status
+  pill excluded); speech priority (on-demand read-outs not cut by routine
+  chatter; "very close" still cuts through); voice "stop"/"repeat"/
+  "sonar on|off"/"mute|unmute" + PLURAL grammar ("how many chairs");
+  startup speaks immediately, Vosk loads in parallel; webapp voice-dispatch
+  crash fixed ("clock mode" used to silently kill the voice thread);
+  haptic zone-swallow + sonar-during-OCR fixes.
+- **F5 OPEN**: install on the S20 FE, measure real FPS + end-to-end latency
+  (laptop console prints per-frame ms; app pill shows FPS). JPEG frame
+  compression is the prepared fallback ONLY if measured too slow.
+- **F6**: `FIELD_TEST.md` = the user's validation walk protocol (includes
+  the server-kill failure drill and pocket drill). PATENT_RESEARCH.md
+  changelog has the 2026-07-15 entries (fail-safe absence/negative
+  distinction extends the "selective abstention" thesis).
+
+Test counts: **121 Python / 112 Dart**, all passing.
+
 ## Environment notes
 
 - Windows 11, PowerShell. Deps (`ultralytics`, `opencv-python`, `pyttsx3`,

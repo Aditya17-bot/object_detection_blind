@@ -231,3 +231,26 @@ vs. useful announcements retained.
   code-level fixes from an implementation-critique pass (native handle disposal,
   surfaced detector-init failure, haptic pulse-train guard). Reduction-to-
   practice updated to **107 Python / 96 Dart** tests.
+- **2026-07-15** — architecture pivot to **laptop-tethered remote inference**
+  (remote-primary, user decision): on-device TFLite measured ~2.5 s/inference
+  on the S20 FE (GPU and NNAPI delegates both — yolov8 head partitions badly),
+  so the phone now ships raw YUV420 planes to `infer_server.py` (yolov8s +
+  door model, ~140 ms) over Wi-Fi and keeps sonar/haptics/voice/OCR native.
+  UDP auto-discovery removes per-session IP configuration. Not itself a
+  novelty claim (edge offload is known), but it preserves the sub-second
+  guidance loop the other claims assume.
+- **2026-07-15 (update)** — **fail-safe absence/negative distinction**, a
+  direct extension of the §9 "selective abstention" thesis to the TRANSPORT
+  layer: a failed remote frame returns null (no data), never an empty
+  detection list, because downstream an empty list is a *verified-clear*
+  scene — acting on it silences sonar (silence = "path clear"), resets walk
+  escalation, and lets find mode claim "not visible" during a Wi-Fi blip.
+  On no-data the engine PAUSES (guidance skipped, sonar muted) and the state
+  is spoken ("Connection lost, guidance paused" / "Guidance restored") — the
+  system never converts its own outage into a confident wrong answer for a
+  user who cannot visually double-check. Also this pass: speech priority
+  (user-requested read-outs protected from routine interruptions, safety
+  escalations still cut through), portrait lock + wakelock/lifecycle
+  hardening, TalkBack liveRegion + custom actions, voice stop/repeat/sonar/
+  mute + plural grammar (mirrored Python/Dart). Reduction-to-practice
+  updated to **121 Python / 112 Dart** tests.
