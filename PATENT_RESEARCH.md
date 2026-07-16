@@ -254,3 +254,23 @@ vs. useful announcements retained.
   hardening, TalkBack liveRegion + custom actions, voice stop/repeat/sonar/
   mute + plural grammar (mirrored Python/Dart). Reduction-to-practice
   updated to **121 Python / 112 Dart** tests.
+- **2026-07-16** — **remote pipeline verified live end-to-end** on the
+  S20 FE + hotspot: discovery, /health, streamed /infer, detections spoken.
+  Two changes landed:
+  (1) **Multi-target discovery broadcast** — Android hotspot mode routes the
+  255.255.255.255 limited broadcast out the CELLULAR interface, so a phone
+  that IS the access point never reaches its own clients with it. Fix:
+  enumerate the phone's interfaces and ping each one's /24 DIRECTED broadcast
+  (e.g. 10.250.253.255) alongside 255.255.255.255. This is the piece that
+  makes zero-config discovery work when the assistive device itself provides
+  the network — a deployment mode specific to this architecture.
+  (2) **Find-as-task semantics** (user field feedback): announcing the
+  target's position once IS the search result — the engine speaks it and
+  auto-returns to walk mode instead of re-announcing while the target stays
+  in view (which users read as "still searching"). Re-asking starts a new
+  search. Mirrored Python/Dart.
+  Measured: server compute ~750 ms/frame at imgsz 640 (yolov8s 516 +
+  custom 231) on the tether laptop, ~1 FPS at the phone with occasional
+  1.2 s-timeout drops; `--imgsz 480` server knob added (~470 ms/frame) as
+  the field latency lever. Reduction-to-practice now **122 Python /
+  113 Dart** tests.

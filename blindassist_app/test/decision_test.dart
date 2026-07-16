@@ -166,32 +166,41 @@ void main() {
       expect(e.update([], 15.0), isNull); // next one waits too
       expect(e.update([], 20.3), 'Still looking for bottle');
     });
-    test('reminder resets when target found', () {
+    test('reminder keeps firing until target found', () {
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       e.update([], 0.0);
       expect(e.update([], 0.1), 'Bottle not visible');
+      expect(e.update([], 5.0), isNull);
+      expect(e.update([], 10.2), 'Still looking for bottle');
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 5.0);
-      expect(e.update([bottle], 5.1), 'Bottle left, medium');
-      // gone again -> fresh "not visible" first (now enriched by object
-      // memory since the bottle was just seen), reminder only later
-      e.update([], 8.0);
-      expect(e.update([], 8.1), 'Bottle not visible, last seen on your left');
-      expect(e.update([], 12.0), isNull);
-      expect(e.update([], 18.2), 'Still looking for bottle');
+      e.update([bottle], 15.0);
+      expect(e.update([bottle], 15.1), 'Bottle left, medium');
     });
-    test('reappearing target reported again', () {
+    test('found completes search', () {
+      // user decision 2026-07-16: announcing the position once IS the find
+      // result — the engine must drop back to walk mode, not keep repeating
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
-      e.update([], 0.0);
-      expect(e.update([], 0.1), 'Bottle not visible');
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 5.0);
-      expect(e.update([bottle], 5.1), 'Bottle left, medium');
-      // gone again -> "not visible" is armed again (enriched by memory)
-      e.update([], 10.0);
-      expect(e.update([], 10.1), 'Bottle not visible, last seen on your left');
+      e.update([bottle], 0.0);
+      expect(e.update([bottle], 0.1), 'Bottle left, medium');
+      expect(e.mode, 'walk');
+      // bottle is a FIND class -> silent in walk mode, no more repeats
+      expect(e.update([bottle], 5.0), isNull);
+      expect(e.update([bottle], 10.0), isNull);
+    });
+    test('new search after completion', () {
+      final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
+      final bottle =
+          info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
+      e.update([bottle], 0.0);
+      expect(e.update([bottle], 0.1), 'Bottle left, medium');
+      // asking again starts a fresh search that reports again (the bottle's
+      // persistence streak is already met — it never left the frame)
+      e.setMode('find', 'bottle');
+      expect(e.update([bottle], 5.0), 'Bottle left, medium');
+      expect(e.mode, 'walk');
     });
     test('find mode requires target', () {
       expect(() => GuidanceEngine(mode: 'find'), throwsArgumentError);

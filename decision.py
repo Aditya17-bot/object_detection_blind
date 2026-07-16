@@ -423,7 +423,13 @@ class GuidanceEngine:
         msg = find_message(match, self.target, self.use_clock)
         if not self._clear_to_speak(msg, now):
             return None
-        return self._speak(msg, now)
+        # Search is COMPLETE once the target has been announced (user decision
+        # 2026-07-16: repeating the position while the target stays in view
+        # reads as "it's still searching"). Speak the position once, then drop
+        # back to walk mode; asking again ("find person") starts a new search.
+        spoken = self._speak(msg, now)
+        self.set_mode("walk")
+        return spoken
 
     def describe(self, infos, now):
         """On-demand scene summary; stamps the clock so the next walk/find

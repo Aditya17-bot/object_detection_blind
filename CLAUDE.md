@@ -439,34 +439,38 @@ F2/F4 commit messages):
   startup speaks immediately, Vosk loads in parallel; webapp voice-dispatch
   crash fixed ("clock mode" used to silently kill the voice thread);
   haptic zone-swallow + sonar-during-OCR fixes.
-- **F5 OPEN — session paused 2026-07-15 mid-debug.** Fresh release APK IS
-  installed on the S20 FE (earlier `flutter install` accidentally pushed a
-  stale 07-12 build first — the current one is `ab4771c`-era, all F1-F4 in).
-  App correctly loops "waiting for laptop server". Diagnosis so far:
-  (1) release build initially failed with AccessDeniedException on stale
-  build intermediates (OneDrive placeholder locks) — fix was `rm -rf
-  blindassist_app/build` + clean build; (2) firewall WAS blocking — inbound
-  rules for TCP 5001 + UDP 5002 now added (elevated netsh, named
-  "BlindAssist ..."); (3) STILL no discovery pings/HTTP at the server.
-  Facts: laptop on phone hotspot = 10.250.253.247; phone swlan0 =
-  10.250.253.244/24 brd 10.250.253.255; phone->laptop ping 100% loss is
-  NOT conclusive (Windows drops inbound ICMP echo by default).
-  PRIME SUSPECT: Android hotspot mode default-routes 255.255.255.255
-  broadcasts to the CELLULAR interface, not swlan0. NEXT FIX: discovery.dart
-  should enumerate NetworkInterface.list() and send the ping to each
-  interface's DIRECTED broadcast (e.g. 10.250.253.255) as well as
-  255.255.255.255 — then rebuild + reinstall. Also verify TCP works at all:
-  from the phone, `adb shell` has no curl, so just watch the server log for
-  /health once discovery lands (or temporarily set config.dart kServerHost
-  to the laptop's current IP as a discovery-independent check).
-  Then: measure FPS (app pill) + per-frame ms (server console). JPEG frame
-  compression is the prepared fallback ONLY if measured too slow.
+- **F5 DONE 2026-07-16 — remote pipeline verified live end-to-end.**
+  The 07-15 prime suspect was CORRECT: Android hotspot mode routes
+  255.255.255.255 out the cellular interface. Fix in discovery.dart:
+  enumerate NetworkInterface.list() and ping each interface's /24 DIRECTED
+  broadcast (e.g. 10.250.253.255) as well as 255.255.255.255 (dart:io has no
+  netmask API — /24 assumed, fine for Android hotspots). Verified on the
+  phone: "server via discovery", /health OK, /infer streaming 200s,
+  detections spoken; user walked with it — "working perfectly".
+  Folder moved to C:\adi\object_detection_blind this session (venv survived;
+  Flutter needed only pub get + clean rebuild).
+  MEASURED PERFORMANCE: server compute ~750 ms/frame at imgsz 640
+  (yolov8s 516 ms + custom 231 ms — this laptop is ~4x slower than the
+  historical 140 ms note; that number predates running BOTH models and the
+  Acer power scheme). Phone sees ~1 FPS with occasional 1.2 s-timeout
+  drops. `--imgsz 480` flag added to infer_server.py (~470 ms/frame,
+  ~1.6x) = first latency lever; JPEG frame compression remains the prepared
+  fallback if that's still too slow in the field. NOTE: run the server with
+  `python -u` (or add flush) — stdout buffering hides the per-frame timing
+  prints when output is redirected.
+- **Find-once UX (2026-07-16, user field feedback)**: in Find mode the
+  engine now announces the found target's position ONCE and auto-returns to
+  walk mode ("it still keeps looking" after success read as a bug). set_mode
+  preserves _last_time so min_gap carries across the auto-switch; the target
+  keeps its persistence streak, so re-asking immediately re-announces.
+  Mirrored decision.py + decision.dart; both UIs (webapp pill, app buttons)
+  read engine.mode live so they follow the auto-switch for free.
 - **F6**: `FIELD_TEST.md` = the user's validation walk protocol (includes
   the server-kill failure drill and pocket drill). PATENT_RESEARCH.md
   changelog has the 2026-07-15 entries (fail-safe absence/negative
   distinction extends the "selective abstention" thesis).
 
-Test counts: **121 Python / 112 Dart**, all passing.
+Test counts: **122 Python / 113 Dart**, all passing.
 
 ## Environment notes
 

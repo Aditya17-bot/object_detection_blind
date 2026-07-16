@@ -457,7 +457,13 @@ class GuidanceEngine {
     _saidNotVisible = false;
     final msg = findMessage(match, target!, useClock);
     if (!_clearToSpeak(msg, now)) return null;
-    return _speak(msg, now);
+    // Search is COMPLETE once the target has been announced (user decision
+    // 2026-07-16: repeating the position while the target stays in view
+    // reads as "it's still searching"). Speak the position once, then drop
+    // back to walk mode; asking again ("find person") starts a new search.
+    final spoken = _speak(msg, now);
+    setMode('walk');
+    return spoken;
   }
 
   /// On-demand scene summary; stamps the clock so the next walk/find message

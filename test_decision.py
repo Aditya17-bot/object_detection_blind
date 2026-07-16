@@ -160,32 +160,38 @@ class TestEngineFind(unittest.TestCase):
         self.assertIsNone(e.update([], 15.0))              # next one waits too
         self.assertEqual(e.update([], 20.3), "Still looking for bottle")
 
-    def test_reminder_resets_when_target_found(self):
+    def test_reminder_keeps_firing_until_target_found(self):
         e = GuidanceEngine("find", "bottle", use_clock=False)
         e.update([], 0.0)
         self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        self.assertIsNone(e.update([], 5.0))
+        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 5.0)
-        self.assertEqual(e.update([bottle], 5.1), "Bottle left, medium")
-        # gone again -> fresh "not visible" first (now enriched by object
-        # memory since the bottle was just seen), reminder only later
-        e.update([], 8.0)
-        self.assertEqual(e.update([], 8.1),
-                         "Bottle not visible, last seen on your left")
-        self.assertIsNone(e.update([], 12.0))
-        self.assertEqual(e.update([], 18.2), "Still looking for bottle")
+        e.update([bottle], 15.0)
+        self.assertEqual(e.update([bottle], 15.1), "Bottle left, medium")
 
-    def test_reappearing_target_reported_again(self):
+    def test_found_completes_search(self):
+        # user decision 2026-07-16: announcing the position once IS the find
+        # result — the engine must drop back to walk mode, not keep repeating
         e = GuidanceEngine("find", "bottle", use_clock=False)
-        e.update([], 0.0)
-        self.assertEqual(e.update([], 0.1), "Bottle not visible")
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 5.0)
-        self.assertEqual(e.update([bottle], 5.1), "Bottle left, medium")
-        # gone again -> "not visible" is armed again (enriched by memory)
-        e.update([], 10.0)
-        self.assertEqual(e.update([], 10.1),
-                         "Bottle not visible, last seen on your left")
+        e.update([bottle], 0.0)
+        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
+        self.assertEqual(e.mode, "walk")
+        # bottle is a FIND class -> silent in walk mode, no more repeats
+        self.assertIsNone(e.update([bottle], 5.0))
+        self.assertIsNone(e.update([bottle], 10.0))
+
+    def test_new_search_after_completion(self):
+        e = GuidanceEngine("find", "bottle", use_clock=False)
+        bottle = info("bottle", "left", proximity="medium", area=0.005)
+        e.update([bottle], 0.0)
+        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
+        # asking again starts a fresh search that reports again (the bottle's
+        # persistence streak is already met — it never left the frame)
+        e.set_mode("find", "bottle")
+        self.assertEqual(e.update([bottle], 5.0), "Bottle left, medium")
+        self.assertEqual(e.mode, "walk")
 
     def test_find_mode_requires_target(self):
         with self.assertRaises(ValueError):

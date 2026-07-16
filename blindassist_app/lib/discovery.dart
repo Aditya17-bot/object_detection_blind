@@ -19,6 +19,33 @@ class DiscoveredServer {
   const DiscoveredServer(this.host, this.port);
 }
 
+/// Broadcast targets: the limited broadcast plus each interface's directed
+/// broadcast. Android hotspot mode routes 255.255.255.255 out the CELLULAR
+/// interface, so a phone acting as the hotspot never reaches the laptop with
+/// the limited broadcast alone — the directed one (e.g. 10.250.253.255) goes
+/// out swlan0. dart:io exposes no netmask, so /24 is assumed (Android hotspot
+/// subnets are /24).
+Future<List<InternetAddress>> _broadcastTargets() async {
+  final targets = <InternetAddress>[InternetAddress('255.255.255.255')];
+  try {
+    final ifaces = await NetworkInterface.list(
+        includeLoopback: false, type: InternetAddressType.IPv4);
+    for (final iface in ifaces) {
+      for (final addr in iface.addresses) {
+        final parts = addr.address.split('.');
+        if (parts.length != 4) continue;
+        final directed = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+        if (!targets.any((t) => t.address == directed)) {
+          targets.add(InternetAddress(directed));
+        }
+      }
+    }
+  } catch (_) {
+    // interface enumeration is best-effort; limited broadcast still goes out
+  }
+  return targets;
+}
+
 /// Broadcast a discovery ping and wait for the first valid server reply.
 /// Returns null when nothing answered within [timeout] (caller falls back to
 /// the baked-in config host). [address] overrides the broadcast target so
@@ -32,7 +59,8 @@ Future<DiscoveredServer?> discoverServer({
   try {
     socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
     socket.broadcastEnabled = true;
-    final target = address ?? InternetAddress('255.255.255.255');
+    final targets =
+        address != null ? [address] : await _broadcastTargets();
     final completer = Completer<DiscoveredServer?>();
 
     final sub = socket.listen((event) {
@@ -48,10 +76,19 @@ Future<DiscoveredServer?> discoverServer({
 
     // ping a few times inside the window — a single UDP packet on a hotspot
     // that is still settling can simply vanish
-    final pinger = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      socket?.send(utf8.encode(_discoverMsg), target, discoveryPort);
-    });
-    socket.send(utf8.encode(_discoverMsg), target, discoveryPort);
+    void ping() {
+      for (final target in targets) {
+        try {
+          socket?.send(utf8.encode(_discoverMsg), target, discoveryPort);
+        } catch (_) {
+          // some targets can be unroutable (e.g. cellular /24) — keep going
+        }
+      }
+    }
+
+    final pinger =
+        Timer.periodic(const Duration(milliseconds: 500), (_) => ping());
+    ping();
 
     final result = await completer.future
         .timeout(timeout, onTimeout: () => null);

@@ -107,11 +107,14 @@ _AUTO = object()  # sentinel: custom_model=None must mean "explicitly none"
 
 
 def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
-              coco_model=None, custom_model=_AUTO):
+              coco_model=None, custom_model=_AUTO, imgsz=640):
     """coco_model/custom_model override the paths — lets tests inject fakes
     without loading real weights (same pattern as test_webapp.py).
     custom_model=None disables the custom model; leaving it unset loads
-    custom_path as usual."""
+    custom_path as usual. imgsz is the inference resolution: 640 is the
+    models' native size; 480 measured ~1.6x faster on this laptop
+    (747 -> 470 ms/frame both models, 2026-07-16) at a small accuracy cost —
+    the latency knob when frames time out."""
     app = Flask(__name__)
     coco = coco_model if coco_model is not None else YOLO(coco_path)
     custom = None if custom_model is _AUTO else custom_model
@@ -127,9 +130,9 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
     # torch/ultralytics graph init (1-2 s), which would blow the app's 1.2 s
     # frame timeout and make the first user experience a spoken failure.
     dummy = np.zeros((640, 640, 3), np.uint8)
-    coco.predict(dummy, conf=COCO_CONF, verbose=False)
+    coco.predict(dummy, conf=COCO_CONF, imgsz=imgsz, verbose=False)
     if custom is not None:
-        custom.predict(dummy, conf=CUSTOM_CONF, verbose=False)
+        custom.predict(dummy, conf=CUSTOM_CONF, imgsz=imgsz, verbose=False)
 
     # Serialize inference: ultralytics predict is not thread-safe, and when
     # the phone times out and abandons a request the server keeps computing
@@ -167,11 +170,13 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
 
         with infer_lock:
             dets = _collect(
-                coco.predict(frame, conf=COCO_CONF, verbose=False)[0],
+                coco.predict(frame, conf=COCO_CONF, imgsz=imgsz,
+                             verbose=False)[0],
                 coco.names, COCO_CONF)
             if custom is not None:
                 dets += _collect(
-                    custom.predict(frame, conf=CUSTOM_CONF, verbose=False)[0],
+                    custom.predict(frame, conf=CUSTOM_CONF, imgsz=imgsz,
+                                   verbose=False)[0],
                     custom.names, CUSTOM_CONF)
         ms = (time.monotonic() - t0) * 1000
         print(f"/infer {w}x{h} rot{rotation} -> {len(dets)} dets in {ms:.0f}ms")
@@ -191,8 +196,11 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=5001)
     ap.add_argument("--model", default="yolov8s.pt")
     ap.add_argument("--extra-model", default="door_dustbin_stairs.pt")
+    ap.add_argument("--imgsz", type=int, default=640,
+                    help="inference resolution; 480 is ~1.6x faster at a "
+                         "small accuracy cost")
     args = ap.parse_args()
-    app = build_app(args.model, args.extra_model)
+    app = build_app(args.model, args.extra_model, imgsz=args.imgsz)
     start_discovery_responder(args.port)
     print(f"BlindAssist inference server on http://{args.host}:{args.port} "
           f"(UDP discovery on {DISCOVERY_PORT})")

@@ -31,7 +31,7 @@ class FakeYOLO:
         self._boxes = list(boxes)
         self.seen_shapes = []
 
-    def predict(self, frame, conf=0.25, verbose=False):
+    def predict(self, frame, conf=0.25, imgsz=640, verbose=False):
         self.seen_shapes.append(np.asarray(frame).shape)
         return [_FakeResult(self._boxes)]
 
