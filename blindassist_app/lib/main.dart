@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'agent_client.dart';
 import 'config.dart';
 import 'detector.dart';
 import 'discovery.dart';
@@ -67,6 +68,10 @@ class _AssistantScreenState extends State<AssistantScreen>
   final Speaker _speaker = Speaker();
   final Sonar _sonar = Sonar();
   final OcrReader _ocr = OcrReader();
+  // Tier 1: only utterances the local grammar could not parse go here, and
+  // only when the laptop is reachable. Null in on-device mode or before the
+  // server is found — the app is then exactly as capable as it was before.
+  AgentClient? _agent;
   late final VoiceListener _voice;
   final Stopwatch _clock = Stopwatch()..start();
 
@@ -92,7 +97,7 @@ class _AssistantScreenState extends State<AssistantScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _voice = VoiceListener(onCommand: _onVoiceCommand);
+    _voice = VoiceListener(onCommand: _onVoiceCommand, onUnmatched: _askAgent);
     _init();
   }
 
@@ -178,12 +183,15 @@ class _AssistantScreenState extends State<AssistantScreen>
     var attempt = 0;
     while (true) {
       final found = await discoverServer();
-      final remote = found != null
-          ? RemoteDetector(found.host, found.port)
-          : RemoteDetector(kServerHost, kServerPort); // baked-in fallback
+      final host = found?.host ?? kServerHost; // baked-in fallback
+      final port = found?.port ?? kServerPort;
+      final remote = RemoteDetector(host, port);
       try {
         await remote.load();
         _detector = remote;
+        // same host as inference: /agent is registered by infer_server.py, so
+        // reaching one means reaching the other
+        _agent = AgentClient(host, port);
         // ignore: avoid_print
         print('BlindAssist: server via '
             '${found != null ? 'discovery' : 'config fallback'}');
@@ -373,10 +381,49 @@ class _AssistantScreenState extends State<AssistantScreen>
     // person", repeating forever. Dropping identical commands within a few
     // seconds breaks the loop while real repeated requests still work.
     final key = '${command.action}:${command.target}';
+    if (_repeatedTooSoon(key)) return;
+    _dispatch(command);
+  }
+
+  /// True when this exact request arrived again within a few seconds — see the
+  /// feedback-loop note above. Shared by the local and remote tiers.
+  bool _repeatedTooSoon(String key) {
     final now = _now();
-    if (key == _lastVoiceKey && now - _lastVoiceTime < 4.0) return;
+    if (key == _lastVoiceKey && now - _lastVoiceTime < 4.0) return true;
     _lastVoiceKey = key;
     _lastVoiceTime = now;
+    return false;
+  }
+
+  /// Heard, but the local grammar made nothing of it. Ask the laptop's router,
+  /// which has the same capability registry plus (optionally) a local LLM.
+  ///
+  /// Silence is the correct outcome when there is no server: the phone has
+  /// already tried everything it can do offline, and a spoken "I can't do that"
+  /// on every stray noise the recognizer half-hears would be worse than
+  /// nothing. When the server DOES answer an abstention, that is a real answer
+  /// to a real question and it is spoken.
+  Future<void> _askAgent(String heard) async {
+    final agent = _agent;
+    if (agent == null) return;
+    if (_repeatedTooSoon('ask:$heard')) return;
+    final result = await agent.route(heard);
+    if (!mounted || result == null) return; // null = no data, never a guess
+    if (result.actions.isEmpty) {
+      final message = result.message;
+      if (message != null) {
+        _speaker.say(message, onDemand: true);
+        setState(() => _banner = message);
+      }
+      return;
+    }
+    for (final action in result.actions) {
+      _dispatch(action.toVoiceCommand());
+    }
+  }
+
+  /// The one place a capability is invoked, whichever tier chose it.
+  void _dispatch(VoiceCommand command) {
     switch (command.action) {
       case 'describe':
         _describe();
@@ -540,6 +587,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     WakelockPlus.disable();
     _camera?.dispose();
     _detector?.close();
+    _agent?.close();
     _speaker.dispose();
     _sonar.dispose();
     _ocr.dispose();

@@ -167,7 +167,7 @@ Orientation & Mobility instruction already teaches clock positions. We note in
 All guidance logic lives in a layer with no camera, no model, and no real clock:
 it takes plain bounding-box numbers and a monotonic timestamp. This layer is
 implemented twice — Python reference and Dart/Flutter — with mirrored unit-test
-suites (122 Python / 113 Dart tests passing as of 2026-07-16). Every spoken
+suites (199 Python / 131 Dart tests passing as of 2026-07-30). Every spoken
 string in this paper is emitted by a function in that layer and pinned by a
 test that asserts the exact text.
 
@@ -410,6 +410,26 @@ simply replaces it. Unexplained silence is the specific failure this system
 already designs against elsewhere — the same reasoning produced the "Still
 looking for X" reminder in Find mode, after a field session where silence read
 as "the app died".
+
+### 5.7 Tiering across the network boundary
+
+On the phone the two tiers fall on opposite sides of a Wi-Fi link, which makes
+the degradation rule concrete rather than rhetorical. Tier 0 runs on the handset
+against the same parser and the same registry-derived vocabulary; only an
+utterance it cannot resolve is posted to the tether's `/agent` endpoint. Three
+consequences:
+
+- Every trained phrasing keeps working with the laptop switched off, so adding
+  the agent introduces no new dependency for the capabilities users already
+  rely on.
+- The client applies the §4.3 rule verbatim: an unreachable server, a timeout, a
+  non-200, or an unparseable body yields *no data* — distinct from an
+  abstention, and never a synthesised action.
+- The server's reply is re-validated on the client against the local registry
+  before anything executes, so the closed-registry guarantee of §5.3 does not
+  depend on trusting the transport. A reply containing one unusable action is
+  discarded whole rather than partially executed: performing the half of a
+  request that happened to parse is itself an unverified action.
 
 ---
 

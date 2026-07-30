@@ -172,6 +172,15 @@ prior art. Ranked by perceived strength of the novelty case.
      list, so free speech is not mis-heard, it is never heard. A trigger word
      opens a short window that goes to local Whisper and then to the router,
      which keeps tier 0 both accurate and instant.
+  6. **The tier boundary may be a network link.** On the handset, tier 0 runs
+     locally and only an unresolved utterance is posted to the tethered
+     server's router. The reply is **re-validated on the client against the
+     same closed registry** before execution, so the containment guarantee does
+     not rest on trusting the transport; an unreachable server, timeout or
+     unparseable body yields NO DATA (distinct from an abstention, and never a
+     synthesised action); and a reply containing one unusable action is
+     discarded whole rather than partially executed, since performing the half
+     that happened to parse is itself an unverified action.
 - **Why non-obvious:** structured/constrained LLM output is well known. The
   step here is *why* it is applied: for a consumer who cannot visually reject a
   wrong answer, hallucination containment is not a quality improvement, it is a
@@ -185,7 +194,11 @@ prior art. Ranked by perceived strength of the novelty case.
 - **Reduction to practice:** `agent.py` (registry, validator, router,
   executor), `agent_server.py` (POST /agent, shared by both servers),
   `transcribe.py`, `eval_agent.py`, 200-utterance frozen evaluation set with a
-  protocol written BEFORE the router existed (`paper/`). Measured keyword
+  protocol written BEFORE the router existed (`paper/`); on the handset,
+  `lib/logic/agent_actions.dart` (mirrored registry + validator) and
+  `lib/agent_client.dart` (local-first tiering, null-on-failure), with the
+  Dart registry asserted field-by-field against the committed
+  `capabilities.json`. Measured keyword
   baseline: canonical 100 %, paraphrase 0 %, out-of-scope abstention 95 %,
   boundary leaks 0/200.
 - **Prior art to distinguish:** LLM function calling / tool use; constrained
@@ -364,9 +377,22 @@ vs. useful announcements retained.
   200-utterance labelled routing set. Measured keyword baseline (set sha256
   e4eeca83): canonical 100 %, paraphrase 0 %, multi-intent 0 %, out-of-scope
   abstention 95 %, tier-0 routing p50 5 µs, authority-boundary leaks 0/200.
-  Reduction-to-practice **199 Python** tests (Dart port of the agent layer
-  not yet started, so the Dart count is unchanged at 113).
+  Reduction-to-practice **199 Python** tests.
   ⚠ The paper is intended for arXiv — see §8a, that is a disclosure.
+- **2026-07-30 (same day, handset)** — §4.7 extended with mechanism 6, the
+  **network tier boundary**: the Dart agent client keeps tier 0 on the phone
+  and re-validates the server's reply against the mirrored closed registry
+  before executing it, so containment survives a compromised or merely buggy
+  transport. Adds the whole-reply rejection rule (one unusable action voids the
+  reply) and reuses §4.3's no-data-vs-abstention distinction on the dialogue
+  path. Reduction to practice: `lib/logic/agent_actions.dart`,
+  `lib/agent_client.dart`, **131 Dart tests** (was 113), of which the registry
+  contract test asserts the Dart table against the Python-generated
+  `capabilities.json` — this is what makes the C4 "enforced consistency across
+  sites" claim true in both languages rather than only in Python.
+  NOT yet implemented: handset-side open dictation (recording a WAV for the
+  `/agent` audio path), so on the phone tier 1 currently only sees utterances
+  the constrained grammar could hear but the parser could not resolve.
 - **2026-07-30 (measurement correction — read before filing or posting)** —
   every server-side latency figure previously recorded in this disclosure was
   measured with a **CPU-only PyTorch build on a machine whose CUDA GPU was

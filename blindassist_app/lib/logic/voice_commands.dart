@@ -62,6 +62,18 @@ String? _matchObject(String rest) {
   return null;
 }
 
+/// Spoken words -> COCO class name, or null. Handles synonyms and plurals
+/// ('sofas' -> 'couch'). Public so the agent layer can validate a tool
+/// argument against exactly the vocabulary this parser accepts — the remote
+/// tier must never be able to name an object the local tier would refuse.
+/// Mirror of voice.resolve_class.
+String? resolveClass(String? text) {
+  if (text == null) return null;
+  final t = text.trim().toLowerCase();
+  if (t.isEmpty) return null;
+  return _findable[t] ?? _matchObject(t);
+}
+
 /// Recognized utterance -> command, or null if not understood. Actions:
 /// walk / find / describe / clock / zones / recall. Tolerant of filler words:
 /// "please find the bottle" works.

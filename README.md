@@ -4,26 +4,27 @@ Camera-based assistive prototype: detects indoor objects, works out direction
 + closeness, and decides short spoken guidance. Full design in `PIPELINE.md`
 and `CLAUDE.md`; evaluation results (strengths & limits) in `EVALUATION.md`.
 
-## Work here (LOCAL copy)
-
-Always work in this folder, **not** the Google Drive copy:
+## Work here
 
 ```powershell
-cd C:\Users\rober\OneDrive\Desktop\object_detection_blind
-.\venv\Scripts\activate
+cd C:\adi\object_detection_blind
+.\venv\Scripts\activate       # CPU torch — the known-good fallback env
+.\venv-gpu\Scripts\activate   # CUDA torch 2.6.0+cu124 — 12x faster inference
 ```
 
-`G:\My Drive\object_detection_blind` is backup-only (its `venv` is stale —
-never activate it; running code off Drive is slow and flaky).
+Both envs exist on purpose: `venv/` vanished once to OneDrive's free-up-space,
+so it stays as a working fallback. Only `venv-gpu` uses the RTX 3050.
 
 ## Back up at the end of every session
 
 ```powershell
-.\sync_to_drive.ps1
+git push origin main
 ```
 
-Mirrors the project to `G:\My Drive\object_detection_blind` (skips venv,
-__pycache__, .git).
+Google Drive sync is retired (Drive is full) — GitHub is the backup. Not
+covered: `test_output/` (gitignored, ~27 MB of eval clips and keyframes; the
+report + patent evidence lives only on this laptop — worth an occasional USB
+copy).
 
 ## Run things
 
@@ -84,19 +85,26 @@ To turn the second tier on you need two downloads. **Run these yourself** —
 nothing is fetched automatically:
 
 ```powershell
-# 1. the local router model (offline, ~1 GB). Install Ollama first.
-ollama pull qwen2.5:1.5b-instruct
-python bench_llm.py --model qwen2.5:1.5b-instruct   # IS IT FAST ENOUGH HERE?
+# 1. the local router model (offline, ~2 GB). Install Ollama first.
+#    3b, not 1.5b: ~3 GB VRAM is free alongside both YOLO models on the 3050.
+ollama pull qwen2.5:3b-instruct
+python bench_llm.py --model qwen2.5:3b-instruct   # IS IT FAST ENOUGH HERE?
 
 # 2. free-speech transcription for the "assistant" trigger word
 pip install faster-whisper       # first run downloads ~75 MB of weights
 
 # then:
-python webapp.py --agent-model qwen2.5:1.5b-instruct --whisper-model
+python webapp.py --agent-model qwen2.5:3b-instruct --whisper-model
 ```
 
-Say **“assistant”**, wait for “Yes?”, then ask in your own words. The phone
-talks to the same router over `POST /agent` on `infer_server.py`.
+Say **“assistant”**, wait for “Yes?”, then ask in your own words (laptop mic
+only — the phone has no dictation window yet).
+
+The phone talks to the same router over `POST /agent` on `infer_server.py`, but
+**local first**: anything its own grammar can parse is handled on-device with
+the laptop off, and only an unresolved utterance goes over the network. If the
+server is unreachable the phone stays on its offline capabilities — it never
+invents an action.
 
 Run `bench_llm.py` before trusting tier 1 in the field — it prints a verdict.
 
@@ -112,5 +120,8 @@ default, and nothing in the logs tells you the GPU is idle.
 ```powershell
 python -m unittest       # 199 tests: position, decision, speech, voice,
                          # webapp, infer_server, agent, agent_server
-python agent.py --write-manifest   # after changing agent.TOOLS
+python agent.py --write-manifest   # after changing agent.TOOLS — then run the
+                                   # Flutter suite, which asserts the Dart
+                                   # registry against capabilities.json
+cd blindassist_app; flutter test   # 131 tests: the mirrored Dart logic
 ```

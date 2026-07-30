@@ -11,7 +11,12 @@ import 'logic/voice_commands.dart';
 class VoiceListener {
   final void Function(VoiceCommand command, String heard) onCommand;
 
-  VoiceListener({required this.onCommand});
+  /// Heard, but the local parser made nothing of it. Optional second tier:
+  /// main.dart forwards these to the laptop's agent router. Local parsing is
+  /// never skipped to get here, so trained phrases keep routing on-device.
+  final void Function(String heard)? onUnmatched;
+
+  VoiceListener({required this.onCommand, this.onUnmatched});
 
   SpeechService? _speech;
   StreamSubscription<String>? _sub;
@@ -47,9 +52,11 @@ class VoiceListener {
         .trim();
     if (text.isEmpty) return;
     final command = parseCommand(text);
+    lastHeard = text;
     if (command != null) {
-      lastHeard = text;
       onCommand(command, text);
+    } else {
+      onUnmatched?.call(text);
     }
   }
 

@@ -529,12 +529,43 @@ router. Tier 0 keeps its accuracy and its ~5 µs latency for everything else.
    `llm_freetext`) to fill T3-T6 — the paper's keyword column is already real.
 4. Record the ASR condition: 2-3 people (not the author) reading ~60 records
    aloud, transcripts appended to each record's `asr` array.
-5. **Dart port of the agent layer is NOT started** — `agent_client.dart` +
-   `main.dart` handling an action *list*, with the F2 fail-safe rule (server
-   unreachable → fall back to local `parseCommand`, never to a wrong action).
-   Deferred because that session had no Flutter toolchain to verify with.
+5. Handset **open dictation** — recording a WAV on the phone and posting it to
+   the `/agent` audio path. Until that exists, phone tier 1 only sees
+   utterances the Vosk grammar could HEAR but `parseCommand` could not
+   resolve; free speech on the phone still isn't heard at all. Needs a
+   recorder package + mic-stream sharing with Vosk.
 
-Test counts: **199 Python** / 113 Dart (Dart unchanged — the port is pending).
+## Dart agent port (2026-07-30 — DONE, 131 Dart tests)
+
+The port the previous session deferred. Structure mirrors the Python layer, but
+the tier boundary is drawn at the **Wi-Fi link**, which is the interesting part:
+
+- `lib/logic/agent_actions.dart` — mirror of `agent.TOOLS` + `ASK_TEMPLATES` +
+  `validate_action`, plus `parseRouteResponse`. Hand-mirrored ON PURPOSE and
+  pinned: `test/agent_test.dart` asserts the Dart table field-by-field against
+  the committed `capabilities.json`, so a Python registry change turns the Dart
+  suite red. Also asserts the class enum equals `targetClasses` on both sides.
+- `lib/agent_client.dart` — `POST /agent`, 5 s timeout. Returns **null on NO
+  DATA** (unreachable/timeout/non-200/garbage), never a synthesised action —
+  same rule as `RemoteDetector.detect`. Never throws: an exception on the voice
+  callback kills recognition for the whole session.
+- **LOCAL FIRST.** `main.dart` only calls the agent after `parseCommand`
+  already returned null (new `VoiceListener.onUnmatched` hook). Every trained
+  phrase still routes on-device in ~0 ms with the laptop off — the agent adds
+  no dependency to anything that works today. `_onVoiceCommand`'s switch is now
+  `_dispatch(VoiceCommand)`, shared by both tiers; the anti-feedback dedupe
+  became `_repeatedTooSoon(key)` and covers the remote path too.
+- **Whole-reply rejection**: one unusable action voids the entire response
+  (executing the half that parsed is itself an unverified action).
+- With no server (`kUseRemote=false`, or before discovery succeeds) `_agent` is
+  null and unmatched speech is silently ignored — exactly today's behaviour.
+  Deliberate: speaking "I can't do that" at every noise the recognizer
+  half-hears would be worse than nothing. An abstention the server actually
+  returned IS spoken.
+
+Test counts: **199 Python / 131 Dart**, all passing. `flutter analyze` clean
+apart from the 3 pre-existing `avoid_print` infos in detector.dart.
+NOT verified on the phone yet (no `flutter install` run this session).
 
 ## GPU enablement (2026-07-30) — every prior latency number was CPU-only
 
