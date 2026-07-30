@@ -188,11 +188,28 @@ inference for both the GPU and NNAPI delegates — the YOLOv8 head partitions
 badly and every frame pays host↔accelerator copies. The system therefore
 defaults to **tethered inference**: the phone ships raw YUV420 planes to a
 laptop over Wi-Fi, which runs both models and returns normalised boxes, while
-sonar, haptics, voice, and OCR stay native. Server compute measures ~750 ms per
-frame at imgsz 640 (YOLOv8s 516 ms + custom model 231 ms) and ~470 ms at
-imgsz 480; the phone observes ~1 FPS end to end. UDP auto-discovery removes
+sonar, haptics, voice, and OCR stay native. UDP auto-discovery removes
 per-session IP configuration, including the case where the phone itself is the
 access point (§8).
+
+Server compute on the tether laptop (RTX 3050 Laptop GPU, 4 GB) measures
+**21.2 ms per frame** for both models at imgsz 640 (YOLOv8s 11.3 ms + custom
+model 9.9 ms), median over 12 frames with warmup excluded and device
+synchronisation before each stop. The same code path with `device='cpu'` under
+an identical PyTorch build measures 256.5 ms — a 12× difference.
+
+We report this history because it is a methodological caution rather than a
+result. Earlier measurements of this system recorded ~750 ms per frame and
+motivated an `imgsz 480` reduced-resolution mode; those were taken with a
+CPU-only PyTorch build installed on a machine whose CUDA GPU sat unused, a
+misconfiguration invisible from the code and absent from any log. Two
+conclusions follow. First, the reduced-resolution mode is retired: at imgsz 480
+the GPU saves 2 ms (19.4 ms vs 21.2 ms), so the accuracy cost buys nothing.
+Half precision is likewise not adopted (20.8 ms vs 21.2 ms) — at this model
+size inference is kernel-launch-bound rather than compute-bound. Second, with
+model time at ~21 ms the dominant server cost is no longer detection but the
+**request path**: YUV420→BGR reconstruction, rotation, and JSON serialisation.
+Latency work on this architecture should target that path, not the models.
 
 This architecture is not a novelty claim — edge offload is well known — but it
 is what preserves the sub-second guidance budget the rest of the design assumes,

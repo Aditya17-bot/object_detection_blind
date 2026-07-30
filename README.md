@@ -98,9 +98,14 @@ python webapp.py --agent-model qwen2.5:1.5b-instruct --whisper-model
 Say **“assistant”**, wait for “Yes?”, then ask in your own words. The phone
 talks to the same router over `POST /agent` on `infer_server.py`.
 
-Run `bench_llm.py` before trusting tier 1 in the field: this laptop needs
-~750 ms/frame for two small YOLO models, so a local LLM on CPU may or may not
-fit the latency budget. The script prints a verdict.
+Run `bench_llm.py` before trusting tier 1 in the field — it prints a verdict.
+
+Note on hardware: detection runs at **21 ms/frame for both models** on the
+tether laptop's RTX 3050 once CUDA is actually in use (`venv-gpu/`, torch
+2.6.0+cu124). The older ~750 ms figure came from a CPU-only torch build on the
+same machine. If you are setting this up fresh, check
+`torch.cuda.is_available()` first — `pip install torch` gives you a CPU wheel by
+default, and nothing in the logs tells you the GPU is idle.
 
 ## Tests
 

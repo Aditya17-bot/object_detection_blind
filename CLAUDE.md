@@ -449,9 +449,10 @@ F2/F4 commit messages):
   detections spoken; user walked with it — "working perfectly".
   Folder moved to C:\adi\object_detection_blind this session (venv survived;
   Flutter needed only pub get + clean rebuild).
-  MEASURED PERFORMANCE: server compute ~750 ms/frame at imgsz 640
-  (yolov8s 516 ms + custom 231 ms — this laptop is ~4x slower than the
-  historical 140 ms note; that number predates running BOTH models and the
+  MEASURED PERFORMANCE — **SUPERSEDED 2026-07-30, these were CPU-only
+  numbers, see "GPU enablement" below**: server compute ~750 ms/frame at
+  imgsz 640 (yolov8s 516 ms + custom 231 ms — this laptop is ~4x slower than
+  the historical 140 ms note; that number predates running BOTH models and the
   Acer power scheme). Phone sees ~1 FPS with occasional 1.2 s-timeout
   drops. `--imgsz 480` flag added to infer_server.py (~470 ms/frame,
   ~1.6x) = first latency lever; JPEG frame compression remains the prepared
@@ -517,9 +518,12 @@ router. Tier 0 keeps its accuracy and its ~5 µs latency for everything else.
   "read my email" → OCR, "how do i get to the bus stop" → stop.
 
 **STILL OPEN (needs the user's laptop — nothing was downloaded this session):**
-1. `ollama pull qwen2.5:1.5b-instruct`, then **`python bench_llm.py`** — the
-   feasibility spike. This laptop takes ~750 ms/frame for two small YOLO
-   models, so tier-1 latency is a real risk; the script prints a verdict.
+1. `ollama pull qwen2.5:3b-instruct`, then **`python bench_llm.py`** — the
+   feasibility spike. **Model choice revised 2026-07-30** from 1.5b to 3b: that
+   session assumed a CPU-bound laptop, but the RTX 3050 has ~3 GB VRAM free
+   after both YOLO models (see "GPU enablement" below), so the larger model
+   fits and buys real paraphrase accuracy — which is the whole point of tier 1.
+   Neither Ollama nor the model is downloaded yet (user deferred 2026-07-30).
 2. `pip install faster-whisper` for the "assistant" trigger.
 3. `python eval_agent.py --config two_tier --model <name>` (and `llm_only`,
    `llm_freetext`) to fill T3-T6 — the paper's keyword column is already real.
@@ -531,6 +535,54 @@ router. Tier 0 keeps its accuracy and its ~5 µs latency for everything else.
    Deferred because that session had no Flutter toolchain to verify with.
 
 Test counts: **199 Python** / 113 Dart (Dart unchanged — the port is pending).
+
+## GPU enablement (2026-07-30) — every prior latency number was CPU-only
+
+**The laptop has an RTX 3050 Laptop GPU (4 GB, driver 552.27, CUDA 12.4) and it
+had never been used.** `venv/` contains `torch 2.8.0+cpu`, so
+`torch.cuda.is_available()` was `False` — a plain `pip install torch` gives a
+CPU wheel and nothing in any log says the GPU is idle. Every inference figure in
+this file, `PATENT_RESEARCH.md`, and `paper/PAPER.md` was therefore measured on
+CPU, including the ~750 ms/frame that motivated `--imgsz 480` and the "this
+laptop is ~4x slower than the historical 140 ms" note.
+
+Fix: a **separate `venv-gpu/`** (torch 2.6.0+cu124 — the cp39 ceiling for
+cu124; `venv/` deliberately left untouched as a working fallback, since it
+vanished once before to OneDrive). Both benchmark arms run inside `venv-gpu` via
+`device='cpu'` vs `device=0`, so the comparison isolates CUDA rather than
+confounding it with a torch version change.
+
+Measured (12 frames from `test_output/eval_a.mp4`, median, warmup excluded,
+`cuda.synchronize()` before each stop; full table in `test_output/gpu_bench.md`):
+
+| condition | yolov8s | custom | total | FPS |
+|---|---|---|---|---|
+| CPU @640 | 155.3 ms | 101.2 ms | 256.5 ms | 3.9 |
+| **GPU fp32 @640** | **11.3 ms** | **9.9 ms** | **21.2 ms** | **47.1** |
+| GPU fp32 @480 | 9.6 ms | 9.8 ms | 19.4 ms | 51.6 |
+| GPU fp16 @640 | 11.4 ms | 9.5 ms | 20.8 ms | 48.0 |
+
+Consequences:
+
+- **`--imgsz 480` is retired as a latency lever** — it saves 2 ms on GPU and
+  costs accuracy. Same for fp16 (0.4 ms): at this model size inference is
+  kernel-launch-bound, not compute-bound.
+- **`yuv420_to_bgr` is the new bottleneck.** These are `predict()`-only times;
+  the ~750 ms came from `/infer` logs, which also include YUV→BGR
+  reconstruction, rotation, and JSON. With models at ~21 ms that request path is
+  now the overwhelming majority of server latency. Optimise it, not the models.
+- **~3 GB VRAM free** for a tier-1 router model (torch peak *allocated* was only
+  0.07 GB, but that excludes the CUDA context and cuDNN workspaces — budget
+  0.5-1 GB actual). Hence the qwen2.5 1.5b→3b revision above.
+- The remote-primary pivot stays correct regardless: the phone's Exynos 990 at
+  ~2.5 s/inference is unrelated to the laptop's torch build. Only the
+  *justification numbers* changed.
+- Unexplained: `venv/` (torch 2.8.0+cpu) measured yolov8s CPU at 383 ms, while
+  `venv-gpu/` (2.6.0+cu124, `device='cpu'`) measured 155 ms. Suspect threading
+  or MKL differences between builds; not isolated, so do not cite it.
+
+Run the benchmark: `venv-gpu/Scripts/python.exe` on the scratchpad script, or
+regenerate from `test_output/gpu_bench.md`'s header for exact conditions.
 
 ## Environment notes
 

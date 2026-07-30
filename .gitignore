@@ -1,8 +1,14 @@
 # environment
 venv/
+# CUDA env (torch 2.6.0+cu124, the cp39 ceiling). Kept SEPARATE from venv/ on
+# purpose: venv/ stays a known-good fallback. See CLAUDE.md "GPU enablement".
+venv-gpu/
 __pycache__/
 *.pyc
 .claude/
+
+# git bundles used to move branches between machines when a session can't push
+*.bundle
 
 # auto-downloaded weights (ultralytics fetches these on first run;
 # door_dustbin_stairs.pt is OUR trained model and IS committed)

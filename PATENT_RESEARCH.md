@@ -345,7 +345,10 @@ vs. useful announcements retained.
   custom 231) on the tether laptop, ~1 FPS at the phone with occasional
   1.2 s-timeout drops; `--imgsz 480` server knob added (~470 ms/frame) as
   the field latency lever. Reduction-to-practice now **122 Python /
-  113 Dart** tests.
+  113 Dart** tests. **[SUPERSEDED 2026-07-30 — these were CPU-only figures;
+  the tether laptop's CUDA GPU was unused. Corrected numbers in the
+  2026-07-30 GPU entry below. Do not cite 750 ms / 470 ms / `--imgsz 480`
+  in any filing or preprint.]**
 - **2026-07-30** — **dialogue-layer abstention** added as §4.7: a
   tool-mediated voice agent in which a local offline LLM may SELECT a
   capability but never author spoken content, with routing abstention on any
@@ -364,3 +367,32 @@ vs. useful announcements retained.
   Reduction-to-practice **199 Python** tests (Dart port of the agent layer
   not yet started, so the Dart count is unchanged at 113).
   ⚠ The paper is intended for arXiv — see §8a, that is a disclosure.
+- **2026-07-30 (measurement correction — read before filing or posting)** —
+  every server-side latency figure previously recorded in this disclosure was
+  measured with a **CPU-only PyTorch build on a machine whose CUDA GPU was
+  never used**. `venv/` held `torch 2.8.0+cpu`, so `torch.cuda.is_available()`
+  was `False`; a default `pip install torch` yields a CPU wheel and no log
+  reports the idle GPU. Corrected on an RTX 3050 Laptop GPU (4 GB) via a
+  separate `venv-gpu/` (torch 2.6.0+cu124), both arms run inside that one env
+  so the comparison isolates CUDA rather than a torch version change:
+  **21.2 ms/frame for both models at imgsz 640** (yolov8s 11.3 + custom 9.9),
+  against 256.5 ms for the identical code path on CPU — a 12x difference, and
+  ~35x against the 750 ms previously recorded. Median of 12 frames from
+  `eval_a.mp4`, warmup excluded, `cuda.synchronize()` before each stop.
+  Claim-relevant consequences: (1) the `--imgsz 480` reduced-resolution mode is
+  **retired** — 2 ms saved on GPU for an accuracy cost — and half precision is
+  likewise not adopted (0.4 ms), because at this model size inference is
+  kernel-launch-bound, not compute-bound; (2) the §8 open question "a latency
+  claim needs on-device measurement" is now answered for the tether laptop, but
+  the bottleneck has **moved to the transport path** — YUV420→BGR
+  reconstruction, rotation, and JSON now dominate, so any future latency claim
+  should be stated per-stage rather than as one round-trip number; (3) the
+  remote-primary architecture is unaffected in substance, since the phone's
+  ~2.5 s on-device figure is independent of the laptop's torch build — only its
+  justification numbers change; (4) ~3 GB VRAM remains free alongside both
+  detectors, which is what makes a local tier-1 router model practical on
+  commodity hardware and supports the "fully offline" framing of §4.7.
+  **Methodological note worth keeping in the paper:** this is a case where a
+  silent environment misconfiguration, not the algorithm, set a published
+  performance number — an argument for reporting per-stage timings and the
+  device/build under which they were taken.
