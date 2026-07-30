@@ -170,8 +170,18 @@ prior art. Ranked by perceived strength of the novelty case.
      the model.
   5. **Trigger-word dictation.** The offline recognizer's grammar is a closed
      list, so free speech is not mis-heard, it is never heard. A trigger word
-     opens a short window that goes to local Whisper and then to the router,
-     which keeps tier 0 both accurate and instant.
+     opens a short window that goes to an open-vocabulary transcriber and then
+     to the router, which keeps tier 0 both accurate and instant. The trigger
+     is evaluated LAST in the parser, so it can only fire on an utterance no
+     real command claimed. Two transcriber implementations, chosen by what is
+     reachable: local Whisper on the tethered machine, or — on the handset —
+     **a second recognizer built on the same already-loaded model with its
+     grammar removed**, swapped in for one utterance and swapped back. The
+     second is less accurate and deliberately so: it keeps free speech
+     available with no server and no additional model, and its transcript is
+     still passed through the deterministic parser before the router is
+     consulted. Every failure path restores the command recognizer, because
+     losing dictation is an inconvenience and losing voice control is not.
   6. **The tier boundary may be a network link.** On the handset, tier 0 runs
      locally and only an unresolved utterance is posted to the tethered
      server's router. The reply is **re-validated on the client against the
@@ -390,9 +400,18 @@ vs. useful announcements retained.
   contract test asserts the Dart table against the Python-generated
   `capabilities.json` — this is what makes the C4 "enforced consistency across
   sites" claim true in both languages rather than only in Python.
-  NOT yet implemented: handset-side open dictation (recording a WAV for the
-  `/agent` audio path), so on the phone tier 1 currently only sees utterances
-  the constrained grammar could hear but the parser could not resolve.
+- **2026-07-30 (same day, handset dictation)** — mechanism 5 gains its
+  second implementation: **dual-recognizer open dictation on the phone**, no
+  server and no extra model. The trigger word swaps the grammar recognizer for
+  an open one over the same loaded 40 MB model, captures one utterance, and
+  swaps back; a lead-in discards the spoken acknowledgement so the device's own
+  TTS is not transcribed as the question, and every exit path restores command
+  recognition. Claim-relevant because it removes the last dependency in the
+  dialogue layer: free speech now reaches the router with the tether switched
+  off, which is what lets §4.7's "fully offline" framing hold on the device the
+  user actually carries rather than only on the laptop. Reduction to practice:
+  `lib/voice_listener.dart`, `triggerWords` in `lib/logic/voice_commands.dart`
+  (parsed LAST, mirroring `voice.py`), **133 Dart tests**.
 - **2026-07-30 (measurement correction — read before filing or posting)** —
   every server-side latency figure previously recorded in this disclosure was
   measured with a **CPU-only PyTorch build on a machine whose CUDA GPU was

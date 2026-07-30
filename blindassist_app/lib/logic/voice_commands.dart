@@ -74,6 +74,13 @@ String? resolveClass(String? text) {
   return _findable[t] ?? _matchObject(t);
 }
 
+/// Saying one of these opens the open-dictation window: the recognizer's
+/// grammar is a closed list, so free speech is not mis-heard, it is never
+/// heard at all. An explicit trigger keeps tier 0 instant and untouched —
+/// only an utterance the user deliberately marked as a question takes the
+/// slow open path. Mirror of voice.TRIGGER_WORDS.
+const List<String> triggerWords = ['assistant', 'question'];
+
 /// Recognized utterance -> command, or null if not understood. Actions:
 /// walk / find / describe / clock / zones / recall. Tolerant of filler words:
 /// "please find the bottle" works.
@@ -126,6 +133,9 @@ VoiceCommand? parseCommand(String text) {
     final obj = _matchObject(words.sublist(findIdx + 1).join(' '));
     if (obj != null) return (action: 'find', target: obj);
   }
+  // LAST, deliberately: every existing command keeps its exact precedence, so
+  // the trigger can only fire on an utterance nothing else claimed.
+  if (words.any(triggerWords.contains)) return (action: 'ask', target: null);
   return null;
 }
 
@@ -134,7 +144,7 @@ List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
     'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
     'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
-    'mute', 'unmute'];
+    'mute', 'unmute', ...triggerWords];
   final names = _findable.keys.toList()..sort();
   for (final name in names) {
     phrases.add('find $name');

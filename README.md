@@ -97,14 +97,15 @@ pip install faster-whisper       # first run downloads ~75 MB of weights
 python webapp.py --agent-model qwen2.5:3b-instruct --whisper-model
 ```
 
-Say **“assistant”**, wait for “Yes?”, then ask in your own words (laptop mic
-only — the phone has no dictation window yet).
+Say **“assistant”**, wait for “Yes?”, then ask in your own words.
 
-The phone talks to the same router over `POST /agent` on `infer_server.py`, but
-**local first**: anything its own grammar can parse is handled on-device with
-the laptop off, and only an unresolved utterance goes over the network. If the
-server is unreachable the phone stays on its offline capabilities — it never
-invents an action.
+Works on the phone too, with no download: the trigger word swaps the
+grammar-constrained recognizer for an open one over the same bundled Vosk
+model, catches one utterance, and swaps back (less accurate than Whisper — the
+trade for working with the laptop off). The transcript goes through the local
+parser first, then to the router over `POST /agent`. Everything the phone can
+parse itself is handled on-device, and if the server is unreachable it stays on
+its offline capabilities — it never invents an action.
 
 Run `bench_llm.py` before trusting tier 1 in the field — it prints a verdict.
 
@@ -123,5 +124,5 @@ python -m unittest       # 199 tests: position, decision, speech, voice,
 python agent.py --write-manifest   # after changing agent.TOOLS — then run the
                                    # Flutter suite, which asserts the Dart
                                    # registry against capabilities.json
-cd blindassist_app; flutter test   # 131 tests: the mirrored Dart logic
+cd blindassist_app; flutter test   # 133 tests: the mirrored Dart logic
 ```

@@ -529,11 +529,12 @@ router. Tier 0 keeps its accuracy and its ~5 µs latency for everything else.
    `llm_freetext`) to fill T3-T6 — the paper's keyword column is already real.
 4. Record the ASR condition: 2-3 people (not the author) reading ~60 records
    aloud, transcripts appended to each record's `asr` array.
-5. Handset **open dictation** — recording a WAV on the phone and posting it to
-   the `/agent` audio path. Until that exists, phone tier 1 only sees
-   utterances the Vosk grammar could HEAR but `parseCommand` could not
-   resolve; free speech on the phone still isn't heard at all. Needs a
-   recorder package + mic-stream sharing with Vosk.
+5. **On-device verification of the whole agent path** — `flutter install` +
+   a walk. The recognizer swap in `dictate()` (stop/dispose/re-init of
+   vosk_flutter's SpeechService) is the one part that CANNOT be unit-tested;
+   if the native side refuses a second `initSpeechService`, dictation fails
+   and the code restores command recognition, but that has not been seen
+   happen on hardware.
 
 ## Dart agent port (2026-07-30 — DONE, 131 Dart tests)
 
@@ -563,9 +564,33 @@ the tier boundary is drawn at the **Wi-Fi link**, which is the interesting part:
   half-hears would be worse than nothing. An abstention the server actually
   returned IS spoken.
 
-Test counts: **199 Python / 131 Dart**, all passing. `flutter analyze` clean
+### Handset open dictation (same session) — user chose the on-device path
+
+The phone can now hear free speech with the laptop off, using no new download:
+
+- `triggerWords = ['assistant', 'question']` in `voice_commands.dart`, parsed
+  **LAST** (mirrors voice.py:135) so no existing command loses precedence —
+  "assistant find the door" still finds the door.
+- `VoiceListener.dictate()`: stop + dispose the SpeechService, build a second
+  recognizer on the SAME already-loaded model **with no grammar**
+  (`createRecognizer` without `grammar:` → `vosk_recognizer_new`, the full LM),
+  capture one utterance, swap the grammar recognizer back. 900 ms lead-in
+  discards the spoken "Yes?" (the phone's speaker reaches its own mic — same
+  reason voice.py's `_dictate` has one); 6 s window so a silent user never
+  holds the microphone. `finally` ALWAYS restores command recognition; only if
+  the restore itself fails does `error` get set, and main.dart speaks it.
+- `main.dart._startDictation()`: speak `askTemplates['listening']`, capture,
+  then **local `parseCommand` first**, agent only on a miss. No server →
+  speaks the `unknown` template (a deliberate question must be answered, unlike
+  a stray half-heard phrase, which stays silent).
+- Accuracy caveat: small-model free dictation is well below Whisper. That is
+  the accepted trade for zero downloads and laptop-off operation; the Whisper
+  path on the laptop remains the accurate one.
+
+Test counts: **199 Python / 133 Dart**, all passing. `flutter analyze` clean
 apart from the 3 pre-existing `avoid_print` infos in detector.dart.
-NOT verified on the phone yet (no `flutter install` run this session).
+NOT verified on the phone yet (no `flutter install` run this session) — and the
+recognizer swap is precisely the part unit tests cannot reach.
 
 ## GPU enablement (2026-07-30) — every prior latency number was CPU-only
 

@@ -167,7 +167,7 @@ Orientation & Mobility instruction already teaches clock positions. We note in
 All guidance logic lives in a layer with no camera, no model, and no real clock:
 it takes plain bounding-box numbers and a monotonic timestamp. This layer is
 implemented twice — Python reference and Dart/Flutter — with mirrored unit-test
-suites (199 Python / 131 Dart tests passing as of 2026-07-30). Every spoken
+suites (199 Python / 133 Dart tests passing as of 2026-07-30). Every spoken
 string in this paper is emitted by a function in that layer and pinned by a
 test that asserts the exact text.
 
@@ -330,11 +330,20 @@ replacing the parser outright:
   This mirrors the transport rule of §4.3 one layer up.
 
 Open dictation is opened by a **trigger word** inside the grammar (e.g.
-"assistant"). Hearing it records a short window, transcribes it with a local
-Whisper model on the tether laptop, and routes the result. Tier 0 is therefore
-untouched by the addition — the recogniser's constrained grammar keeps doing
-exactly what it does today, and only an explicitly requested utterance takes the
-open path.
+"assistant"). Hearing it records a short window, transcribes it, and routes the
+result. Tier 0 is therefore untouched by the addition — the recogniser's
+constrained grammar keeps doing exactly what it does today, and only an
+explicitly requested utterance takes the open path.
+
+Transcription has two implementations, and which one runs is itself an instance
+of the degradation rule. On the tether laptop the window goes to a local Whisper
+model. On the handset it goes to a **second recogniser built on the same
+already-loaded 40 MB model with its grammar removed** — less accurate than
+Whisper, but it keeps free speech working with the laptop off and adds no
+download. The transcript is passed through the local parser before the router
+is consulted, because a free-form utterance frequently contains a trained
+phrasing outright ("assistant, find the door"), which should never require the
+network.
 
 ### 5.3 The authority boundary
 

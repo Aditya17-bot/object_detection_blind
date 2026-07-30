@@ -22,6 +22,7 @@ import 'config.dart';
 import 'detector.dart';
 import 'discovery.dart';
 import 'remote_detector.dart';
+import 'logic/agent_actions.dart';
 import 'logic/decision.dart';
 import 'logic/position.dart';
 import 'logic/voice_commands.dart';
@@ -395,6 +396,45 @@ class _AssistantScreenState extends State<AssistantScreen>
     return false;
   }
 
+  /// The trigger word ("assistant") was heard. Acknowledge, capture ONE
+  /// free-form utterance with the open recognizer, then route it.
+  ///
+  /// The transcript goes through the local parser first — free speech often
+  /// contains a trained phrasing outright ("assistant, find the door"), and
+  /// that must not need the laptop. Only what the parser cannot resolve is
+  /// posted to the agent.
+  Future<void> _startDictation() async {
+    // 'Yes?' is a fixed template, not a written reply — the same rule that
+    // keeps the router out of the speech channel.
+    await _speaker.say(askTemplates['listening']!, onDemand: true);
+    if (mounted) setState(() => _banner = 'Listening…');
+    final heard = await _voice.dictate();
+    if (!mounted) return;
+    if (_voice.error != null) {
+      // the recognizer did not come back — say so, silence here would look
+      // exactly like a working app that has stopped hearing anything
+      _speaker.say('Voice commands unavailable', onDemand: true);
+      setState(() => _voiceActive = false);
+      return;
+    }
+    if (heard == null || heard.isEmpty) {
+      _speaker.say(askTemplates['not_understood']!, onDemand: true);
+      setState(() => _banner = 'Walk mode');
+      return;
+    }
+    setState(() => _banner = heard);
+    final command = parseCommand(heard);
+    if (command != null) {
+      _dispatch(command);
+    } else if (_agent == null) {
+      // Deliberate question, no router reachable. Unlike a stray half-heard
+      // phrase, this one has to be answered — with the truth.
+      _speaker.say(askTemplates['unknown']!, onDemand: true);
+    } else {
+      await _askAgent(heard);
+    }
+  }
+
   /// Heard, but the local grammar made nothing of it. Ask the laptop's router,
   /// which has the same capability registry plus (optionally) a local LLM.
   ///
@@ -425,6 +465,8 @@ class _AssistantScreenState extends State<AssistantScreen>
   /// The one place a capability is invoked, whichever tier chose it.
   void _dispatch(VoiceCommand command) {
     switch (command.action) {
+      case 'ask':
+        unawaited(_startDictation()); // trigger word: open the speech window
       case 'describe':
         _describe();
       case 'walk':

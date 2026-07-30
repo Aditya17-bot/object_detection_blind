@@ -89,6 +89,23 @@ void main() {
       expect(parseCommand('mute'), (action: 'mute', target: 'on'));
       expect(parseCommand('unmute'), (action: 'mute', target: 'off'));
     });
+    test('trigger word opens dictation', () {
+      for (final word in triggerWords) {
+        expect(parseCommand(word), (action: 'ask', target: null));
+      }
+      // it is in the grammar, or the recognizer could never hear it
+      expect(grammarPhrases(), containsAll(triggerWords));
+    });
+    test('trigger loses to every real command (checked last)', () {
+      // "assistant, find the door" must find the door, not open a window and
+      // throw the words away.
+      expect(parseCommand('assistant find the door'),
+          (action: 'find', target: 'door'));
+      expect(parseCommand('assistant describe'),
+          (action: 'describe', target: null));
+      expect(parseCommand('question how many chairs'),
+          (action: 'count', target: 'chair'));
+    });
     test('plurals parse to the singular class', () {
       expect(parseCommand('how many chairs'), (action: 'count', target: 'chair'));
       expect(parseCommand('how many people'), (action: 'count', target: 'person'));
