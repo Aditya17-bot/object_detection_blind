@@ -28,6 +28,7 @@ import numpy as np
 from flask import Flask, jsonify, request
 from ultralytics import YOLO
 
+from agent_server import register_agent_routes
 from position import TARGET_CLASSES
 
 # yolov8s is the strong model (nano was the phone's weak spot); door/dustbin
@@ -107,7 +108,8 @@ _AUTO = object()  # sentinel: custom_model=None must mean "explicitly none"
 
 
 def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
-              coco_model=None, custom_model=_AUTO, imgsz=640):
+              coco_model=None, custom_model=_AUTO, imgsz=640,
+              router=None, transcriber=None):
     """coco_model/custom_model override the paths — lets tests inject fakes
     without loading real weights (same pattern as test_webapp.py).
     custom_model=None disables the custom model; leaving it unset loads
@@ -184,7 +186,16 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
 
     @app.get("/health")
     def health():
-        return jsonify({"ok": True, "custom": custom is not None})
+        return jsonify({"ok": True, "custom": custom is not None,
+                        "agent": router is not None and router.enabled})
+
+    # POST /agent — the phone posts an utterance (typed) or a WAV of the
+    # dictation window; we transcribe and route, and the phone EXECUTES the
+    # returned actions locally. Deliberately no execution here: this server
+    # has no GuidanceEngine and no frame state, and inventing one would put a
+    # second source of truth behind the user's ear.
+    if router is not None:
+        register_agent_routes(app, router, transcriber)
 
     return app
 
@@ -199,8 +210,31 @@ if __name__ == "__main__":
     ap.add_argument("--imgsz", type=int, default=640,
                     help="inference resolution; 480 is ~1.6x faster at a "
                          "small accuracy cost")
+    ap.add_argument("--agent-model",
+                    help="local Ollama model for tier-1 routing, e.g. "
+                         "qwen2.5:1.5b-instruct. Omit to serve /agent with "
+                         "keyword routing only.")
+    ap.add_argument("--whisper-model", nargs="?", const="small.en",
+                    help="local faster-whisper model for WAV uploads to "
+                         "/agent (default small.en)")
     args = ap.parse_args()
-    app = build_app(args.model, args.extra_model, imgsz=args.imgsz)
+
+    import agent
+    llm = agent.OllamaRouter(model=args.agent_model) if args.agent_model else None
+    if llm is not None:
+        print(f"Agent tier 1: warming up {llm.model}...")
+        print("  ready" if llm.warmup()
+              else f"  UNAVAILABLE — {llm.error} (keyword routing still works)")
+    transcriber = None
+    if args.whisper_model:
+        from transcribe import Transcriber
+        transcriber = Transcriber(args.whisper_model)
+        print(f"Loading speech transcription ({args.whisper_model})...")
+        if not transcriber.load():
+            print(f"  UNAVAILABLE — {transcriber.error}")
+
+    app = build_app(args.model, args.extra_model, imgsz=args.imgsz,
+                    router=agent.AgentRouter(llm=llm), transcriber=transcriber)
     start_discovery_responder(args.port)
     print(f"BlindAssist inference server on http://{args.host}:{args.port} "
           f"(UDP discovery on {DISCOVERY_PORT})")

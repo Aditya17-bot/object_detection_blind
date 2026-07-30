@@ -65,8 +65,47 @@ python phase1_detect.py          # raw detection boxes
 python phase2_detect.py          # + position grid / proximity colors
 ```
 
+## Natural speech (agent layer)
+
+Without a local model the app behaves exactly as it always has: the
+grammar-constrained keyword commands, ~5 µs to route. The agent adds a second
+tier for everything the grammar cannot hear — and a grammar genuinely cannot
+hear a paraphrase, it is a closed list of phrases.
+
+Try it with **no downloads at all** — the web UI's **Ask** box types straight
+into the router and shows which tier answered:
+
+```powershell
+python webapp.py                 # then type "describe the room" into Ask
+python eval_agent.py --config keyword    # the measured baseline, 200 utterances
+```
+
+To turn the second tier on you need two downloads. **Run these yourself** —
+nothing is fetched automatically:
+
+```powershell
+# 1. the local router model (offline, ~1 GB). Install Ollama first.
+ollama pull qwen2.5:1.5b-instruct
+python bench_llm.py --model qwen2.5:1.5b-instruct   # IS IT FAST ENOUGH HERE?
+
+# 2. free-speech transcription for the "assistant" trigger word
+pip install faster-whisper       # first run downloads ~75 MB of weights
+
+# then:
+python webapp.py --agent-model qwen2.5:1.5b-instruct --whisper-model
+```
+
+Say **“assistant”**, wait for “Yes?”, then ask in your own words. The phone
+talks to the same router over `POST /agent` on `infer_server.py`.
+
+Run `bench_llm.py` before trusting tier 1 in the field: this laptop needs
+~750 ms/frame for two small YOLO models, so a local LLM on CPU may or may not
+fit the latency budget. The script prints a verdict.
+
 ## Tests
 
 ```powershell
-python -m unittest -v    # position + decision + speech + webapp + voice (58 tests)
+python -m unittest       # 199 tests: position, decision, speech, voice,
+                         # webapp, infer_server, agent, agent_server
+python agent.py --write-manifest   # after changing agent.TOOLS
 ```

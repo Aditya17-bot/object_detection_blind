@@ -436,18 +436,34 @@ crudeness are in `EVAL_PROTOCOL.md`.
 
 ## 7. Results
 
-*(reserved — filled from `test_output/agent_eval_*.md`)*
+The **keyword baseline is measured**; the two LLM configurations are reserved
+until the router runs on hardware with a local model (`eval_agent.py --config
+two_tier --model …`). Numbers below come from
+`test_output/agent_eval_keyword.md`, eval set sha256 `e4eeca83070e2d66`.
 
 **T3 — Routing accuracy by category and configuration.**
 
 | Category | n | keyword | LLM-only | two-tier |
 |---|---|---|---|---|
-| canonical | 40 | | | |
-| paraphrase | 70 | | | |
-| multi_intent | 20 | | | |
-| out_of_scope | 40 | | | |
-| ambiguous | 30 | | | |
-| **overall** | 200 | | | |
+| canonical | 40 | **100.0 %** (40/40) | | |
+| paraphrase | 70 | **0.0 %** (0/70) | | |
+| multi_intent | 20 | **0.0 %** (0/20) | | |
+| out_of_scope | 40 | **95.0 %** (38/40) | | |
+| ambiguous | 30 | **3.3 %** (1/30) | | |
+| **overall** | 200 | **39.5 %** (79/200) | | |
+
+Overall Wilson 95 % CI for the baseline: 33.0–46.4 %.
+
+The baseline's shape is the paper's motivation stated as data. It is perfect on
+the phrasings it was designed for and *zero* on paraphrase and multi-intent —
+not degraded, absent, because a grammar-constrained recogniser cannot hear what
+is not in its grammar (§5.1). It is also, notably, already good at abstention:
+95 % on out-of-scope, because an unmatched utterance returns nothing. Tier 1
+must not spend that.
+
+Tier-0 routing latency, for the C3 claim: **p50 5 µs, p95 13 µs**. This is why
+the tiering is worth its complexity — the users who have learned the command
+phrases pay literally nothing for the agent's existence.
 
 **T4 — Latency p50/p95 (ms) per stage and ASR condition.**
 
@@ -463,17 +479,31 @@ crudeness are in `EVAL_PROTOCOL.md`.
 
 | Configuration | abstain | wrong tool | over-trigger rate |
 |---|---|---|---|
-| keyword | | | |
+| keyword | 38 | 2 | **5.0 %** (CI 1.4–16.5 %) |
 | LLM-only | | | |
 | two-tier | | | |
+
+Both keyword over-triggers are instructive rather than anomalous, and both are
+substring collisions: *"read my email"* contains "read" and routes to the OCR
+reader; *"how do i get to the bus stop"* contains "stop" and halts the current
+announcement. Neither is a bug in the parser — they are the price of matching
+on keywords, and they are exactly the errors a router with sentence-level
+context should remove.
 
 **T6 — Fabricated perception.**
 
 | Configuration | fabricating responses / n |
 |---|---|
+| keyword, tool-mediated | **0 / 200** (verified) |
 | LLM-only, free text | |
 | LLM-only, tool-mediated | |
 | two-tier | |
+
+The verification is not a claim that nothing was fabricated; it is a check that
+every spoken string in the run was a member of the set `decision.py` /
+`position.py` could produce for that record, plus the fixed templates. The
+harness fails loudly on any string outside that set, so the boundary is
+monitored on every run rather than argued for once.
 
 **Figures.** F1 system diagram with the agent as a parallel input path and an
 explicit perception-authority boundary; F2 two-tier router flow including the

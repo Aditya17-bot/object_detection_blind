@@ -138,6 +138,62 @@ prior art. Ranked by perceived strength of the novelty case.
   visible. Trivial mechanism; included for completeness of the voice-command
   surface, not as an independent novelty.
 
+### 4.7 Tool-mediated voice agent with routing abstention *(strong — the dialogue-layer instance of the §9 thesis)*
+- **What:** the user speaks naturally; a **local, offline** language model
+  chooses which of the system's deterministic capabilities to run, and is given
+  **no authority to author any spoken content whatsoever**. It emits a
+  `{tool, argument}` pair and nothing else. Every word the user hears still
+  comes from `decision.py` / `position.py` — the same functions the buttons
+  call, pinned by the same tests — or from a fixed template table.
+- **How:**
+  1. **Two-tier routing.** Tier 0 is the existing grammar-constrained keyword
+     parser (measured p50 **5 µs**, p95 13 µs, no model, no network). Tier 1 is
+     consulted only on a tier-0 miss. Median routing latency is therefore
+     unchanged for trained phrasings, and the system still works with no model
+     present at all — degradation is toward FEWER capabilities, never toward
+     wrong ones (the same rule as §4.3's transport fail-safe, one layer up).
+  2. **Closed-registry validation.** One declarative capability table generates
+     the recognizer's phrase list, the model's tool schema, the executor, and a
+     committed `capabilities.json` manifest. The model's output is treated as
+     untrusted input: unknown tool, unknown object class (the enum is derived
+     from the DETECTOR's own class list, so it cannot drift), missing required
+     argument, malformed value, prose instead of JSON, timeout, or any
+     exception all become **abstain**.
+  3. **Template-only clarification.** Even the clarifying question is selected
+     by key from a fixed table. The model may choose *which* question is asked;
+     it may not write one. This is what makes "no spoken token originates in
+     the model" absolute rather than approximate.
+  4. **Deterministic state block.** Multi-turn references ("is it still
+     there") resolve against the current `ObjectInfo` list and engine state —
+     visible classes with zone/proximity/count, mode, last announcement,
+     object memory — never against a description. Perception never re-enters
+     the model.
+  5. **Trigger-word dictation.** The offline recognizer's grammar is a closed
+     list, so free speech is not mis-heard, it is never heard. A trigger word
+     opens a short window that goes to local Whisper and then to the router,
+     which keeps tier 0 both accurate and instant.
+- **Why non-obvious:** structured/constrained LLM output is well known. The
+  step here is *why* it is applied: for a consumer who cannot visually reject a
+  wrong answer, hallucination containment is not a quality improvement, it is a
+  safety property, and the correct design target is not "minimise fabricated
+  perception" but "make it impossible to express". Reducing the model's
+  authority to selection over a closed registry — **including selection of the
+  clarifying question** — achieves that by construction. The measured
+  counterpart is the **over-trigger rate**: an always-answer router maps an
+  out-of-scope request onto the nearest available tool and produces a
+  confident, well-formed, irrelevant spoken answer.
+- **Reduction to practice:** `agent.py` (registry, validator, router,
+  executor), `agent_server.py` (POST /agent, shared by both servers),
+  `transcribe.py`, `eval_agent.py`, 200-utterance frozen evaluation set with a
+  protocol written BEFORE the router existed (`paper/`). Measured keyword
+  baseline: canonical 100 %, paraphrase 0 %, out-of-scope abstention 95 %,
+  boundary leaks 0/200.
+- **Prior art to distinguish:** LLM function calling / tool use; constrained
+  decoding; voice assistants with intent classifiers; retrieval grounding.
+  None of these, as far as the search so far shows, frames the containment as a
+  *non-visual-consumer safety* requirement or extends abstention across
+  perception, planning, transport AND dialogue as one principle.
+
 ### 4.5 Pulse-count haptic direction *(minor)*
 - **What:** on a single-vibrator phone, direction is encoded by **number of
   pulses** (1 = left, 2 = ahead, 3 = right), firing only on a zone *change*.
@@ -181,7 +237,13 @@ offline grammar-constrained voice control of the modes.
   `blindassist_app/test/*_test.dart`). Specific gate tests:
   `test_clipped_box_suppresses_meters`, `test_low_confidence_suppresses_meters`,
   `test_meters_are_find_mode_only_not_walk`, `test_all_blocked_says_stop`,
-  `test_door_is_not_an_obstacle_for_path`, `test_near_small_hazard_beats_far_bulk`.
+  `test_door_is_not_an_obstacle_for_path`, `test_near_small_hazard_beats_far_bulk`,
+  and for §4.7: `test_prose_is_never_spoken`,
+  `test_no_spoken_string_originates_in_the_model`,
+  `test_invalid_action_abstains_rather_than_guessing`,
+  `test_llm_exception_abstains_and_never_propagates`,
+  `test_grammar_hit_matches_parse_command_exactly` (the tier-0 no-regression
+  gate), `test_manifest_file_matches_the_registry`.
 - Prior recorded-clip evaluation: `EVALUATION.md` (direction accuracy, FPS,
   false/missed-announcement counts).
 
@@ -205,6 +267,16 @@ for the blind), G08B (signalling), H04R (stereophonic).
   scoring for a stronger claim.
 - GPU-delegate acceleration is unverified on the target device (may fall back to
   CPU); a latency claim needs on-device measurement.
+
+## 8a. Prior art specific to §4.7 (search before filing or preprinting)
+
+LLM function calling / tool use and constrained decoding (OpenAI, Anthropic,
+Toolformer and successors); intent-classification voice assistants; grounded
+generation and hallucination mitigation; "guardrail" / policy-router
+architectures; accessibility voice agents. Patent classes to add: G06F 40/35
+(dialogue systems), G10L 15/22 (speech-recognition control), G06N (models).
+**Note:** an arXiv preprint is a public disclosure — file, or decide not to,
+BEFORE posting.
 
 ## 9. Suggested paper framing (if academic route)
 
@@ -274,3 +346,21 @@ vs. useful announcements retained.
   1.2 s-timeout drops; `--imgsz 480` server knob added (~470 ms/frame) as
   the field latency lever. Reduction-to-practice now **122 Python /
   113 Dart** tests.
+- **2026-07-30** — **dialogue-layer abstention** added as §4.7: a
+  tool-mediated voice agent in which a local offline LLM may SELECT a
+  capability but never author spoken content, with routing abstention on any
+  validation failure. This completes the §9 thesis across four layers
+  (perception §4.1, planning §4.2, transport §4.3-changelog, dialogue §4.7) —
+  one principle, four layer-specific criteria, which is the framing the paper
+  now leads with. Also this pass: a single capability registry replacing
+  branches duplicated across four sites (the drift was real — `webapp.py`
+  silently dropped read/sonar/stop/repeat/mute), `capabilities.json` as the
+  committed cross-site contract, trigger-word open dictation via local
+  Whisper, and POST /agent on both servers. **Research paper started** in
+  `paper/`: draft, a protocol frozen BEFORE the router was implemented, and a
+  200-utterance labelled routing set. Measured keyword baseline (set sha256
+  e4eeca83): canonical 100 %, paraphrase 0 %, multi-intent 0 %, out-of-scope
+  abstention 95 %, tier-0 routing p50 5 µs, authority-boundary leaks 0/200.
+  Reduction-to-practice **199 Python** tests (Dart port of the agent layer
+  not yet started, so the Dart count is unchanged at 113).
+  ⚠ The paper is intended for arXiv — see §8a, that is a disclosure.

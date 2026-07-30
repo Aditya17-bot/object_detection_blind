@@ -472,6 +472,66 @@ F2/F4 commit messages):
 
 Test counts: **122 Python / 113 Dart**, all passing.
 
+## Agent layer + research paper (2026-07-30 — Python done, Dart NOT started)
+
+Two deliverables that are really one: a **research paper** carved out of the
+project, and an **agent layer** so the user can speak naturally instead of
+learning command phrases. The agent is the paper's new contribution and slots
+under the `PATENT_RESEARCH.md` §9 thesis — *say less, never mislead* — now
+argued across four layers (perception / planning / transport / **dialogue**).
+
+**The blocker that shaped the design:** the Vosk recognizer is
+GRAMMAR-CONSTRAINED (`voice.py`), so free-form speech is not mis-parsed, it is
+never *heard*. Hence a trigger word ("assistant" / "question") opens a short
+dictation window that goes to local Whisper (`transcribe.py`) and then to the
+router. Tier 0 keeps its accuracy and its ~5 µs latency for everything else.
+
+- **`agent.py`** — the single capability registry (`TOOLS`, 13 capabilities +
+  `abstain` + the internal `ask` trigger). Drives the recognizer's phrase list
+  at runtime (`VoiceListener(phrases=...)`), the LLM tool schema, the one
+  executor, and `capabilities.json` (committed; a test asserts they match).
+  • `AgentRouter(llm=None)` = two-tier. **llm=None is behaviourally identical
+    to the old system**, enforced by `test_grammar_hit_matches_parse_command_exactly`.
+  • **`route()` never raises** — an exception on the voice thread silently
+    kills voice for the whole session (that really happened with "clock mode").
+  • **Authority boundary:** the model emits only `{tool, args}`; unknown tool /
+    unknown class / missing arg / prose / timeout all become abstain, and even
+    the clarifying question is an `ASK_TEMPLATES` key. No spoken token ever
+    originates in the model.
+- **`agent_server.py`** — `POST /agent`, registered by BOTH `infer_server.py`
+  (phone posts text or a WAV; the phone executes the returned actions) and
+  `webapp.py` (executes and reports what was spoken). Separate module so it is
+  testable without cv2/ultralytics.
+- **`webapp.py`** — `_on_voice_command` is now route-then-execute through the
+  registry. This FIXED a real drift bug: the old hand-written dispatch silently
+  dropped read/sonar/stop/repeat/mute. New flags `--agent-model` (Ollama, opt
+  in) and `--whisper-model`. UI gains a router pill and an **Ask box** — type
+  an utterance, see which tier answered, no mic needed.
+- **`paper/`** — `PAPER.md` (draft, ASSETS LBW target), `EVAL_PROTOCOL.md`
+  (frozen BEFORE the router existed, on purpose), `eval_set.jsonl` (200
+  labelled utterances). `eval_agent.py` produces the tables.
+- **Measured keyword baseline** (`python eval_agent.py --config keyword`, no
+  downloads): canonical 100 %, paraphrase **0 %**, multi-intent 0 %,
+  out-of-scope abstention 95 %, tier-0 routing p50 5 µs, 0/200 boundary leaks.
+  The two out-of-scope over-triggers are substring collisions worth keeping:
+  "read my email" → OCR, "how do i get to the bus stop" → stop.
+
+**STILL OPEN (needs the user's laptop — nothing was downloaded this session):**
+1. `ollama pull qwen2.5:1.5b-instruct`, then **`python bench_llm.py`** — the
+   feasibility spike. This laptop takes ~750 ms/frame for two small YOLO
+   models, so tier-1 latency is a real risk; the script prints a verdict.
+2. `pip install faster-whisper` for the "assistant" trigger.
+3. `python eval_agent.py --config two_tier --model <name>` (and `llm_only`,
+   `llm_freetext`) to fill T3-T6 — the paper's keyword column is already real.
+4. Record the ASR condition: 2-3 people (not the author) reading ~60 records
+   aloud, transcripts appended to each record's `asr` array.
+5. **Dart port of the agent layer is NOT started** — `agent_client.dart` +
+   `main.dart` handling an action *list*, with the F2 fail-safe rule (server
+   unreachable → fall back to local `parseCommand`, never to a wrong action).
+   Deferred because that session had no Flutter toolchain to verify with.
+
+Test counts: **199 Python** / 113 Dart (Dart unchanged — the port is pending).
+
 ## Environment notes
 
 - Windows 11, PowerShell. Deps (`ultralytics`, `opencv-python`, `pyttsx3`,

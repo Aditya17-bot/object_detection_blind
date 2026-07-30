@@ -7,6 +7,7 @@ import unittest
 
 import numpy as np
 
+from agent import AgentRouter
 from infer_server import (DISCOVER_MSG, REPLY_PREFIX, build_app,
                           start_discovery_responder, yuv420_to_bgr)
 
@@ -65,11 +66,11 @@ class YuvTest(unittest.TestCase):
 
 
 class ServerTest(unittest.TestCase):
-    def _client(self, coco_boxes=(), custom=None):
+    def _client(self, coco_boxes=(), custom=None, router=None):
         # custom=None -> explicitly NO custom model (build_app only
         # auto-loads the real .pt when custom_model is left unset)
         coco = FakeYOLO({0: "person", 39: "bottle", 62: "tv"}, coco_boxes)
-        app = build_app(coco_model=coco, custom_model=custom)
+        app = build_app(coco_model=coco, custom_model=custom, router=router)
         return app.test_client(), coco
 
     def _post(self, client, w=8, h=8, rotation=0):
@@ -86,7 +87,7 @@ class ServerTest(unittest.TestCase):
     def test_health_reports_custom_flag(self):
         client, _ = self._client()
         data = json.loads(client.get("/health").data)
-        self.assertEqual(data, {"ok": True, "custom": False})
+        self.assertEqual(data, {"ok": True, "custom": False, "agent": False})
         client2, _ = self._client(custom=FakeYOLO({0: "door"}))
         data2 = json.loads(client2.get("/health").data)
         self.assertTrue(data2["custom"])
@@ -129,6 +130,35 @@ class ServerTest(unittest.TestCase):
     def test_warmup_runs_at_startup(self):
         _, coco = self._client()
         self.assertEqual(coco.seen_shapes, [(640, 640, 3)])
+
+
+class AgentRouteTest(unittest.TestCase):
+    """/agent is registered only when a router is supplied, and it returns
+    ACTIONS rather than executing them — this server has no GuidanceEngine and
+    no frame state, so a second source of truth here would be worse than none.
+    """
+
+    def _client(self, router=None):
+        coco = FakeYOLO({0: "person"})
+        return build_app(coco_model=coco, custom_model=None,
+                         router=router).test_client()
+
+    def test_absent_without_a_router(self):
+        self.assertEqual(
+            self._client().post("/agent", json={"text": "walk"}).status_code,
+            404)
+
+    def test_returns_actions_for_the_phone_to_execute(self):
+        client = self._client(AgentRouter(llm=None))
+        body = json.loads(
+            client.post("/agent", json={"text": "find the bottle"}).data)
+        self.assertEqual(body["actions"], [{"tool": "find", "arg": "bottle"}])
+        self.assertEqual(body["source"], "grammar")
+        self.assertNotIn("spoken", body)     # nothing is executed here
+
+    def test_health_reports_the_agent(self):
+        client = self._client(AgentRouter(llm=None))
+        self.assertFalse(json.loads(client.get("/health").data)["agent"])
 
 
 class DiscoveryTest(unittest.TestCase):
