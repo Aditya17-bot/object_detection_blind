@@ -42,11 +42,20 @@ void main() {
     test('far never announced', () {
       expect(pickObstacle([info('chair', proximity: 'far')]), isNull);
     });
-    test('medium only matters in center', () {
+    test('medium is silent even dead ahead', () {
+      // 2026-07-31: walk mode used to announce a medium obstacle in the
+      // centre. Field feedback was that continuous naming became noise, so the
+      // line moved to walkMinProximity ('close'). The full inventory is still
+      // available on demand through describe() / checkDirection().
       expect(pickObstacle([info('chair', hZone: 'left', proximity: 'medium')]),
           isNull);
-      final center = info('chair', proximity: 'medium');
-      expect(pickObstacle([center]), same(center));
+      expect(pickObstacle([info('chair', proximity: 'medium')]), isNull);
+    });
+    test('close and very close still announced', () {
+      final close = info('chair', hZone: 'left');
+      expect(pickObstacle([close]), same(close));
+      final vc = info('chair', hZone: 'right', proximity: 'very close');
+      expect(pickObstacle([vc]), same(vc));
     });
     test('find classes never obstacles', () {
       expect(pickObstacle([info('bottle', proximity: 'very close')]), isNull);
@@ -424,6 +433,65 @@ void main() {
     test('engine count stamps clock', () {
       final e = GuidanceEngine();
       expect(e.count([info('chair'), info('chair')], 'chair', 0.0), '2 chairs');
+    });
+  });
+
+  group('checkDirection', () {
+    test('empty direction says nothing there', () {
+      final scene = [info('chair', hZone: 'right')];
+      expect(checkDirection(scene, 'left'), 'Nothing on your left');
+      expect(checkDirection(scene, 'ahead'), 'Nothing ahead');
+    });
+    test('reports what is there with its bucket', () {
+      expect(checkDirection([info('chair', hZone: 'left')], 'left'),
+          'A chair close on your left');
+    });
+    test('ahead maps to the center zone', () {
+      expect(checkDirection([info('door', proximity: 'medium')], 'ahead'),
+          'A door medium ahead');
+    });
+    test('closest first and capped at two', () {
+      final scene = [
+        info('chair', hZone: 'right', proximity: 'far', area: 0.4),
+        info('person', hZone: 'right', proximity: 'very close'),
+        info('bottle', hZone: 'right', proximity: 'medium'),
+      ];
+      final msg = checkDirection(scene, 'right');
+      expect(msg, 'A person very close on your right, and a bottle medium');
+      expect(msg, isNot(contains('chair')));
+    });
+    test('find classes are reported too', () {
+      expect(checkDirection([info('cup', hZone: 'left')], 'left'),
+          'A cup close on your left');
+    });
+    test('untrusted name becomes obstacle', () {
+      expect(checkDirection([info('toilet', hZone: 'left', conf: 0.65)], 'left'),
+          'An obstacle close on your left');
+    });
+    test('unknown direction returns null', () {
+      expect(checkDirection([info('chair')], 'behind'), isNull);
+    });
+    test('engine check stamps the clock and passes null through', () {
+      final e = GuidanceEngine();
+      expect(e.check([info('chair', hZone: 'left')], 'left', 0.0),
+          'A chair close on your left');
+      expect(e.check([info('chair')], 'behind', 1.0), isNull);
+    });
+  });
+
+  group('stateSummary', () {
+    test('groups what is visible and reports engine state', () {
+      final e = GuidanceEngine();
+      final state = e.stateSummary(
+          [info('chair', hZone: 'left'), info('chair', hZone: 'left')], 0.0);
+      expect(state['mode'], 'walk');
+      final visible = state['visible'] as List;
+      expect(visible.length, 1);
+      expect(visible.first['name'], 'chair');
+      expect(visible.first['count'], 2);
+      expect(visible.first['zone'], 'left');
+      // no leaked internals: the router reads facts, not object handles
+      expect(visible.first.containsKey('_area'), isFalse);
     });
   });
 }

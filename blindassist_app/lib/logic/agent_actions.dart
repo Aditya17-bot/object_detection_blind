@@ -58,6 +58,14 @@ const List<ToolSpec> kTools = [
   ToolSpec('recall',
       arg: 'class', required: true, examples: ['where is the cup']),
   ToolSpec('path', examples: ['clear path', 'which way']),
+  ToolSpec('check',
+      arg: 'direction',
+      required: true,
+      examples: [
+        'what is on my left',
+        'is there anything in front of me',
+        'anything on my right'
+      ]),
   ToolSpec('read', examples: ['read', 'read text']),
   ToolSpec('clock', examples: ['clock mode']),
   ToolSpec('zones', examples: ['zone mode']),
@@ -71,6 +79,23 @@ const List<ToolSpec> kTools = [
 
 final Map<String, ToolSpec> kToolsByName = {
   for (final spec in kTools) spec.name: spec
+};
+
+/// Mirror of agent.ARG_ENUMS['direction'] and agent._DIRECTION_ALIASES.
+/// Forgiving on the way in, strict on the way out.
+const List<String> kDirections = ['left', 'ahead', 'right'];
+const Map<String, String> directionAliases = {
+  'front': 'ahead',
+  'forward': 'ahead',
+  'centre': 'ahead',
+  'center': 'ahead',
+  'straight': 'ahead',
+  'in front': 'ahead',
+  'in front of me': 'ahead',
+  'my left': 'left',
+  'my right': 'right',
+  'on my left': 'left',
+  'on my right': 'right',
 };
 
 /// Keys the server (or a model) might use for the argument. Forgiving on the
@@ -109,6 +134,7 @@ class AgentRouteResult {
     this.ask,
     this.latencyMs = 0,
     this.error,
+    this.say,
   });
 
   final List<AgentAction> actions;
@@ -117,8 +143,38 @@ class AgentRouteResult {
   final double latencyMs;
   final String? error;
 
-  /// The spoken template for an abstention, or null.
-  String? get message => ask == null ? null : askTemplates[ask];
+  /// MODEL-AUTHORED conversational reply. The one string in this system the
+  /// laptop's LLM wrote rather than decision.dart — see [cleanSay].
+  final String? say;
+
+  /// What to speak: a chat reply, an abstention template, or null.
+  String? get message =>
+      say ?? (ask == null ? null : askTemplates[ask]);
+}
+
+/// Longest model-authored reply the phone will speak. A blind user cannot
+/// skim, skip ahead, or see that a monologue is coming — length is a
+/// usability property, not formatting. Mirror of agent.MAX_SAY_CHARS.
+const int maxSayChars = 240;
+
+/// Server free text -> a speakable reply, or null if it is not usable.
+/// Untrusted input like any other: non-strings, empties and leaked JSON are
+/// rejected rather than read aloud. Mirror of agent.clean_say.
+String? cleanSay(Object? raw) {
+  if (raw is! String) return null;
+  var text = raw.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
+  if (text.isEmpty || text.startsWith('{') || text.startsWith('[')) return null;
+  if (text.length > maxSayChars) {
+    final cut = text.substring(0, maxSayChars);
+    final stop = [cut.lastIndexOf('. '), cut.lastIndexOf('! '),
+      cut.lastIndexOf('? ')].reduce((a, b) => a > b ? a : b);
+    text = stop > 40
+        ? cut.substring(0, stop + 1)
+        : cut.substring(0, cut.lastIndexOf(' ') < 0 ? cut.length
+            : cut.lastIndexOf(' '));
+  }
+  text = text.trim();
+  return text.isEmpty ? null : text;
 }
 
 /// One raw action map -> AgentAction, or null if it must be rejected.
@@ -151,7 +207,9 @@ AgentAction? validateAction(Object? raw) {
     return resolved == null ? null : AgentAction(spec.name, resolved);
   }
   arg = arg.toLowerCase();
+  if (spec.arg == 'direction') arg = directionAliases[arg] ?? arg;
   if (spec.arg == 'onoff' && arg != 'on' && arg != 'off') return null;
+  if (spec.arg == 'direction' && !kDirections.contains(arg)) return null;
   if (spec.arg == 'template' && !askTemplates.containsKey(arg)) return null;
   return AgentAction(spec.name, arg);
 }
@@ -167,6 +225,15 @@ AgentRouteResult parseRouteResponse(Map<String, dynamic> body,
   final error = body['error'] is String ? body['error'] as String : null;
 
   final raw = body['actions'];
+  // A conversational reply, checked BEFORE the action list. An action always
+  // wins if the server sent both — doing the thing beats talking about it.
+  if (raw is! List || raw.isEmpty) {
+    final said = cleanSay(body['say']);
+    if (said != null) {
+      return AgentRouteResult(
+          source: 'chat', say: said, latencyMs: latency, error: error);
+    }
+  }
   final actions = <AgentAction>[];
   if (raw is List) {
     for (final item in raw.take(maxActions)) {
@@ -188,8 +255,10 @@ AgentRouteResult parseRouteResponse(Map<String, dynamic> body,
   }
   if (actions.isEmpty) {
     final ask = body['ask'];
+    // Nothing to do and nothing usable to say IS an abstention, whatever the
+    // server labelled it — a 'chat' whose text we rejected is not a chat.
     return AgentRouteResult(
-        source: source == 'abstain' ? 'abstain' : source,
+        source: 'abstain',
         ask: (ask is String && askTemplates.containsKey(ask))
             ? ask
             : defaultAsk,

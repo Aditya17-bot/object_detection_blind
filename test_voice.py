@@ -78,6 +78,25 @@ class TestParseCommand(unittest.TestCase):
                          ("count", "couch"))
         self.assertEqual(parse_command("find bottles"), ("find", "bottle"))
 
+    def test_direction_queries(self):
+        for text in ("is there anything in front of me", "what is ahead",
+                     "anything in front of me", "check ahead"):
+            self.assertEqual(parse_command(text), ("check", "ahead"), text)
+        self.assertEqual(parse_command("what is on my left"),
+                         ("check", "left"))
+        self.assertEqual(parse_command("is there anything on my right"),
+                         ("check", "right"))
+
+    def test_direction_never_steals_an_existing_command(self):
+        # a direction word inside another command must not become a query
+        self.assertEqual(parse_command("find the door on my left"),
+                         ("find", "door"))
+        self.assertEqual(parse_command("where is the cup on my right"),
+                         ("recall", "cup"))
+        self.assertEqual(parse_command("which way is clear"), ("path", None))
+        # a bare direction with no question word is not a query either
+        self.assertIsNone(parse_command("left"))
+
     def test_unknown_utterances_ignored(self):
         self.assertIsNone(parse_command("hello there"))
         self.assertIsNone(parse_command("find unicorn"))

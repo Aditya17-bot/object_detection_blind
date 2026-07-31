@@ -86,6 +86,15 @@ def resolve_class(text):
 # user deliberately marked as a question takes the slow open path.
 TRIGGER_WORDS = ("assistant", "question")
 
+# Directional query vocabulary ("what's on my left", "anything in front of
+# me"). Two halves must BOTH appear: a direction and a question word. That
+# conjunction is what stops "move slightly left" style chatter, or a bare
+# "left" heard mid-sentence, from firing a query.
+_DIRECTION_WORDS = {"left": "left", "right": "right", "ahead": "ahead",
+                    "front": "ahead", "forward": "ahead"}
+_CHECK_WORDS = ("anything", "something", "what", "whats", "what's", "check",
+                "there", "see", "is")
+
 
 def parse_command(text):
     """Recognized utterance -> (action, target) or None. Actions:
@@ -130,6 +139,13 @@ def parse_command(text):
         obj = _match_object(" ".join(words[words.index("find") + 1:]))
         if obj:
             return ("find", obj)
+    # Directional query, AFTER find so "find the door on my left" still finds.
+    # Deliberately tier 0: "is there anything in front of me" is the question
+    # this system exists to answer, and it must work with no server and no LLM.
+    direction = next((_DIRECTION_WORDS[w] for w in words
+                      if w in _DIRECTION_WORDS), None)
+    if direction and any(w in words for w in _CHECK_WORDS):
+        return ("check", direction)
     # LAST, deliberately: every existing command keeps its exact precedence, so
     # the trigger can only fire on an utterance nothing else claimed.
     if any(w in words for w in TRIGGER_WORDS):
@@ -144,6 +160,12 @@ def grammar_phrases():
                "read", "read text",
                "stop", "repeat", "say again", "sonar", "sonar on", "sonar off",
                "mute", "unmute", *TRIGGER_WORDS]
+    for spoken in ("on my left", "on my right", "in front of me", "ahead"):
+        phrases.append(f"what is {spoken}")
+        phrases.append(f"whats {spoken}")
+        phrases.append(f"is there anything {spoken}")
+        phrases.append(f"anything {spoken}")
+    phrases += ["check left", "check right", "check ahead"]
     for name in sorted(_FINDABLE):
         phrases.append(f"find {name}")
         phrases.append(f"find the {name}")

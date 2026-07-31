@@ -54,7 +54,14 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
         if not isinstance(text, str) or not text.strip():
             return jsonify(error="send text or an audio file"), 400
 
+        # Whose facts? The host's, when it owns a GuidanceEngine (webapp). The
+        # CLIENT's otherwise: infer_server has no engine — the phone runs the
+        # engine and is the only party that knows what is on screen, so it
+        # ships its own state block. Either way the facts come from a detector,
+        # never from the model.
         state = get_state() if get_state else None
+        if state is None and isinstance(payload.get("state"), dict):
+            state = payload["state"]
         result = router.route(text, state)
 
         body = {
@@ -64,6 +71,7 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
             "latency_ms": round(result.latency_ms, 1),
             "actions": [{"tool": a.tool, "arg": a.arg} for a in result.actions],
             "ask": result.ask,
+            "say": result.say,          # model-authored; only ever a reply
             "message": result.message,
             "error": result.error,
         }

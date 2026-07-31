@@ -21,6 +21,8 @@ import 'agent_client.dart';
 import 'config.dart';
 import 'detector.dart';
 import 'discovery.dart';
+import 'features_page.dart';
+import 'settings.dart';
 import 'remote_detector.dart';
 import 'logic/agent_actions.dart';
 import 'logic/decision.dart';
@@ -43,7 +45,14 @@ class BlindAssistApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'BlindAssist',
-      theme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: const Color(0xFF07090D),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFFFFC247),
+          secondary: Color(0xFF4DD0E1),
+          surface: Color(0xFF10161F),
+        ),
+      ),
       home: const AssistantScreen(),
       debugShowCheckedModeBanner: false,
     );
@@ -107,9 +116,16 @@ class _AssistantScreenState extends State<AssistantScreen>
       // speaker FIRST: every later failure must be audible — the user can't
       // read the screen, so a silent error is indistinguishable from a hang.
       await _speaker.init();
+      // the greeting IS the startup signal: a blind user has no splash screen,
+      // and hearing their own name confirms it is their configured app that
+      // came up. Settings load first (it is a local key-value read) so the
+      // very first utterance is already personal.
+      await AppSettings.load();
       // speak IMMEDIATELY: server discovery + camera + Vosk unzip add up to
       // many seconds, and dead air at launch reads as "the app crashed"
-      _speaker.say('Starting BlindAssist');
+      final greeting = AppSettings.greeting();
+      _speaker.say('$greeting. Starting BlindAssist');
+      if (mounted) setState(() => _banner = greeting);
       await _sonar.init();
       // a field walk outlasts the 30-60 s screen timeout; a paused activity
       // stops the camera stream and the app goes silently dead mid-walk
@@ -447,7 +463,8 @@ class _AssistantScreenState extends State<AssistantScreen>
     final agent = _agent;
     if (agent == null) return;
     if (_repeatedTooSoon('ask:$heard')) return;
-    final result = await agent.route(heard);
+    final result =
+        await agent.route(heard, state: _engine.stateSummary(_infos, _now()));
     if (!mounted || result == null) return; // null = no data, never a guess
     if (result.actions.isEmpty) {
       final message = result.message;
@@ -479,6 +496,8 @@ class _AssistantScreenState extends State<AssistantScreen>
         _setClock(false);
       case 'path':
         _clearPath();
+      case 'check':
+        _checkDirection(command.target!);
       case 'read':
         _readText();
       case 'count':
@@ -504,6 +523,19 @@ class _AssistantScreenState extends State<AssistantScreen>
     }
   }
 
+  // Directional query: "is there anything on my left?". Answered on-device
+  // from the current detections — no server, no model, no invention.
+  void _checkDirection(String direction) {
+    final msg = _engine.check(_infos, direction, _now());
+    if (msg == null) {
+      // a direction we do not have (nothing behind the camera): say so
+      _speaker.say(askTemplates['not_understood']!, onDemand: true);
+      return;
+    }
+    _speaker.say(msg, onDemand: true);
+    setState(() => _banner = msg);
+  }
+
   // Clear-path finder: speak the most open walking direction, on demand.
   void _clearPath() {
     final msg = _engine.path(_infos, _now());
@@ -525,6 +557,9 @@ class _AssistantScreenState extends State<AssistantScreen>
     if (_reading || _camera == null) return;
     _reading = true;
     _speaker.say('Reading', onDemand: true);
+    // the control row that used to show "Reading…" is gone, so the banner is
+    // now the only visual sign the capture is in progress
+    setState(() => _banner = 'Reading…');
     try {
       await _camera!.stopImageStream();
       // the stream is paused but the last obstacle's beeps would keep
@@ -594,33 +629,28 @@ class _AssistantScreenState extends State<AssistantScreen>
     setState(() {});
   }
 
-  // Touch fallback for find mode so testing never depends on the mic.
-  static const _pickerTargets = [
-    'bottle', 'cup', 'cell phone', 'laptop', 'book', 'toothbrush',
-    'door', 'dustbin', 'chair', 'person',
-  ];
-
-  Future<void> _pickFindTarget() async {
-    final target = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: const Color(0xFF1C1C1E),
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          children: [
-            for (final t in _pickerTargets)
-              ListTile(
-                title: Text(t,
-                    style: const TextStyle(
-                        fontSize: 20, fontWeight: FontWeight.w600)),
-                onTap: () => Navigator.pop(context, t),
-              ),
-          ],
-        ),
+  /// The features page: every capability, the phrases that trigger it, the
+  /// gestures, and the name used in the greeting. Reached by swiping up — the
+  /// control row it replaced was screen space a blind user could not use.
+  Future<void> _openFeatures() async {
+    // beeps over a page the user is reading are just noise
+    final sonarWasOn = _sonar.enabled;
+    if (sonarWasOn) _sonar.setEnabled(false);
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => FeaturesPage(
+        onCommand: _dispatch,
+        onNameChanged: (name) async {
+          await AppSettings.setUserName(name);
+          if (mounted) setState(() {});
+        },
+        voiceActive: _voiceActive,
+        agentReady: _agent != null,
+        muted: _speaker.muted,
       ),
-    );
-    if (target != null) _setFind(target);
+    ));
+    if (!mounted) return;
+    if (sonarWasOn) _sonar.setEnabled(true);
+    setState(() {});
   }
 
   @override
@@ -651,6 +681,7 @@ class _AssistantScreenState extends State<AssistantScreen>
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
+      backgroundColor: Colors.black,
       // TalkBack: name the surface, expose the gestures as discoverable
       // actions (TalkBack swallows raw double-taps/long-presses), and make
       // every action reachable without vision or voice.
@@ -662,124 +693,194 @@ class _AssistantScreenState extends State<AssistantScreen>
               _toggleSonar,
           const CustomSemanticsAction(label: 'Repeat last announcement'): () =>
               _speaker.say(_banner, onDemand: true),
+          const CustomSemanticsAction(label: 'Open the features page'):
+              _openFeatures,
         },
         child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _describe,
-        onDoubleTap: _toggleSonar,
-        onLongPress: () => _speaker.say(_banner, onDemand: true),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CameraPreview(_camera!),
-            CustomPaint(
-                painter: _BoxPainter(detections: _detections, infos: _infos)),
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Container(
-                  margin: const EdgeInsets.all(12),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  // status pill is sighted-tester chrome — keep TalkBack off
-                  // it so focus lands on the controls and the live banner
-                  child: ExcludeSemantics(
-                    child: Text(
-                      '${_engine.mode == 'find' ? 'FIND ${_engine.target}' : 'WALK'}'
-                      '  ·  ${_fps.toStringAsFixed(1)} FPS'
-                      '  ·  ${_voiceActive ? '🎤 on' : '🎤 off'}'
-                      '${_sonar.enabled ? '  ·  sonar' : ''}',
-                      style: const TextStyle(fontSize: 13),
+          behavior: HitTestBehavior.opaque,
+          onTap: _describe,
+          onDoubleTap: _toggleSonar,
+          onLongPress: () => _speaker.say(_banner, onDemand: true),
+          // Swipe up replaces the control row: the features page is sighted
+          // chrome (demo, setup, learning the phrases), so it gets a gesture
+          // no blind user will hit by accident rather than screen space that
+          // was doing nothing for them.
+          onVerticalDragEnd: (details) {
+            if ((details.primaryVelocity ?? 0) < -250) _openFeatures();
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CameraPreview(_camera!),
+              CustomPaint(
+                  painter: _BoxPainter(detections: _detections, infos: _infos)),
+              // top and bottom scrims: the announcement has to stay readable
+              // over a bright doorway or a dark corridor alike
+              const _Scrim(),
+              SafeArea(child: _statusBar()),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _announcementCard(),
+                        const SizedBox(height: 12),
+                        _swipeHint(),
+                      ],
                     ),
                   ),
                 ),
               ),
-            ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                            child: _ctrlButton(
-                                _engine.mode == 'walk' ? 'WALK ✓' : 'Walk',
-                                _setWalk)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: _ctrlButton(
-                                _engine.mode == 'find'
-                                    ? 'FIND ${_engine.target} ✓'
-                                    : 'Find…',
-                                _pickFindTarget)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: _ctrlButton(
-                                _engine.useClock ? 'Clock ✓' : 'Clock',
-                                () => _setClock(!_engine.useClock))),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: _ctrlButton(
-                                _reading ? 'Reading…' : 'Read', _readText)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: _ctrlButton(
-                                _speaker.muted ? 'Unmute' : 'Mute',
-                                _toggleMute)),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: double.infinity,
-                    color: Colors.black87,
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-                    // liveRegion: TalkBack announces every new guidance
-                    // message on its own — same job as aria-live in webapp
-                    child: Semantics(
-                      liveRegion: true,
-                      child: Text(
-                        _banner,
-                        style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFFFFC247)),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+            ],
+          ),
         ),
       ),
     );
   }
+
+  // ---- chrome -------------------------------------------------------------
+
+  static const _accent = Color(0xFFFFC247);
+  static const _teal = Color(0xFF4DD0E1);
+
+  Widget _statusBar() {
+    // sighted-tester chrome — keep TalkBack off it so focus lands on the
+    // live announcement instead
+    return ExcludeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: Row(
+          children: [
+            _modeChip(),
+            const Spacer(),
+            if (_sonar.enabled) _miniChip(Icons.graphic_eq, 'sonar'),
+            if (_speaker.muted) _miniChip(Icons.volume_off, 'muted'),
+            _miniChip(_voiceActive ? Icons.mic : Icons.mic_off,
+                _fps.toStringAsFixed(1)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _modeChip() {
+    final finding = _engine.mode == 'find';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(
+            color: (finding ? _accent : _teal).withValues(alpha: 0.55)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(finding ? Icons.search : Icons.directions_walk,
+            size: 16, color: finding ? _accent : _teal),
+        const SizedBox(width: 7),
+        Text(
+          finding ? 'Finding ${_engine.target}' : 'Walking',
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+              color: finding ? _accent : _teal),
+        ),
+      ]),
+    );
+  }
+
+  Widget _miniChip(IconData icon, String label) => Container(
+        margin: const EdgeInsets.only(left: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(30),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: Colors.white70),
+          const SizedBox(width: 5),
+          Text(label,
+              style: const TextStyle(fontSize: 12, color: Colors.white70)),
+        ]),
+      );
+
+  Widget _announcementCard() => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.black.withValues(alpha: 0.72),
+              Colors.black.withValues(alpha: 0.55),
+            ],
+          ),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        // liveRegion: TalkBack announces every new guidance message on its
+        // own — same job as aria-live in webapp
+        child: Semantics(
+          liveRegion: true,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: Text(
+              _banner,
+              key: ValueKey(_banner),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 24,
+                  height: 1.25,
+                  fontWeight: FontWeight.w700,
+                  color: _accent),
+            ),
+          ),
+        ),
+      );
+
+  Widget _swipeHint() => ExcludeSemantics(
+        child: Opacity(
+          opacity: 0.5,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Icon(Icons.keyboard_arrow_up, size: 16, color: Colors.white),
+              SizedBox(width: 4),
+              Text('swipe up for everything I can do',
+                  style: TextStyle(fontSize: 12, color: Colors.white)),
+            ],
+          ),
+        ),
+      );
 }
 
-Widget _ctrlButton(String label, VoidCallback onPressed) {
-  return FilledButton.tonal(
-    onPressed: onPressed,
-    style: FilledButton.styleFrom(
-      backgroundColor: Colors.black54,
-      foregroundColor: Colors.white,
-      minimumSize: const Size(0, 52),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-    ),
-    child: Text(label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-  );
+/// Vertical scrims so white text survives a bright doorway or a dark corridor.
+class _Scrim extends StatelessWidget {
+  const _Scrim();
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.black.withValues(alpha: 0.45),
+                Colors.transparent,
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.55),
+              ],
+              stops: const [0.0, 0.18, 0.62, 1.0],
+            ),
+          ),
+        ),
+      );
 }
 
 class _BoxPainter extends CustomPainter {

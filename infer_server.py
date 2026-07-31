@@ -210,10 +210,10 @@ if __name__ == "__main__":
     ap.add_argument("--imgsz", type=int, default=640,
                     help="inference resolution; 480 is ~1.6x faster at a "
                          "small accuracy cost")
-    ap.add_argument("--agent-model",
-                    help="local Ollama model for tier-1 routing, e.g. "
-                         "qwen2.5:1.5b-instruct. Omit to serve /agent with "
-                         "keyword routing only.")
+    ap.add_argument("--agent-model", nargs="?", const="llama3.2:3b",
+                    help="local Ollama model for tier-1 routing and chat, "
+                         "e.g. llama3.2:3b (the bare flag's default). Omit "
+                         "the flag entirely for keyword routing only.")
     ap.add_argument("--whisper-model", nargs="?", const="small.en",
                     help="local faster-whisper model for WAV uploads to "
                          "/agent (default small.en)")

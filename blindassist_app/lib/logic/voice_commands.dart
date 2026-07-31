@@ -81,6 +81,22 @@ String? resolveClass(String? text) {
 /// slow open path. Mirror of voice.TRIGGER_WORDS.
 const List<String> triggerWords = ['assistant', 'question'];
 
+/// Directional query vocabulary ("what's on my left", "anything in front of
+/// me"). Both halves must appear — a direction AND a question word — so a bare
+/// "left" heard mid-sentence never fires a query. Mirror of
+/// voice._DIRECTION_WORDS / voice._CHECK_WORDS.
+const Map<String, String> _directionWords = {
+  'left': 'left',
+  'right': 'right',
+  'ahead': 'ahead',
+  'front': 'ahead',
+  'forward': 'ahead',
+};
+const List<String> _checkWords = [
+  'anything', 'something', 'what', 'whats', "what's", 'check', 'there',
+  'see', 'is'
+];
+
 /// Recognized utterance -> command, or null if not understood. Actions:
 /// walk / find / describe / clock / zones / recall. Tolerant of filler words:
 /// "please find the bottle" works.
@@ -133,6 +149,19 @@ VoiceCommand? parseCommand(String text) {
     final obj = _matchObject(words.sublist(findIdx + 1).join(' '));
     if (obj != null) return (action: 'find', target: obj);
   }
+  // Directional query, AFTER find so "find the door on my left" still finds.
+  // Deliberately on-device: "is there anything in front of me" is the question
+  // this system exists to answer, and it must work with no server and no LLM.
+  String? direction;
+  for (final w in words) {
+    if (_directionWords.containsKey(w)) {
+      direction = _directionWords[w];
+      break;
+    }
+  }
+  if (direction != null && words.any(_checkWords.contains)) {
+    return (action: 'check', target: direction);
+  }
   // LAST, deliberately: every existing command keeps its exact precedence, so
   // the trigger can only fire on an utterance nothing else claimed.
   if (words.any(triggerWords.contains)) return (action: 'ask', target: null);
@@ -145,6 +174,14 @@ List<String> grammarPhrases() {
     'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
     'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
     'mute', 'unmute', ...triggerWords];
+  for (final spoken in ['on my left', 'on my right', 'in front of me',
+    'ahead']) {
+    phrases.add('what is $spoken');
+    phrases.add('whats $spoken');
+    phrases.add('is there anything $spoken');
+    phrases.add('anything $spoken');
+  }
+  phrases.addAll(['check left', 'check right', 'check ahead']);
   final names = _findable.keys.toList()..sort();
   for (final name in names) {
     phrases.add('find $name');

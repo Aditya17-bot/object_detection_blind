@@ -226,8 +226,10 @@ class RouterTierOneTest(unittest.TestCase):
         self.assertEqual(result.source, "abstain")
         self.assertEqual(result.message, ASK_TEMPLATES["which_object"])
 
-    def test_prose_is_never_spoken(self):
-        """The failure that matters: a chatty model must not become speech."""
+    def test_bare_prose_is_never_spoken(self):
+        """Chat mode (2026-07-31) did NOT open this door: a reply is only
+        spoken when the model deliberately used the `say` channel. Loose prose
+        where a tool call belongs is still an abstention."""
         llm = FakeLLM("Sure! There is a chair to your left.")
         result = AgentRouter(llm=llm).route("what's around me")
         self.assertEqual(result.source, "abstain")
@@ -363,14 +365,90 @@ class ExecuteResultTest(unittest.TestCase):
         self.assertEqual(execute(result, GuidanceEngine(), [], 0.0),
                          [ASK_TEMPLATES["unknown"]])
 
-    def test_no_spoken_string_originates_in_the_model(self):
-        """C2's authority boundary, asserted directly: whatever prose the model
-        emits, nothing of it reaches the spoken output."""
+    def test_no_guidance_string_originates_in_the_model(self):
+        """C2's authority boundary as it stands after chat mode: unstructured
+        prose still reaches nobody's ear, and every GUIDANCE string (walk,
+        find, path, check, distance) still comes from decision.py. Only a
+        deliberate `say` reply is model-authored — see ChatModeTest."""
         llm = FakeLLM("There are three chairs and a large dog to your left.")
         result = AgentRouter(llm=llm).route("what can you see")
         spoken = execute(result, GuidanceEngine(), [], 0.0, RecordingHooks())
         self.assertEqual(spoken, [ASK_TEMPLATES["unknown"]])
         self.assertNotIn("dog", " ".join(spoken))
+
+
+class ChatModeTest(unittest.TestCase):
+    """The one hole in the authority boundary, opened deliberately on
+    2026-07-31 so the user can converse. Everything here is about keeping the
+    hole exactly as wide as it was meant to be."""
+
+    def test_say_reply_is_spoken(self):
+        llm = FakeLLM({"say": "I can see a chair on your left."})
+        result = AgentRouter(llm=llm).route("what does the room look like")
+        self.assertEqual(result.source, "chat")
+        self.assertEqual(result.actions, [])
+        self.assertEqual(result.message, "I can see a chair on your left.")
+        self.assertEqual(execute(result, GuidanceEngine(), [], 0.0),
+                         ["I can see a chair on your left."])
+
+    def test_actions_win_over_chat(self):
+        """Doing the thing beats talking about it."""
+        llm = FakeLLM({"say": "Sure, looking now.",
+                       "actions": [{"tool": "describe"}]})
+        result = AgentRouter(llm=llm).route("tell me what's here")
+        self.assertEqual(result.source, "llm")
+        self.assertIsNone(result.say)
+        self.assertEqual([a.tool for a in result.actions], ["describe"])
+
+    def test_allow_chat_false_restores_the_absolute_rule(self):
+        llm = FakeLLM({"say": "There is a chair on your left."})
+        result = AgentRouter(llm=llm, allow_chat=False).route("what's here")
+        self.assertEqual(result.source, "abstain")
+        self.assertEqual(result.message, ASK_TEMPLATES["unknown"])
+
+    def test_long_reply_is_cut_at_a_sentence(self):
+        long = ("There is a chair on your left. " * 20).strip()
+        result = AgentRouter(llm=FakeLLM({"say": long})).route("tell me more")
+        self.assertLessEqual(len(result.say), agent.MAX_SAY_CHARS)
+        self.assertTrue(result.say.endswith("."))
+
+    def test_junk_say_values_are_rejected(self):
+        for junk in ("", "   ", 42, None, {"nested": 1},
+                     '{"actions": [{"tool": "walk"}]}'):
+            result = AgentRouter(llm=FakeLLM({"say": junk})).route("hello")
+            self.assertEqual(result.source, "abstain", junk)
+            self.assertIsNone(result.say, junk)
+
+    def test_reply_dressed_as_a_tool_call_is_still_a_reply(self):
+        """What llama3.2:3b actually emits for a chat turn. Rejecting the
+        shape would throw the answer away over a format quibble."""
+        llm = FakeLLM({"actions": [{"tool": "say",
+                                    "args": {"value": "Doing fine, thanks."}}]})
+        result = AgentRouter(llm=llm).route("how's it going")
+        self.assertEqual(result.source, "chat")
+        self.assertEqual(result.say, "Doing fine, thanks.")
+
+    def test_say_shaped_call_still_obeys_allow_chat(self):
+        llm = FakeLLM({"actions": [{"tool": "say", "args": {"value": "Hi."}}]})
+        result = AgentRouter(llm=llm, allow_chat=False).route("how's it going")
+        self.assertEqual(result.source, "abstain")
+
+    def test_control_templates_are_not_the_models_to_choose(self):
+        """Observed with llama3.2:3b: "how are you today" came back as
+        abstain/listening, so the app answered a greeting with "Yes?" — which
+        sounds exactly like it mis-heard a trigger word."""
+        llm = FakeLLM({"actions": [{"tool": "abstain",
+                                    "args": {"value": "listening"}}]})
+        result = AgentRouter(llm=llm).route("how are you today")
+        self.assertEqual(result.ask, "unknown")
+        self.assertEqual(result.message, ASK_TEMPLATES["unknown"])
+
+    def test_chat_never_preempts_tier_0(self):
+        """A trained phrase must never reach the model, chat or not."""
+        llm = FakeLLM({"say": "Sure, I'll describe it."})
+        result = AgentRouter(llm=llm).route("find the door")
+        self.assertEqual(result.source, "grammar")
+        self.assertEqual(llm.calls, [])
 
 
 class TriggerWordTest(unittest.TestCase):

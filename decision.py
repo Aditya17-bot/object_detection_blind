@@ -63,16 +63,20 @@ def _cap(text):
 # Walk Mode
 # --------------------------------------------------------------------------
 
+# Walk Mode speaks ONLY at this proximity or nearer. Field feedback
+# 2026-07-31: continuous naming of everything in the room ("too much of a
+# cluster") drowned the warnings that mattered — the user stops listening, and
+# an ignored warning is worth less than silence. Medium obstacles are therefore
+# silent even dead ahead; the full inventory moved to describe(), which is
+# on-demand and cannot interrupt anything.
+WALK_MIN_PROXIMITY = "close"
+
+
 def _relevant_obstacle(info):
     """Is this detection worth warning about at all?"""
     if info.name not in OBSTACLE_CLASSES:
         return False
-    if info.proximity == "far":
-        return False
-    # medium-distance obstacles only matter when they are in the walking path
-    if info.proximity == "medium" and info.h_zone != "center":
-        return False
-    return True
+    return _PROX_RANK[info.proximity] >= _PROX_RANK[WALK_MIN_PROXIMITY]
 
 
 def walk_priority(info):
@@ -103,14 +107,19 @@ def _freer_side(chosen, infos):
     return "left" if chosen.center_x >= 0.5 else "right"
 
 
+def _spoken_name(info):
+    """The class name, or "obstacle" when the label is not trustworthy enough
+    to say out loud (see NAME_CONFIDENCE / TRUSTED_NAME_CLASSES)."""
+    if info.name in TRUSTED_NAME_CLASSES or info.confidence >= NAME_CONFIDENCE:
+        return info.name
+    return "obstacle"
+
+
 def walk_message(info, all_infos=(), use_clock=False):
     """Spoken warning for the chosen obstacle. Short on purpose; vertical
     zone is irrelevant for walking, so only left/ahead/right (or the clock
     bearing when use_clock) is spoken."""
-    name = (info.name
-            if info.name in TRUSTED_NAME_CLASSES
-            or info.confidence >= NAME_CONFIDENCE
-            else "obstacle")
+    name = _spoken_name(info)
     side = clock_phrase(info.center_x) if use_clock else _SIDE_WORD[info.h_zone]
     if info.proximity == "very close":
         if info.h_zone == "center":
@@ -163,6 +172,44 @@ def clear_path(infos):
     if ranks[best] >= _PROX_RANK["close"]:
         return "Stop, no clear path"
     return _PATH_WORD[best]
+
+
+# --------------------------------------------------------------------------
+# Directional query ("is there anything on my left?")
+# --------------------------------------------------------------------------
+# The question a blind user actually asks, and the one the old command set
+# could not answer: walk mode volunteers ONE obstacle, describe() dumps the
+# whole room, and neither answers "what is over there". This is deliberately
+# DETERMINISTIC and lives in tier 0, so it works with the laptop switched off
+# and its answer can never be a language model's invention.
+
+_DIRECTIONS = ("left", "ahead", "right")
+_DIR_ZONE = {"left": "left", "ahead": "center", "right": "right"}
+_DIR_WORD = {"left": "on your left", "ahead": "ahead", "right": "on your right"}
+_CHECK_LIMIT = 2   # two things is an answer; five is another cluster
+
+
+def check_direction(infos, direction):
+    """What is in one third of the frame, closest first.
+
+    Reports everything detected there (not just OBSTACLE_CLASSES) — the user
+    asked, so a cup on the table is a legitimate answer. Distance stays a
+    bucket: this is an orientation question, not a navigation one.
+    """
+    if direction not in _DIR_ZONE:
+        return None          # caller abstains; never guess a direction
+    zone = _DIR_ZONE[direction]
+    here = [i for i in infos if i.h_zone == zone]
+    if not here:
+        return _cap(f"nothing {_DIR_WORD[direction]}")
+    here.sort(key=lambda i: (_PROX_RANK[i.proximity], i.area), reverse=True)
+    first = here[0]
+    parts = [f"{_article(_spoken_name(first))} {_spoken_name(first)} "
+             f"{first.proximity} {_DIR_WORD[direction]}"]
+    for extra in here[1:_CHECK_LIMIT]:
+        name = _spoken_name(extra)
+        parts.append(f"and {_article(name)} {name} {extra.proximity}")
+    return _cap(", ".join(parts))
 
 
 # --------------------------------------------------------------------------
@@ -444,3 +491,10 @@ class GuidanceEngine:
     def path(self, infos, now):
         """On-demand clear-path guidance; stamps the clock like describe()."""
         return self._speak(clear_path(infos), now)
+
+    def check(self, infos, direction, now):
+        """On-demand directional query ('anything on my left?'); stamps the
+        clock like describe(). None (unknown direction) is passed straight
+        through so the caller can abstain instead of inventing an answer."""
+        msg = check_direction(infos, direction)
+        return self._speak(msg, now) if msg else None

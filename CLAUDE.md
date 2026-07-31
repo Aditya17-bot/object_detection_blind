@@ -668,3 +668,67 @@ regenerate from `test_output/gpu_bench.md`'s header for exact conditions.
   Drive snapshot — worth an occasional USB copy)**.
 - Fine-tune plan for door + dustbin written up for the user's friend in
   `finetune_handoff.md`.
+
+## Field walk + quieter guidance + real tier 1 (2026-07-31)
+
+First walk with the agent build on the phone, then the changes it forced.
+
+**What the walk proved** (server log, 612 frames over ~3 min): 76 % of frames
+carried detections, **10 `/agent` round trips** — the trigger-word dictation and
+the recognizer swap ran on hardware without killing voice recognition, which was
+the one path unit tests could not reach. Server compute ~305 ms/frame at
+720x480 (GPU; run `venv-gpu/Scripts/python.exe`, NOT `venv/` — `venv` is the CPU
+torch build and gives ~750 ms).
+
+**User's verdict:** "it keeps saying all the objects but it's too much of a
+cluster" + "I need the LLM to converse". Three changes, all mirrored
+Python/Dart:
+
+- **Walk mode is quieter.** `WALK_MIN_PROXIMITY = "close"` in decision.py /
+  `walkMinProximity` in decision.dart — medium obstacles are now silent EVEN
+  DEAD AHEAD (the old rule announced medium in the centre third). Only
+  close/very close speak. Rationale is written up as PATENT_RESEARCH §4.8: an
+  over-full warning channel is less safe, not just annoying.
+- **New `check` capability** — "is there anything in front of me", "what's on
+  my left", "anything on my right" → `check_direction()` / `checkDirection()`
+  reports the two closest things in that third, closest first, with proximity
+  buckets ("A person very close on your right, and a bottle medium").
+  Deliberately TIER 0 / on-device: works with the laptop off. Reports every
+  class, not just obstacles — the user asked, so a cup counts.
+  Parser rule needs BOTH a direction word and a question word, and sits AFTER
+  `find`, so "find the door on my left" still finds.
+- **Chat mode — the authority boundary was narrowed on purpose.** The claim is
+  now "no **guidance** token originates in the model" (was: no spoken token).
+  `RouteResult.say` is a separate channel: the model may write a REPLY, never a
+  capability's output. Guards: grounded in the state block only, `clean_say()`
+  caps at `MAX_SAY_CHARS` 240 and truncates at a sentence, bare prose where a
+  tool call belongs is still discarded, and `AgentRouter(allow_chat=False)`
+  restores the old absolute rule (the paper's ablation arm).
+  **The phone now POSTs its own `state`** (`GuidanceEngine.stateSummary`) with
+  every `/agent` request — infer_server has no engine, so without it a scene
+  question would be answered from nothing.
+
+**Tier 1 is live and needed no download:** Ollama was already installed with
+`llama3.2:3b` (also qwen3:4b, gemma2). Run the server with
+`--agent-model llama3.2:3b` (bare `--agent-model` now defaults to it).
+Measured: paraphrases route in ~1.0-1.6 s, chat answers in ~2 s. Two real model
+failures are pinned as tests — it answered a greeting with the INTERNAL
+"listening" template ("Yes?"), so `MODEL_TEMPLATES` now limits which templates
+it may pick; and it emits chat as a fake `{"tool": "say"}` call, which strict
+validation was discarding (`_say_shaped_action` accepts the shape).
+
+**UI rebuilt (same session).** All buttons removed from the main screen:
+- `lib/features_page.dart` — swipe UP from the camera view. Generated from
+  `kTools`, so a capability cannot appear there without existing. Cards show
+  the trigger phrases, tappable ones run the capability, quick-find chips give
+  a mic-free find, and it holds the settings.
+- `lib/settings.dart` — `AppSettings` (shared_preferences, new dep) + pure
+  `greetingFor()`. The app now opens with "Good morning/afternoon/evening,
+  Aditya" — for a user with no splash screen the greeting IS the "it started"
+  signal, and the name is editable in the features page.
+- Main screen is camera + scrim + mode chip + one glass announcement card.
+  Gestures unchanged (tap describe / double-tap sonar / long-press repeat) plus
+  swipe-up; `Sonar.setEnabled()` added so the beeps pause while that page is open.
+
+Test counts: **219 Python / 157 Dart**, all passing. `flutter analyze` clean
+apart from the 3 pre-existing `avoid_print` infos in detector.dart.

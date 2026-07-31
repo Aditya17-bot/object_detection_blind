@@ -58,6 +58,14 @@ ASK_TEMPLATES = {
 }
 DEFAULT_ASK = "unknown"
 
+# The subset the MODEL may choose from. "listening", "working" and
+# "unsupported" are control acknowledgements the host speaks at a moment it
+# alone knows about; letting the router pick them produced a real failure —
+# llama3.2:3b answered "how are you today" with "Yes?", which sounds like the
+# app mis-heard a trigger word. Anything else the model asks for is clamped to
+# DEFAULT_ASK rather than spoken.
+MODEL_TEMPLATES = ("unknown", "not_understood", "which_object")
+
 # Saying "assistant" opens the open-dictation window (see voice.TRIGGER_WORDS).
 # Kept in the registry as an INTERNAL tool: it is a control action, not a
 # capability, so it is never offered to the LLM.
@@ -94,6 +102,10 @@ TOOLS = (
              arg="class", required=True, examples=("where is the cup",)),
     ToolSpec("path", "which walking direction is clearest right now",
              examples=("clear path", "which way")),
+    ToolSpec("check", "what is in one direction; argument left, ahead or right",
+             arg="direction", required=True,
+             examples=("what is on my left", "is there anything in front of me",
+                       "anything on my right")),
     ToolSpec("read", "read printed text aloud from the camera",
              examples=("read", "read text")),
     ToolSpec("clock", "speak directions as clock bearings, e.g. 2 o'clock",
@@ -126,7 +138,17 @@ ARG_ENUMS = {
     "class": tuple(sorted(TARGET_CLASSES)),
     "onoff": ("on", "off"),
     "template": tuple(sorted(ASK_TEMPLATES)),
+    "direction": ("left", "ahead", "right"),
 }
+
+# Spoken variants the model (or a phone) may send for a direction. Same
+# forgiving-in/strict-out rule as every other argument: resolved here, then it
+# still has to be a member of ARG_ENUMS["direction"].
+_DIRECTION_ALIASES = {"front": "ahead", "forward": "ahead", "centre": "ahead",
+                      "center": "ahead", "straight": "ahead",
+                      "in front": "ahead", "in front of me": "ahead",
+                      "my left": "left", "my right": "right",
+                      "on my left": "left", "on my right": "right"}
 
 # Keys the model might plausibly use for its argument. Forgiving on the way in,
 # strict on the way out — the value still has to survive ARG_ENUMS.
@@ -152,14 +174,19 @@ class Action:
 @dataclass
 class RouteResult:
     actions: list = field(default_factory=list)
-    source: str = "abstain"      # grammar | llm | abstain
+    source: str = "abstain"      # grammar | llm | chat | abstain
     latency_ms: float = 0.0
     ask: str = None              # ASK_TEMPLATES key when source == "abstain"
     error: str = None            # why tier 1 failed, for the UI/eval log
+    say: str = None              # MODEL-AUTHORED conversational reply (chat)
 
     @property
     def message(self):
-        """The spoken template for an abstention, or None."""
+        """What to speak: a model-authored chat reply, an abstention template,
+        or None. `say` is the ONE string in this system the model wrote — see
+        the module docstring's authority-boundary note."""
+        if self.say:
+            return self.say
         return ASK_TEMPLATES[self.ask] if self.ask else None
 
 
@@ -214,8 +241,10 @@ def prompt_tool_list():
             arg = "object" + ("" if spec.required else " (optional)")
         elif spec.arg == "onoff":
             arg = "on or off" + ("" if spec.required else " (optional)")
+        elif spec.arg == "direction":
+            arg = "left, ahead or right"
         elif spec.arg == "template":
-            arg = " or ".join(ARG_ENUMS["template"])
+            arg = " or ".join(MODEL_TEMPLATES)
         else:
             arg = "none"
         lines.append(f"{spec.name} | arg: {arg} | {spec.description}")
@@ -279,6 +308,10 @@ def validate_action(raw):
             return None
     else:
         arg = arg.lower()
+        if spec.arg == "direction":
+            arg = _DIRECTION_ALIASES.get(arg, arg)
+        if spec.arg == "template" and arg not in MODEL_TEMPLATES:
+            arg = DEFAULT_ASK          # clamped, never spoken as chosen
         if arg not in ARG_ENUMS[spec.arg]:
             return None
     return Action(spec.name, arg)
@@ -347,6 +380,55 @@ def render_state(state):
 # The two-tier router
 # --------------------------------------------------------------------------
 
+# Longest model-authored reply we will speak. A blind user cannot skim, cannot
+# skip ahead, and cannot see that a monologue is coming — length is a usability
+# property here, not a formatting preference. Overruns are cut at a sentence.
+MAX_SAY_CHARS = 240
+
+
+def clean_say(raw):
+    """Model free text -> a speakable reply, or None if it is not usable.
+
+    The model may write this sentence (user decision 2026-07-31, chat mode),
+    which makes it untrusted input like any other: a non-string, an empty
+    string, or a JSON blob that leaked through is rejected rather than read
+    aloud, and anything over MAX_SAY_CHARS is truncated at the last sentence
+    end so the user never gets a monologue they cannot interrupt."""
+    if not isinstance(raw, str):
+        return None
+    text = " ".join(raw.split())
+    if not text or text.startswith(("{", "[")):
+        return None
+    if len(text) > MAX_SAY_CHARS:
+        cut = text[:MAX_SAY_CHARS]
+        stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        text = cut[:stop + 1] if stop > 40 else cut.rsplit(" ", 1)[0]
+    return text.strip() or None
+
+
+# Tool names a model reaches for when it means "just answer". None of them is a
+# real capability, so validate_action would reject them — which would throw the
+# answer away instead of speaking it.
+_SAY_TOOLS = ("say", "answer", "speak", "reply", "chat", "respond")
+
+
+def _say_shaped_action(raw):
+    """A chat reply dressed up as a tool call -> the sentence, else None."""
+    items = raw if isinstance(raw, list) else [raw]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("tool") or item.get("name")
+        if not isinstance(name, str) or name.strip().lower() not in _SAY_TOOLS:
+            continue
+        args = item.get("args") if isinstance(item.get("args"), dict) else item
+        for key in ("value", "text", "message", "say", "content", "answer"):
+            said = clean_say(args.get(key) if isinstance(args, dict) else None)
+            if said:
+                return said
+    return None
+
+
 class AgentRouter:
     """Tier 0 = the shipped keyword grammar (~0 ms, no model, works offline).
     Tier 1 = a local offline LLM, consulted ONLY on a tier-0 miss.
@@ -354,12 +436,22 @@ class AgentRouter:
     llm=None leaves tier 1 disabled, and the router is then behaviourally
     identical to today's system — a property enforced by a regression test over
     every phrase in the grammar. Degradation is toward FEWER capabilities,
-    never toward wrong ones."""
+    never toward wrong ones.
 
-    def __init__(self, llm=None, parse=parse_command, max_actions=2):
+    allow_chat opens the narrow hole in the authority boundary: on a tier-0
+    miss the model may return a sentence of its own instead of a tool call, and
+    that sentence is spoken. It is answered from `state` — the detector's own
+    output — never from the model's world knowledge, and it can only ever be a
+    REPLY. Guidance (walk warnings, find, distance, clear path, check) is still
+    generated exclusively by decision.py. allow_chat=False restores the
+    original absolute rule and is what the paper's ablation arm uses."""
+
+    def __init__(self, llm=None, parse=parse_command, max_actions=2,
+                 allow_chat=True):
         self.llm = llm
         self._parse = parse
         self.max_actions = max_actions
+        self.allow_chat = allow_chat
 
     @property
     def enabled(self):
@@ -393,6 +485,26 @@ class AgentRouter:
             raw = self.llm.route(text, render_state(state), prompt_tool_list())
         except Exception as exc:          # timeout, refused connection, garbage
             return done(ask=DEFAULT_ASK, error=f"llm unavailable ({exc})")
+
+        # A conversational reply, checked BEFORE the action list: the model
+        # answers a question with {"say": "..."} and calls a tool with
+        # {"actions": [...]}. An action always wins if it sent both — doing the
+        # thing beats talking about it.
+        said = None
+        if isinstance(raw, dict) and not raw.get("actions"):
+            said = clean_say(raw.get("say") or raw.get("answer"))
+        else:
+            if isinstance(raw, dict):
+                raw = raw["actions"]
+            # Small models routinely express the reply as a tool call named
+            # "say" — llama3.2:3b does it on roughly every chat turn. Accept
+            # the shape rather than losing the answer to a format quibble; the
+            # text still goes through clean_say and is still only ever a reply.
+            said = _say_shaped_action(raw)
+        if said:
+            if not self.allow_chat:
+                return done(ask=DEFAULT_ASK, error="chat disabled")
+            return done(say=said, source="chat")
 
         if isinstance(raw, dict):
             raw = raw.get("actions", raw)
@@ -494,13 +606,16 @@ def execute_action(action, engine, infos, now, hooks=None):
         return engine.recall(arg, now)
     if tool == "path":
         return engine.path(infos, now)
+    if tool == "check":
+        # None = a direction the engine refused; abstain rather than guess.
+        return engine.check(infos, arg, now) or ASK_TEMPLATES["not_understood"]
     return None                           # unreachable: validate_action gates
 
 
 def execute(result, engine, infos, now, hooks=None):
     """Run a whole RouteResult; returns the list of messages to speak in order.
-    An abstention yields exactly its template."""
-    if result.ask and not result.actions:
+    An abstention yields exactly its template, a chat reply yields itself."""
+    if not result.actions and result.message:
         return [result.message]
     out = []
     for action in result.actions:
@@ -514,8 +629,9 @@ def execute(result, engine, infos, now, hooks=None):
 # Local offline LLM client (Ollama)
 # --------------------------------------------------------------------------
 
-_SYSTEM = """You route a blind user's spoken request to one or two tools.
-You never answer the user directly and you never describe what the camera sees.
+_SYSTEM = """You are the assistant inside a camera app for a blind user.
+You do one of two things with each request: run a tool, or answer in one short
+sentence.
 
 Tools:
 {tools}
@@ -523,16 +639,28 @@ Tools:
 Object names you may use as an argument:
 {classes}
 
-Reply with JSON only, in this exact form:
+To run tools, reply exactly:
 {{"actions": [{{"tool": "find", "args": {{"value": "bottle"}}}}]}}
 
+To answer a question or make conversation, reply exactly:
+{{"say": "one short sentence"}}
+
 Rules:
+- Prefer a tool whenever one matches. Talking is the fallback, not the default.
+- Greetings and small talk get a short "say" reply, never a tool and never an
+  abstention.
 - At most two actions, in the order the user asked for them.
 - Use only the tool names and object names listed above.
-- If the request is not something these tools do, or you cannot tell which tool
-  is meant, reply {{"actions": [{{"tool": "abstain", "args": {{"value": "unknown"}}}}]}}.
-- Never invent objects. The state block is the only thing you know about the
-  world."""
+- The STATE block is the ONLY thing you know about the world. Never state that
+  an object is present, absent, near or far unless the state block says so. If
+  you are asked about something the state block does not cover, say you cannot
+  see that.
+- Never give walking, crossing, or safety instructions in a "say" reply — route
+  those to the path or check tool instead.
+- One sentence. The user hears this out loud and cannot skim it.
+- If the request is not something these tools do and is not a question you can
+  answer from the state block, reply
+  {{"actions": [{{"tool": "abstain", "args": {{"value": "unknown"}}}}]}}."""
 
 
 class OllamaRouter:
@@ -545,9 +673,9 @@ class OllamaRouter:
 
     Uses urllib rather than requests so the agent layer adds no dependency."""
 
-    def __init__(self, model="qwen2.5:1.5b-instruct",
-                 host="http://127.0.0.1:11434", timeout=6.0,
-                 keep_alive="30m", num_predict=48):
+    def __init__(self, model="llama3.2:3b",
+                 host="http://127.0.0.1:11434", timeout=8.0,
+                 keep_alive="30m", num_predict=96):
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout

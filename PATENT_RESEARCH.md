@@ -191,6 +191,26 @@ prior art. Ranked by perceived strength of the novelty case.
      synthesised action); and a reply containing one unusable action is
      discarded whole rather than partially executed, since performing the half
      that happened to parse is itself an unverified action.
+  7. **The boundary was narrowed, deliberately, on 2026-07-31** (user
+     decision after the first hardware walk): the model may now author a
+     **conversational reply**, and only that. The claim is therefore no longer
+     "no spoken token originates in the model" but the sharper and more
+     defensible **"no *guidance* token originates in the model"**. The split is
+     enforced structurally, not by prompt: a reply travels in a separate `say`
+     channel that the executor never routes through a capability; guidance
+     (walk warnings, find, distance, clear path, directional query) is
+     unreachable from that channel; unstructured prose emitted where a tool
+     call belongs is still discarded, so a chatty model does not become speech
+     by accident; replies are grounded in the same deterministic state block
+     and are length-capped and sentence-truncated, because a user who cannot
+     skim also cannot skip a monologue; and a single flag (`allow_chat=False`)
+     restores the absolute rule, which is what the paper's ablation arm uses.
+     Two hardware-observed failures are pinned as tests: a model that answered
+     a greeting with the *internal* "listening" template (so the app sounded
+     like it had mis-heard a trigger word — control templates are now
+     unselectable), and a model that expresses its reply as a fake `say` tool
+     call, which strict validation would have discarded as malformed, losing a
+     legitimate answer over a format quibble.
 - **Why non-obvious:** structured/constrained LLM output is well known. The
   step here is *why* it is applied: for a consumer who cannot visually reject a
   wrong answer, hallucination containment is not a quality improvement, it is a
@@ -216,6 +236,40 @@ prior art. Ranked by perceived strength of the novelty case.
   None of these, as far as the search so far shows, frames the containment as a
   *non-visual-consumer safety* requirement or extends abstention across
   perception, planning, transport AND dialogue as one principle.
+
+### 4.8 Attention budget: proximity-gated warnings plus on-demand directional query *(moderate — and the cleanest statement of the §9 thesis)*
+- **What:** the continuous channel is cut back to a hazard threshold, and the
+  information removed from it is made available on request instead. Concretely:
+  walk warnings fire only at *close* or nearer (previously *medium* also spoke
+  when centred), and a new deterministic capability answers "is there anything
+  in front of me / on my left" with the two nearest objects in that third of
+  the frame, closest first, with their proximity buckets.
+- **Why:** from the first hardware walk (2026-07-31) the user's words were
+  "it keeps saying all the objects but it's too much of a cluster". This is the
+  failure mode the whole project's thesis predicts: a warning stream that
+  exceeds the user's attention budget is not merely annoying, it is **less
+  safe**, because the user stops parsing it and the one warning that mattered
+  arrives inside noise they have already tuned out. An unheeded warning has
+  negative value — it consumed attention and delivered nothing.
+- **The design move:** do not suppress information, **change who initiates it**.
+  Continuous output carries only what the user must act on now; everything else
+  moves to a pull interface the user can spend attention on when they choose.
+  The directional query is the pull counterpart of the walk warning: same
+  ordinal localisation core, same proximity buckets, same trust gating on the
+  class name (a low-confidence label is answered as "an obstacle"), but issued
+  only on request and reporting *everything* detected in that direction rather
+  than obstacles alone — because a user who asks has, by asking, granted the
+  attention.
+- **Non-obviousness angle:** the novelty is not the threshold value. It is
+  treating the *rate* of assistive speech as a safety-relevant design variable
+  with a push/pull split, in a system where the same perception core serves
+  both channels, so the pulled answer is guaranteed consistent with the pushed
+  warning — a claim a two-subsystem design (navigation aid + separate
+  assistant) cannot make.
+- **Evidence to gather:** announcements per minute before/after on the same
+  recorded clips, plus the user's subjective load. The clips exist
+  (`test_output/eval_*.mp4`), so the before/after is reproducible from the
+  logged announcement streams.
 
 ### 4.5 Pulse-count haptic direction *(minor)*
 - **What:** on a single-vibrator phone, direction is encoded by **number of
@@ -441,3 +495,39 @@ vs. useful announcements retained.
   silent environment misconfiguration, not the algorithm, set a published
   performance number — an argument for reporting per-stage timings and the
   device/build under which they were taken.
+
+- **2026-07-31** — **first hardware walk of the agent build, and the two
+  changes it forced.** The dictation path (trigger word → open recognizer →
+  router) ran on the handset for the first time: 10 `/agent` round trips in a
+  three-minute walk with no loss of speech recognition, which closes the "the
+  recognizer swap cannot be unit-tested" open item in §8 for the on-device
+  path. Detection was healthy (464 of 612 frames carried detections) and the
+  GPU server sustained ~305 ms/frame end-to-end at 720x480.
+  Two design changes came directly out of the walk, both now in Python and Dart
+  with mirrored tests (**219 Python / 157 Dart**):
+  1. **Attention budget (new §4.8).** The user's report — "it keeps saying all
+     the objects, it's too much of a cluster" — is the predicted failure of an
+     over-full continuous channel. Walk warnings now fire only at *close* or
+     nearer, and the removed information is available on demand through a new
+     deterministic **directional query** ("is there anything in front of me")
+     that answers from the same ordinal core. Push is now hazard-only; pull
+     carries inventory. This is the thesis in its cleanest form and should
+     probably lead the paper's motivation section rather than sit as a feature.
+  2. **The authority boundary narrowed (§4.7 point 7).** At the user's
+     instruction the local model may now author a *conversational reply* and
+     nothing else, so the claim becomes "no **guidance** token originates in
+     the model" — enforced by a separate reply channel the executor cannot
+     route through a capability, with grounding, length capping and a flag that
+     restores the absolute rule for the ablation. This is a genuine weakening
+     of the strongest version of the claim and the paper must say so plainly;
+     the compensating argument is that the split is structural rather than
+     prompt-based, and that the safety-critical surface is unchanged.
+  Tier 1 is now real rather than projected: `llama3.2:3b` under Ollama, on the
+  laptop already used for detection, routing paraphrases at ~1.0-1.6 s and
+  answering chat at ~2 s, with ~3 GB VRAM free alongside both detectors. Two
+  hardware-observed model failures are pinned as regression tests (see §4.7.7).
+  Also: the handset UI dropped its entire control row in favour of gesture +
+  voice with a swipe-up reference page, and the app now greets the user by name
+  at launch — the greeting doubles as the "it started" signal for a user with
+  no splash screen, which is a small but real accessibility point worth a line
+  in the paper's system description.

@@ -38,12 +38,17 @@ class AgentClient {
   /// Utterance -> route result, or null when the server produced NO data.
   /// Never throws: this is called from the voice thread's callback, where an
   /// exception silently ends speech recognition for the whole session.
-  Future<AgentRouteResult?> route(String text) async {
+  /// [state] is this phone's deterministic scene summary
+  /// (GuidanceEngine.stateSummary). The laptop has no engine and no frame
+  /// memory of its own, so without it a question about the scene would be
+  /// answered from nothing — which is exactly how a model starts inventing.
+  Future<AgentRouteResult?> route(String text,
+      {Map<String, dynamic>? state}) async {
     try {
       final response = await _client
           .post(_uri,
               headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'text': text}))
+              body: jsonEncode({'text': text, 'state': ?state}))
           .timeout(_agentTimeout);
       if (response.statusCode != 200) {
         // ignore: avoid_print

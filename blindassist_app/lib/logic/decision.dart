@@ -58,13 +58,19 @@ String _cap(String text) => text[0].toUpperCase() + text.substring(1);
 // Walk Mode
 // ---------------------------------------------------------------------------
 
+/// Walk Mode speaks ONLY at this proximity or nearer. Field feedback
+/// 2026-07-31: continuous naming of everything in the room ("too much of a
+/// cluster") drowned the warnings that mattered — the user stops listening,
+/// and an ignored warning is worth less than silence. Medium obstacles are
+/// therefore silent even dead ahead; the full inventory moved to describe()
+/// and checkDirection(), which are on-demand and interrupt nothing.
+/// Mirror of decision.WALK_MIN_PROXIMITY.
+const String walkMinProximity = 'close';
+
 /// Is this detection worth warning about at all?
 bool _relevantObstacle(ObjectInfo info) {
   if (!obstacleClasses.contains(info.name)) return false;
-  if (info.proximity == 'far') return false;
-  // medium-distance obstacles only matter when they are in the walking path
-  if (info.proximity == 'medium' && info.hZone != 'center') return false;
-  return true;
+  return _proxRank[info.proximity]! >= _proxRank[walkMinProximity]!;
 }
 
 /// Sort key: closer wins, then more central, then bigger.
@@ -105,12 +111,15 @@ String _freerSide(ObjectInfo chosen, List<ObjectInfo> infos) {
 /// Spoken warning for the chosen obstacle. Short on purpose; vertical zone is
 /// irrelevant for walking, so only left/ahead/right (or the clock bearing when
 /// useClock) is spoken.
+String _spokenName(ObjectInfo info) =>
+    (trustedNameClasses.contains(info.name) ||
+            info.confidence >= nameConfidence)
+        ? info.name
+        : 'obstacle';
+
 String walkMessage(ObjectInfo info,
     [List<ObjectInfo> allInfos = const [], bool useClock = false]) {
-  final name = (trustedNameClasses.contains(info.name) ||
-          info.confidence >= nameConfidence)
-      ? info.name
-      : 'obstacle';
+  final name = _spokenName(info);
   final side = useClock ? clockPhrase(info.centerX) : _sideWord[info.hZone]!;
   if (info.proximity == 'very close') {
     final String dodge;
@@ -182,6 +191,49 @@ String clearPath(List<ObjectInfo> infos) {
   }
   if (ranks[best]! >= _proxRank['close']!) return 'Stop, no clear path';
   return _pathWord[best]!;
+}
+
+// ---------------------------------------------------------------------------
+// Directional query ("is there anything on my left?")
+// ---------------------------------------------------------------------------
+// The question a blind user actually asks, and the one the old command set
+// could not answer: walk mode volunteers ONE obstacle, describe() dumps the
+// whole room, neither answers "what is over there". Deterministic and on the
+// PHONE, so it works with the laptop switched off and its answer can never be
+// a language model's invention. Mirror of decision.check_direction.
+
+const Map<String, String> _dirZone = {
+  'left': 'left',
+  'ahead': 'center',
+  'right': 'right',
+};
+const Map<String, String> _dirWord = {
+  'left': 'on your left',
+  'ahead': 'ahead',
+  'right': 'on your right',
+};
+const int _checkLimit = 2; // two things is an answer; five is another cluster
+
+/// What is in one third of the frame, closest first. Returns null for a
+/// direction we do not have (the caller abstains rather than guessing).
+String? checkDirection(List<ObjectInfo> infos, String direction) {
+  final zone = _dirZone[direction];
+  if (zone == null) return null;
+  final here = infos.where((i) => i.hZone == zone).toList();
+  if (here.isEmpty) return _cap('nothing ${_dirWord[direction]}');
+  here.sort((a, b) {
+    final r = _proxRank[b.proximity]!.compareTo(_proxRank[a.proximity]!);
+    return r != 0 ? r : b.area.compareTo(a.area);
+  });
+  final first = _spokenName(here.first);
+  final parts = <String>[
+    '${_article(first)} $first ${here.first.proximity} ${_dirWord[direction]}'
+  ];
+  for (final extra in here.skip(1).take(_checkLimit - 1)) {
+    final name = _spokenName(extra);
+    parts.add('and ${_article(name)} $name ${extra.proximity}');
+  }
+  return _cap(parts.join(', '));
 }
 
 // ---------------------------------------------------------------------------
@@ -478,4 +530,56 @@ class GuidanceEngine {
   /// On-demand count of one class ("how many chairs"); stamps the clock.
   String count(List<ObjectInfo> infos, String target, double now) =>
       _speak(countMessage(infos, target), now);
+
+  /// Compact FACTS for the remote router, built from the detector's own
+  /// output and this engine's state — never from a description. Mirror of
+  /// agent.state_summary; the phone is the only party that knows what is on
+  /// screen, so it ships this with every /agent request. It is what lets the
+  /// laptop's LLM answer "is the door still there" from perception instead of
+  /// from imagination.
+  Map<String, dynamic> stateSummary(List<ObjectInfo> infos, double now) {
+    final grouped = <String, Map<String, dynamic>>{};
+    for (final i in infos) {
+      final e = grouped.putIfAbsent(
+          i.name,
+          () => {
+                'name': i.name,
+                'zone': i.hZone,
+                'proximity': i.proximity,
+                'count': 0,
+                '_area': -1.0,
+              });
+      e['count'] = (e['count'] as int) + 1;
+      if (i.area > (e['_area'] as double)) {
+        // describe the most visible instance
+        e['zone'] = i.hZone;
+        e['proximity'] = i.proximity;
+        e['_area'] = i.area;
+      }
+    }
+    final visible = grouped.values
+        .map((e) => {for (final k in e.keys.where((k) => k != '_area')) k: e[k]})
+        .toList();
+    final remembered = _memory.entries
+        .where((e) => now - e.value.$2 <= memoryTtl)
+        .map((e) => e.key)
+        .toList()
+      ..sort();
+    return {
+      'mode': mode,
+      'target': target,
+      'clock': useClock,
+      'visible': visible,
+      'last_said': _lastMsg,
+      'remembered': remembered,
+    };
+  }
+
+  /// On-demand directional query ("anything on my left?"); stamps the clock
+  /// like describe(). null (unknown direction) passes straight through so the
+  /// caller abstains instead of inventing an answer.
+  String? check(List<ObjectInfo> infos, String direction, double now) {
+    final msg = checkDirection(infos, direction);
+    return msg == null ? null : _speak(msg, now);
+  }
 }

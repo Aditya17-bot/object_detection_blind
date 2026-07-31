@@ -2,9 +2,9 @@
 
 import unittest
 
-from decision import (GuidanceEngine, clear_path, count_message, find_message,
-                      find_target, pick_obstacle, recall_message,
-                      summarize_scene, walk_message)
+from decision import (GuidanceEngine, check_direction, clear_path,
+                      count_message, find_message, find_target, pick_obstacle,
+                      recall_message, summarize_scene, walk_message)
 from position import ObjectInfo, analyze_box, direction_phrase
 
 _CENTER_X = {"left": 0.15, "center": 0.5, "right": 0.85}
@@ -32,11 +32,21 @@ class TestPickObstacle(unittest.TestCase):
     def test_far_never_announced(self):
         self.assertIsNone(pick_obstacle([info("chair", proximity="far")]))
 
-    def test_medium_only_matters_in_center(self):
+    def test_medium_is_silent_even_dead_ahead(self):
+        # 2026-07-31: walk mode used to announce a medium obstacle in the
+        # centre. Field feedback was that continuous naming became noise, so
+        # the line moved to WALK_MIN_PROXIMITY ("close"). The full inventory
+        # is still available on demand through describe() / check().
         self.assertIsNone(pick_obstacle([info("chair", "left",
                                               proximity="medium")]))
-        center = info("chair", "center", proximity="medium")
-        self.assertIs(pick_obstacle([center]), center)
+        self.assertIsNone(pick_obstacle([info("chair", "center",
+                                              proximity="medium")]))
+
+    def test_close_and_very_close_still_announced(self):
+        close = info("chair", "left", proximity="close")
+        self.assertIs(pick_obstacle([close]), close)
+        vc = info("chair", "right", proximity="very close")
+        self.assertIs(pick_obstacle([vc]), vc)
 
     def test_find_classes_never_obstacles(self):
         bottle = info("bottle", "center", proximity="very close")
@@ -410,6 +420,53 @@ class TestCount(unittest.TestCase):
         e = GuidanceEngine()
         self.assertEqual(e.count([info("chair"), info("chair")], "chair", 0.0),
                          "2 chairs")
+
+
+class TestCheckDirection(unittest.TestCase):
+    def test_empty_direction_says_nothing_there(self):
+        scene = [info("chair", "right")]
+        self.assertEqual(check_direction(scene, "left"), "Nothing on your left")
+        self.assertEqual(check_direction(scene, "ahead"), "Nothing ahead")
+
+    def test_reports_what_is_there_with_bucket(self):
+        scene = [info("chair", "left", proximity="close")]
+        self.assertEqual(check_direction(scene, "left"),
+                         "A chair close on your left")
+
+    def test_ahead_maps_to_center_zone(self):
+        scene = [info("door", "center", proximity="medium")]
+        self.assertEqual(check_direction(scene, "ahead"),
+                         "A door medium ahead")
+
+    def test_closest_first_and_capped_at_two(self):
+        scene = [info("chair", "right", proximity="far", area=0.4),
+                 info("person", "right", proximity="very close"),
+                 info("bottle", "right", proximity="medium")]
+        msg = check_direction(scene, "right")
+        self.assertEqual(msg,
+                         "A person very close on your right, "
+                         "and a bottle medium")
+        self.assertNotIn("chair", msg)   # the third item is dropped, not read
+
+    def test_find_classes_are_reported_too(self):
+        # unlike walk mode, a query answers about anything detected: the user
+        # asked, so a cup on the table is a legitimate answer
+        self.assertEqual(check_direction([info("cup", "left")], "left"),
+                         "A cup close on your left")
+
+    def test_untrusted_name_becomes_obstacle(self):
+        scene = [info("toilet", "left", conf=0.65)]
+        self.assertEqual(check_direction(scene, "left"),
+                         "An obstacle close on your left")
+
+    def test_unknown_direction_returns_none(self):
+        self.assertIsNone(check_direction([info("chair")], "behind"))
+
+    def test_engine_check_stamps_clock_and_passes_none_through(self):
+        e = GuidanceEngine()
+        self.assertEqual(e.check([info("chair", "left")], "left", 0.0),
+                         "A chair close on your left")
+        self.assertIsNone(e.check([info("chair")], "behind", 1.0))
 
 
 if __name__ == "__main__":

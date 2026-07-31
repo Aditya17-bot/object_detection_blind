@@ -106,6 +106,27 @@ void main() {
       expect(parseCommand('question how many chairs'),
           (action: 'count', target: 'chair'));
     });
+    test('direction queries parse on-device', () {
+      for (final text in ['is there anything in front of me', 'what is ahead',
+        'anything in front of me', 'check ahead']) {
+        expect(parseCommand(text), (action: 'check', target: 'ahead'),
+            reason: text);
+      }
+      expect(parseCommand('what is on my left'),
+          (action: 'check', target: 'left'));
+      expect(parseCommand("what's on my left"),
+          (action: 'check', target: 'left'));
+      expect(parseCommand('is there anything on my right'),
+          (action: 'check', target: 'right'));
+    });
+    test('a direction never steals an existing command', () {
+      expect(parseCommand('find the door on my left'),
+          (action: 'find', target: 'door'));
+      expect(parseCommand('where is the cup on my right'),
+          (action: 'recall', target: 'cup'));
+      expect(parseCommand('which way is clear'), (action: 'path', target: null));
+      expect(parseCommand('left'), isNull);
+    });
     test('plurals parse to the singular class', () {
       expect(parseCommand('how many chairs'), (action: 'count', target: 'chair'));
       expect(parseCommand('how many people'), (action: 'count', target: 'person'));

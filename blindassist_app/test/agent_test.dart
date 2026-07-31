@@ -205,5 +205,73 @@ void main() {
       final client = _client(MockClient((_) async => http.Response('<html>', 200)));
       expect(await client.route('find the door'), isNull);
     });
+
+    test('the phone ships its own scene state', () async {
+      // The laptop has no engine: without this the LLM would answer a question
+      // about the room from nothing, which is how invention starts.
+      Map<String, dynamic>? sent;
+      final client = _client(MockClient((request) async {
+        sent = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response('{"source":"chat","say":"All clear."}', 200);
+      }));
+      await client.route('how does it look',
+          state: {'mode': 'walk', 'visible': []});
+      expect(sent!['text'], 'how does it look');
+      expect(sent!['state'], {'mode': 'walk', 'visible': []});
+    });
+  });
+
+  group('chat replies', () {
+    // The one deliberate hole in the authority boundary (2026-07-31): the
+    // laptop's LLM may author a REPLY. These pin how wide the hole is.
+    test('a say reply is carried through and spoken', () {
+      final r = parseRouteResponse(
+          {'source': 'chat', 'say': 'There is a chair on your left.'});
+      expect(r.source, 'chat');
+      expect(r.actions, isEmpty);
+      expect(r.message, 'There is a chair on your left.');
+    });
+
+    test('actions win over chat', () {
+      final r = parseRouteResponse({
+        'source': 'llm',
+        'say': 'Sure, looking now.',
+        'actions': [
+          {'tool': 'describe'}
+        ],
+      });
+      expect(r.say, isNull);
+      expect(r.actions.single.tool, 'describe');
+    });
+
+    test('junk say values are never spoken', () {
+      for (final junk in <Object?>[
+        '', '   ', 42, null, {'nested': 1}, '{"tool": "walk"}'
+      ]) {
+        final r = parseRouteResponse({'source': 'chat', 'say': junk});
+        expect(r.say, isNull, reason: '$junk');
+        expect(r.source, 'abstain', reason: '$junk');
+      }
+    });
+
+    test('a long reply is cut at a sentence', () {
+      final long = ('There is a chair on your left. ' * 20).trim();
+      final r = parseRouteResponse({'source': 'chat', 'say': long});
+      expect(r.say!.length, lessThanOrEqualTo(maxSayChars));
+      expect(r.say, endsWith('.'));
+    });
+  });
+
+  group('direction argument', () {
+    test('aliases resolve, unknown directions are rejected', () {
+      expect(validateAction({'tool': 'check', 'args': {'value': 'front'}})?.arg,
+          'ahead');
+      expect(validateAction({'tool': 'check', 'args': {'value': 'LEFT'}})?.arg,
+          'left');
+      expect(validateAction({'tool': 'check', 'args': {'value': 'behind'}}),
+          isNull);
+      // required argument: a bare check is not actionable
+      expect(validateAction({'tool': 'check'}), isNull);
+    });
   });
 }
