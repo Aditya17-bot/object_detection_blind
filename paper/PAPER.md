@@ -1,8 +1,15 @@
 # Say Less, Never Mislead: Cross-Layer Selective Abstention in an Offline Assistive Perception System, Extended to a Tool-Mediated Voice Agent
 
-**Status:** working draft, 2026-07-30. Results sections are **reserved** — the
-routing numbers do not exist until the router runs (see `EVAL_PROTOCOL.md`,
-frozen before implementation). Convert to ACM LaTeX only at submission.
+**Status:** complete draft, 2026-08-01. All evaluation arms are measured; every
+number here is traceable to a run report in `test_output/` under eval-set
+sha256 `e4eeca83070e2d66`.
+
+**This file is the long-form master.** The submission artifact is
+`main.tex` (ACM `acmart`, self-contained TikZ/pgfplots) with
+`references.bib`; see `README_OVERLEAF.md`. When a number changes, change it
+here *and* in `main.tex` — a discrepancy between them is a defect, and one
+such discrepancy (T4 latency quoted from a superseded run) is what prompted the
+2026-08-01 re-run of every configuration.
 
 **Target venue:** ASSETS Late-Breaking Work / poster. Alternates: W4A, CHI LBW.
 Post an arXiv preprint on submission. **Patent note:** a preprint is a public
@@ -58,11 +65,11 @@ pure-logic core with mirrored test suites), and makes one architectural claim:
 > single confidence threshold at the output.
 
 We support the claim with four mechanisms already implemented and tested in the
-system (§4), and then extend it to a layer that did not previously exist in
-BlindAssist: the **dialogue layer** (§5). The extension is a voice agent in
-which a local, offline language model is granted authority to *select* one of
-thirteen deterministic capabilities, and no authority whatsoever to *author*
-spoken content. Fabricated perception is therefore prevented structurally, not
+system (§4.1–4.4), and then extend it to a layer that did not previously exist
+in BlindAssist: the **dialogue layer** (§4.5, §5). The extension is a voice
+agent in which a local, offline language model is granted authority to *select*
+one of fourteen deterministic capabilities, and no authority to *author*
+guidance. Fabricated perception is therefore prevented structurally, not
 discouraged by prompt engineering.
 
 **Contributions.**
@@ -137,9 +144,25 @@ to have both: the grammar keeps its accuracy and its zero latency for the
 phrasings users have learned, and the open-dictation path exists only behind an
 explicit trigger.
 
-*(TODO before submission: replace this section's implicit citations with a
-proper reference list; the seed list is `PATENT_RESEARCH.md` §7, extended here
-with the tool-use / containment line, which that disclosure does not yet cover.)*
+**Citations.** `references.bib` (53 entries, all cited) carries the reference
+list, and
+`main.tex` cites it inline. The threads are: the verification asymmetry
+(MacLeod et al. on blind readers of wrong captions; Adnin & Das on blind users
+of generative tools; Stangl et al. on what descriptions are wanted); reliance
+and false alarms (Lee & See; Parasuraman & Riley; Wickens & Dixon's reliability
+crossover; Breznitz; alarm fatigue); abstention as a formal object (Chow's
+reject option; selective prediction; learning to defer; calibration);
+hallucination and containment (Ji et al.; Maynez et al.; Toolformer, ReAct,
+ToolLLM; PICARD and guided generation); assistive navigation (VizWiz, NavCog,
+NavCog3, CaBot, and the commercial systems above); and non-visual output
+(the vOICe, vibrotactile waypointing, auditory-display surveys).
+
+**The bibliography has not been machine-verified.** It was assembled from
+memory rather than exported from a database, and carries no DOIs, because an
+unverified DOI is worse than an absent one. Every entry must be re-exported
+from the ACM DL or DBLP before submission — a paper arguing that a system
+should decline to state what it cannot verify has to hold its own reference
+list to that rule.
 
 ---
 
@@ -176,7 +199,7 @@ Orientation & Mobility instruction already teaches clock positions. We note in
 All guidance logic lives in a layer with no camera, no model, and no real clock:
 it takes plain bounding-box numbers and a monotonic timestamp. This layer is
 implemented twice — Python reference and Dart/Flutter — with mirrored unit-test
-suites (199 Python / 133 Dart tests passing as of 2026-07-30). Every spoken
+suites (221 Python / 159 Dart tests passing as of 2026-08-01). Every spoken
 string in this paper is emitted by a function in that layer and pinned by a
 test that asserts the exact text.
 
@@ -229,7 +252,7 @@ and it is what creates the transport-layer failure mode that §4.3 addresses.
 ## 4. Abstention mechanisms
 
 Each subsection states the mechanism, its specific failure mode, and why
-silence beats the wrong answer there. All four are implemented and covered by
+silence beats the wrong answer there. All five are implemented and covered by
 named tests (§6.1).
 
 ### 4.1 Perception: reliability-gated metric distance
@@ -318,8 +341,8 @@ inherit that channel's dependencies.
 
 ### 4.5 Dialogue: routing abstention (new)
 
-The three mechanisms above concern what the system *says about the world*. The
-fourth concerns what it does when it does not understand what it was *asked*.
+The four mechanisms above concern what the system *says about the world*. The
+fifth concerns what it does when it does not understand what it was *asked*.
 
 The keyword baseline abstains by construction — an unmatched utterance returns
 nothing — but it abstains far too often, because it cannot hear paraphrases at
@@ -483,7 +506,8 @@ claim.
 
 ### 5.6 Latency handling
 
-A local model on a CPU-only laptop is not free. Two design responses are built
+A local model is not free even on the tether laptop's GPU — measured p50 ~1.2 s
+at tier 1 (§7). Two design responses are built
 in rather than tuned in later. First, the model is kept resident between
 queries; a cold reload costs seconds and would land on exactly the utterance the
 user cared about. Second, tier-1 entry immediately speaks a short
@@ -524,13 +548,26 @@ from being tuned against its own test set.
 
 ### 6.1 Existing system (prior evaluation, for context)
 
-Recorded-clip evaluation over 7 phone clips: direction accuracy 100 % of
-reviewed announcement keyframes, 0 phantom announcements, 5.8 FPS / 172 ms per
-frame on the development laptop, announcement latency ≈0.35–0.5 s. The known
-weakness is object *naming*, not object *warning*: COCO assigns the nearest
-lookalike (dustbin → "toilet", wardrobe → "refrigerator"), which is why
-low-confidence warnings speak the generic word "obstacle" instead of a class
-name. Gate behaviours are pinned by named tests
+Recorded-clip evaluation over 7 phone clips. The clips produced **31
+announcements in total**; each one saves an annotated keyframe, and all 31 were
+reviewed against the image. Direction (zone) was correct on **31/31**, phantom
+announcements were **0/31** (the 2-frame persistence filter suppressed every
+one-frame misdetection), and announcement discipline held throughout — the
+bedroom clip, for instance, spoke 8 times across 471 frames. Throughput was
+5.8 FPS / 172 ms per frame on the development laptop with announcement latency
+≈0.35–0.5 s.
+
+Object *naming* is the known weakness, not object *warning*: **6 of the 31**
+announcements carried a wrong class name, and in every one of those six the
+warning behaviour was still correct. The cause is COCO's label set assigning
+the nearest lookalike (dustbin → "toilet", wardrobe → "refrigerator"), which is
+why low-confidence warnings speak the generic word "obstacle" instead of a
+class name — itself an instance of the same abstention pattern, applied to the
+name rather than to the warning.
+
+These numbers are small and were reviewed by the author, so they are reported as
+a sanity check on the deterministic core rather than as a perception result.
+Gate behaviours are pinned by named tests
 (`test_clipped_box_suppresses_meters`, `test_low_confidence_suppresses_meters`,
 `test_meters_are_find_mode_only_not_walk`, `test_all_blocked_says_stop`,
 `test_door_is_not_an_obstacle_for_path`, `test_near_small_hazard_beats_far_bulk`).
@@ -541,8 +578,14 @@ name. Gate behaviours are pinned by named tests
 grammar already covers), `paraphrase`, `multi_intent`, `out_of_scope` (gold
 label: abstain), and `ambiguous` (gold depends on a state block encoded in the
 record) — evaluated under three configurations (keyword-only, LLM-only,
-two-tier) and two ASR conditions (clean text, and real transcripts from
-multiple speakers).
+two-tier).
+
+The protocol also specifies an **ASR condition** — the same records read aloud
+by 2–3 speakers who did not author the set, transcribed by the same recogniser
+the system uses. It is **not reported here**: the recordings are still being
+collected (`asr_collect.py` implements collection, `eval_agent.py
+--condition asr` the scoring). Every routing number below is therefore on clean
+written text, and §8 states the consequence.
 
 ### 6.3 Metrics
 
@@ -597,19 +640,27 @@ eval set sha256 `e4eeca83070e2d66`, model `llama3.2:3b` under Ollama on the
 tether laptop (RTX 3050 Laptop, 4 GB), routing the 200-record set with the
 capability registry as of 2026-08-01.
 
+**All four configurations were re-run on 2026-08-01** against the current
+harness, and every number below comes from those runs. The earlier reports were
+superseded on two counts: they predate the fix that stops a conversational reply
+being counted as an authority-boundary leak (so they carried "investigate before
+publishing" warnings for behaviour that is by design), and their latency figures
+came from a differently-loaded machine. One substantive claim did not survive
+the re-run and has been withdrawn — see T4.
+
 **T3 — Routing accuracy by category and configuration.**
 
 | Category | n | keyword | LLM-only | two-tier |
 |---|---|---|---|---|
 | canonical | 40 | **100.0 %** (40/40) | 45.0 % (18/40) | **100.0 %** (40/40) |
-| paraphrase | 70 | **0.0 %** (0/70) | **50.0 %** (35/70) | 47.1 % (33/70) |
+| paraphrase | 70 | **0.0 %** (0/70) | **48.6 %** (34/70) | 47.1 % (33/70) |
 | multi_intent | 20 | **0.0 %** (0/20) | **30.0 %** (6/20) | 10.0 % (2/20) |
 | out_of_scope | 40 | **95.0 %** (38/40) | 47.5 % (19/40) | 45.0 % (18/40) |
 | ambiguous | 30 | 3.3 % (1/30) | **43.3 %** (13/30) | **43.3 %** (13/30) |
-| **overall** | 200 | 39.5 % (79/200) | 45.5 % (91/200) | **53.0 %** (106/200) |
+| **overall** | 200 | 39.5 % (79/200) | 45.0 % (90/200) | **53.0 %** (106/200) |
 
 Wilson 95 % CIs on the overall figures: keyword 33.0–46.4 %, LLM-only
-38.7–52.4 %, two-tier 46.1–59.8 %.
+38.3–51.9 %, two-tier 46.1–59.8 %.
 
 Three things in this table matter more than the overall column.
 
@@ -645,24 +696,33 @@ improvement. The honest summary is that **coverage and abstention trade against
 each other at this model size**, and that the two-tier structure is what keeps
 the trade from applying to trained phrasings.
 
-**T4 — Routing latency, p50 / p95 (ms).**
+**T4 — Routing latency, p50 / p95 (ms), and tier coverage.**
 
 | Stage | keyword | LLM-only | two-tier |
 |---|---|---|---|
 | routing, tier 0 hit | < 0.01 / < 0.01 | — | < 0.01 / < 0.01 |
-| routing, tier 1 hit | — | 1992 / 3110 | 1141 / 2141 |
-| routing, abstention | < 0.01 | 2165 / 3141 | 1203 / 1562 |
+| routing, tier 1 hit | — | 1172 / 1578 | 1188 / 1500 |
+| routing, abstention | < 0.01 | 1219 / 1563 | 1234 / 1516 |
 | execution | < 0.01 | < 0.01 | < 0.01 |
+| served by tier 0 | 30.0 % | 0 % | **30.0 %** |
+| reached tier 1 | 0 % | 74.0 % | 49.0 % |
 
 Tier-0 routing was separately measured at **p50 5 µs, p95 13 µs**; the harness
-rounds to milliseconds, hence "< 0.01". Tier 1 costs **1.1 s at the median and
-2.1 s at p95** on the tether laptop, and two-tier's tier-1 median is
-*lower* than LLM-only's because the utterances that reach the model are the
-harder, longer ones only — the short canonical commands that a model answers
-fastest never get there.
+rounds to milliseconds, hence "< 0.01". Tier 1 costs **~1.2 s at the median and
+~1.5 s at p95** on the tether laptop.
 
-The practical reading: tier 1 is usable for on-demand questions and unusable
-inside the continuous guidance loop. Every capability in this system is
+**A claim withdrawn.** An earlier run showed two-tier's tier-1 median well below
+LLM-only's, and the draft explained it: the utterances reaching the model in
+two-tier are the harder, longer ones only, since short canonical commands never
+get there. The re-run does not support it — 1188 ms vs 1172 ms is a wash — so
+the explanation is deleted rather than kept as a plausible story about a gap
+that is not there. What the numbers do show is simpler and is the actual C3
+claim: **per-call cost is the same, and tiering wins by not making the call
+at all** for 30 % of traffic, which is the 30 % consisting of the commands users
+issue most often.
+
+The practical reading is unchanged: tier 1 is usable for on-demand questions and
+unusable inside the continuous guidance loop. Every capability in this system is
 on-demand, so the floor is survivable here — a fact about this system, not a
 general result (§8).
 
@@ -710,16 +770,29 @@ The tool-mediated rows are zero **by construction, not by tuning**: the harness
 checks every executed spoken string against the set `decision.py` /
 `position.py` could produce for that record plus the fixed templates, and fails
 loudly on anything outside it. The check ran on every routed record in every
-configuration. Conversational replies (§5.3) are excluded from this count by
-definition — they are model-authored by design — and were rare in these runs:
-3 of 200 under LLM-only, 2 of 200 under two-tier, all on records where a tool
-was expected, i.e. scored as errors rather than as fabrication.
+configuration, and the 2026-08-01 re-run reports `boundary leaks 0` for all
+three.
 
-**Figures.** F1 system diagram with the agent as a parallel input path and an
-explicit perception-authority boundary; F2 two-tier router flow including the
-abstain branch; F3 latency waterfall (ASR → route → execute → speak); F4
-accuracy by category across the three configurations; F5 routing confusion
-matrix (13 tools + abstain).
+Conversational replies (§5.3) are excluded from this count by definition — they
+are model-authored by design — and were rare: **4 of 200 under LLM-only, 6 of
+200 under two-tier**. All fell on records where a tool was expected, so they are
+scored as routing errors, not as fabrication. Reporting them separately is not a
+courtesy to the reader; it is the only way the T6 zero means anything, because a
+metric that silently absorbs a channel it was not defined over is not a
+measurement.
+
+**Figures.** Four, all drawn in `main.tex` as TikZ/pgfplots so there are no
+image files to keep in sync: F1 the system with the authority boundary drawn as
+a line the router's output crosses carrying only a tool and an argument; F2 the
+two-tier router including the abstain and reply branches; F3 accuracy by
+category across the three configurations (the chart form of T3); F4 the
+fabrication contrast of T6.
+
+Two figures considered and dropped, recorded so they are not re-proposed: a
+latency waterfall (ASR → route → execute → speak) would be misleading while the
+ASR stage is unmeasured, and a 15×15 routing confusion matrix is unreadable at
+one-column width and at n=200 is mostly empty — the mismatch lists in the run
+reports carry the same information usefully.
 
 ---
 
@@ -758,8 +831,8 @@ instruct model costs on the user's CPU. §5.6 mitigates the two worst cases
 (cold reload, unexplained silence) but does not eliminate the floor. If the
 measured floor proves too high on commodity hardware, the honest framing is that
 local routing is viable for on-demand queries and not for anything inside the
-continuous guidance loop — which is where all thirteen capabilities happen to
-live, but that is a fact about this system, not a general result.
+continuous guidance loop — which is where none of the fourteen capabilities
+happens to live, but that is a fact about this system, not a general result.
 
 **The fabrication detector is keyword-based.** It flags a response naming a
 detector class absent from the state block. It will miss subtler fabrication
@@ -777,6 +850,15 @@ the prompt; a second-pass "is this in scope" classification; or a confidence
 signal from the model used as an abstention gate. A held-out set would be
 needed for any of them, and building one is the first item of future work.
 
+**Clean text, not speech.** Routing is evaluated on written utterances, so
+recognition errors sit outside the loop entirely. This matters more here than it
+would for a typed interface, because §5.1's whole argument is that the open path
+exists to carry speech the grammar cannot hear — and free dictation on the
+handset's 40 MB model is the least accurate component in the system. The
+paraphrase and out-of-scope numbers should therefore be read as **upper bounds**
+on what the deployed pipeline achieves. The protocol specifies the condition
+(§4 of `EVAL_PROTOCOL.md`) and the tooling exists; the recordings do not yet.
+
 **One model, one machine.** All routing numbers come from `llama3.2:3b` under
 Ollama on a single laptop. Model size is an obvious confound for the
 over-trigger result in particular. A second-model arm (`qwen3:4b`) was started
@@ -790,14 +872,50 @@ study would have to, since they are now part of what the system says.
 
 ---
 
-## 9. Conclusion
+## 9. Ethics, positionality and availability
+
+**Positionality.** The author is a sighted student developer and is not a member
+of the population this system is built for. Nothing here was co-designed with
+blind users, and the single field walk was performed by the author. We have
+tried to make that limitation load-bearing rather than decorative: every safety
+claim is tied to a named mechanism and a named test that a reader can inspect,
+so a blind-participant study can *falsify* the design arguments rather than
+merely fail to confirm them. The design choices most likely to be wrong are
+stated as such in §8 — particularly the premise that users prefer silence to a
+guess, which is asserted here and not measured.
+
+**Human subjects.** No human-subjects data was collected and no ethics approval
+was required for the work reported. A participant study is not attempted here
+precisely because running one informally, with an unvalidated prototype and no
+approval, would be the wrong way to involve this population.
+
+**Privacy.** The system runs offline by design: detection on a locally tethered
+laptop, speech recognition, synthesis and OCR on the handset. No camera frame,
+no utterance and no location leaves the user's own devices, and the language
+model is local — the conversational channel of §5.3 does not create a cloud
+dependency. The tether itself is an unencrypted local link, which is adequate
+for a prototype on a personal hotspot and would need transport security before
+any deployment; it is listed here rather than in §8 because it is a privacy
+property, not a performance one.
+
+**Availability.** Source, the capability registry manifest (`capabilities.json`),
+the frozen protocol, the 200-record labelled set and every run report are in the
+repository at `github.com/Aditya17-bot/object_detection_blind`. Results carry
+the eval-set sha256 prefix `e4eeca83070e2d66`; a number quoted from a set with a
+different hash is not comparable, and writing ASR transcripts into the set will
+change it.
+
+---
+
+## 10. Conclusion
 
 For users who cannot audit what a system tells them, abstention is not an error
 path — it is a feature that must be designed, implemented, and measured at every
-layer where the system can be wrong. We showed four such designs in a working
+layer where the system can be wrong. We showed five such designs in a working
 offline assistive system, each with criteria specific to its layer's failure
 mode, and extended the pattern to a voice agent whose language model may choose
-what the system does and never what it says. The interesting claim is not that
+what the system does and never what it says about the world. The interesting
+claim is not that
 tool mediation prevents hallucination — it plainly does — but that the same
 principle that motivates it also explains a distance gate, a path threshold, and
 a null-versus-empty distinction three layers away.
@@ -824,50 +942,63 @@ a null-versus-empty distinction three layers away.
 | `repeat` | — | "say again" | speech controller |
 | `abstain` | template key | — | fixed template table |
 
-## Appendix B — Figure sketches (F1, F2)
+## Appendix B — Figures
 
-**F1 — System, with the agent as a parallel input path.** The dashed boundary is
-the authority claim of §5.3: nothing on the left may author text that crosses it.
+Four figures, all drawn as TikZ/pgfplots inside `main.tex` — there are no image
+files, so nothing can fall out of sync with the numbers. The mermaid below is
+the **same two diagrams** in a form that renders in a markdown reader; if you
+change one, change both.
+
+**F1 — Two lanes and one boundary.** The point is not the dataflow, it is the
+line: the left lane may only *select* a capability, the right lane *authors*
+every spoken guidance token. Only a tool name and an argument cross.
 
 ```mermaid
 flowchart LR
-    CAM["camera"] --> DET["YOLOv8s + custom<br/>door/dustbin model"]
-    DET --> POS["position.py<br/>zone · bucket · gated metres"]
-    POS --> DEC["decision.py<br/>what to say now"]
-    DEC --> OUT["speech · sonar · haptic"]
-
-    MIC["microphone"] --> ASR["Vosk grammar<br/>/ Whisper dictation"]
-    ASR --> RT["agent.py router"]
-    RT -.->|"tool + arg only"| DEC
-
-    subgraph untrusted["model may SELECT"]
-      RT
+    subgraph untrusted["may SELECT a capability"]
+      direction TB
+      MIC["microphone"] --> ASR["Vosk ASR<br/>grammar-constrained"]
+      ASR --> T0["tier 0 parser<br/>5 µs, on handset"]
+      T0 -->|"miss only"| T1["tier 1 router<br/>local LLM, on laptop"]
     end
-    subgraph trusted["deterministic — authors all spoken text"]
-      POS
-      DEC
+    subgraph trusted["authors ALL spoken guidance"]
+      direction TB
+      CAM["camera<br/>YUV420 frames"] -->|"Wi-Fi"| DET["YOLOv8s + custom"]
+      DET --> POS["position<br/>zone · bucket · gated metres"]
+      POS --> DEC["decision<br/>what to say now"]
+      DEC --> OUT["speech · sonar · haptics"]
     end
+    T0 -.->|"tool + arg"| DEC
+    T1 -.->|"tool + arg"| DEC
 ```
 
-**F2 — Two-tier router with the abstain branch.**
+**F2 — Two-tier router, with both non-action branches.** Note that neither the
+abstain branch nor the reply branch passes through `execute`: that separation is
+the figure's whole content, and an earlier draft of the TikZ version had it
+wrong (validated actions drawn flowing *into* abstain, rejects flowing into the
+reply channel).
 
 ```mermaid
 flowchart TD
     U["utterance"] --> T0{"tier 0<br/>keyword grammar"}
-    T0 -->|"hit (~0 ms)"| ACT["validated action list"]
-    T0 -->|"miss"| L{"LLM enabled?"}
-    L -->|"no"| AB["abstain →<br/>fixed template"]
-    L -->|"yes"| M["local LLM<br/>JSON tool call"]
+    T0 -->|"hit, 5 µs"| ACT["validated action list"]
+    T0 -->|"miss"| M["local LLM<br/>JSON tool call"]
     M --> V{"validate:<br/>known tool? known class?<br/>arg present? ≤ max actions?"}
     V -->|"pass"| ACT
-    V -->|"reject / prose / timeout / exception"| AB
-    ACT --> EX["execute_action → decision.py"]
-    AB --> SP["speak template"]
-    EX --> SP
+    V -->|"reject / prose / timeout"| AB["abstain<br/>fixed template"]
+    V -->|"reply"| SAY["grounded reply<br/>capped, truncated"]
+    ACT --> EX["execute → decision.py"]
+    EX --> SP["speak"]
+    AB --> SP
+    SAY --> SP
 
     style AB fill:#fde,stroke:#c39
     style ACT fill:#dfe,stroke:#3a6
+    style SAY fill:#fef0d0,stroke:#b57500
 ```
+
+**F3** is the chart form of T3 (accuracy by category, three configurations) and
+**F4** the fabrication contrast of T6; both are pgfplots in `main.tex`.
 
 ## Appendix C — Eval-set composition (T2)
 

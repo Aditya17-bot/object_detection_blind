@@ -333,6 +333,33 @@ blind, sonification of obstacle proximity, wearable haptic direction belts.
 Patents: search classes G06V (image/video recognition), A61H 3/06 (walking aids
 for the blind), G08B (signalling), H04R (stereophonic).
 
+**Abstention literature (added 2026-08-01 — a searcher hits this first).** The
+idea of a system declining to answer is old and formalised, so no claim may rest
+on abstention *as such*; what is argued is the per-layer criteria and the
+application to an unverifiable channel.
+- Classification with a reject option — Chow 1970; selective prediction
+  (El-Yaniv & Wiener 2010; Geifman & El-Yaniv 2017); learning to defer (Madras
+  et al. 2018; Mozannar & Sontag 2020); OOD/confidence baselines (Hendrycks &
+  Gimpel 2017) and calibration (Guo et al. 2017). All of these threshold a
+  *model's* score; §4.1-4.3, 4.7 and 4.8 each abstain on a criterion derived
+  from the layer's own failure mode instead, which is the distinguishing point.
+- Containment for generated language — tool use (Toolformer; ReAct; ToolLLM),
+  constrained/guided decoding (PICARD; guided generation), hallucination surveys
+  (Ji et al. 2023). §4.7's mechanism is standard practice; the argued novelty is
+  the *consumer* — a user with no cheap way to reject a wrong answer — and the
+  resulting design target of making fabricated perception inexpressible rather
+  than merely rare.
+- Reliance and false alarms — Parasuraman & Riley 1997; Lee & See 2004;
+  Wickens & Dixon 2007 (the reliability crossover below which an imperfect alert
+  is worse than none); Breznitz 1984; clinical alarm fatigue. This supports
+  §4.8's "an unheeded warning has negative value" as an established human-factors
+  result rather than an assertion, and is the strongest external support in the
+  file for the whole thesis.
+- The blind-user half of the asymmetry — MacLeod et al. 2017 (blind readers
+  build confident interpretations of wrong captions); Adnin & Das 2024 (blind
+  users of generative tools); Stangl et al. 2020. Cite these rather than
+  asserting the asymmetry.
+
 ## 8. Open technical questions affecting claims
 
 - Focal constant `F` is un-calibrated per device — distance is coarse; a
@@ -531,3 +558,53 @@ vs. useful announcements retained.
   at launch — the greeting doubles as the "it started" signal for a user with
   no splash screen, which is a small but real accessibility point worth a line
   in the paper's system description.
+- **2026-08-01 (paper completed to submission quality; NO new mechanism)** —
+  this entry records evidence and disclosure hygiene, not invention. The paper
+  in `paper/` was taken from draft to a state intended for submission, which
+  matters here for one reason: **it is the disclosure**, and §8a's warning
+  applies to everything now in it.
+  1. **All four evaluation configurations re-run** against the current harness
+     (set sha256 `e4eeca83070e2d66`, `llama3.2:3b`). The previously committed
+     run reports were unusable as evidence: they predated the fix that stops a
+     conversational reply being scored as an authority-boundary leak, so they
+     carried literal "AUTHORITY BOUNDARY LEAK — investigate before publishing"
+     blocks describing designed behaviour, and their latency figures did not
+     reproduce. **The re-run reports `boundary leaks 0` for all three routed
+     configurations** — this is the reduction to practice for §4.7's central
+     claim and it is now backed by artifacts that say so.
+  2. **One claim withdrawn.** The draft asserted that two-tier's tier-1 median
+     latency was well below LLM-only's, with an explanation. The re-run gives
+     1188 vs 1172 ms — no gap. The claim and its explanation are deleted. The
+     surviving and correct form of the C3 argument is that per-call cost is
+     identical and tiering wins by **not making the call** for 30 % of traffic.
+     Do not cite the withdrawn figure in a filing.
+  3. `llm_only` overall accuracy 45.5 % → **45.0 %** (paraphrase 50.0 % →
+     48.6 %). `keyword` and `two_tier` unchanged in every accuracy and
+     over-trigger cell. Free-text fabrication reproduced exactly at
+     **85/200 (42.5 %)**, including the "walking in front of you, my cane
+     tapping on the ground" sample, which is the single most useful piece of
+     evidence in the file for why §4.7 exists.
+  4. **Clip-evaluation numbers now carry denominators.** "100 % of reviewed
+     keyframes" became **31/31 announcements correct on direction, 0/31
+     phantom, 6/31 wrong class name with warning behaviour still correct**. A
+     percentage without an n is not evidence; these are small numbers and are
+     labelled as an author-reviewed sanity check on the deterministic core.
+  5. **Prior-art list extended into the abstention literature**, which §7 did
+     not previously cover and which a searcher would hit first: classification
+     with a reject option (Chow 1970), selective prediction / SelectiveNet,
+     learning to defer, OOD-confidence baselines and calibration; plus the
+     containment line — tool use (Toolformer, ReAct, ToolLLM) and constrained
+     decoding (PICARD, guided generation). The §4.7 novelty argument must be
+     framed against these: the mechanism is not novel, the **application to a
+     channel whose consumer cannot verify the output** is what is argued.
+     Also add the reliance literature (Parasuraman & Riley; Wickens & Dixon's
+     reliability crossover) — it supports §4.8's "an unheeded warning has
+     negative value" as an established result rather than an assertion.
+  6. Paper artifacts: `paper/references.bib` (53 entries, all cited),
+     `paper/main.tex` rebuilt as a self-contained ACM `acmart` submission with
+     corrected figures, and a new ethics/positionality/availability section.
+     ⚠ **The bibliography was assembled from memory and is not
+     machine-verified**; it carries no DOIs deliberately. Verify every entry
+     before a preprint goes up, for the obvious reason that this is a paper
+     about not stating what you cannot check.
+  Reduction to practice unchanged this session: **221 Python / 159 Dart** tests.

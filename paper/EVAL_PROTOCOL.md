@@ -38,7 +38,7 @@ Composition (T2):
 | Category | n | Notes |
 |---|---|---|
 | `canonical` | 40 | Phrasings already in the recogniser grammar |
-| `paraphrase` | 70 | Natural rewordings of the same 13 intents |
+| `paraphrase` | 70 | Natural rewordings of the intents in the registry |
 | `multi_intent` | 20 | Two ordered actions in one utterance |
 | `out_of_scope` | 40 | Gold is abstain; carries the safety claim |
 | `ambiguous` | 30 | Gold depends on the record's `state` block |
@@ -220,6 +220,21 @@ Recorded in advance, so the results section cannot quietly move the goalposts:
   fabrication check in §3.5 does not apply to the reply channel, whose content
   is model-authored by design. Reply counts are reported separately so the
   reader can subtract them.
+- **2026-08-01 (evening) — all four configurations re-run; earlier reports
+  superseded.** Two defects in the run *artifacts*, not in the protocol, made
+  the committed reports unusable as evidence. (a) They predate the harness fix
+  that stops a conversational reply being counted as an authority-boundary
+  leak, so `llm_only` and `two_tier` shipped with "AUTHORITY BOUNDARY LEAK —
+  investigate before publishing" blocks describing behaviour that is by design.
+  (b) Their T4 latencies were taken on a differently-loaded machine and no
+  longer reproduced. The re-run reports `boundary leaks 0` for all three routed
+  configurations. Changes to headline numbers: `llm_only` overall 45.5 % →
+  **45.0 %** (paraphrase 50.0 % → 48.6 %, one record); `keyword` and `two_tier`
+  unchanged in every accuracy and over-trigger cell. **One claim withdrawn**:
+  two-tier's tier-1 median is no longer below `llm_only`'s (1188 vs 1172 ms),
+  so the paper's explanation for that gap is deleted rather than retained.
+  Conversational-reply counts are now reported: 4/200 `llm_only`, 6/200
+  `two_tier`.
 - **2026-08-01 — one parser fix landed between runs and both numbers are
   reported.** The first `check` implementation treated any "left"/"right" as a
   direction, which the frozen out-of-scope category immediately caught

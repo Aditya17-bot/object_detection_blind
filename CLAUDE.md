@@ -797,6 +797,53 @@ Test counts: **221 Python / 159 Dart**.
   coverage, and writes `agent_eval_<config>_asr.md`.
   **Writing transcripts CHANGES THE EVAL-SET HASH** — keep clean-condition
   numbers under `e4eeca83070e2d66` and quote the new hash for ASR numbers.
+## Paper finished to submission quality (2026-08-01, later still)
+
+User: "make sure the paper is fully finished, enough references, remove all the
+weak links, publication worthy". Nothing about the *system* changed; what
+changed is that the paper's evidence now matches its claims.
+
+- **Every eval config re-run** — the committed run reports were stale in two
+  ways and had to go. They predated the harness fix that stops a conversational
+  reply being scored as an authority-boundary leak, so `llm_only`/`two_tier`
+  shipped with literal "AUTHORITY BOUNDARY LEAK — investigate before
+  publishing" blocks while the paper claimed 0; and their T4 latencies came
+  from a differently-loaded machine. **Re-run says `boundary leaks 0` for all
+  three routed configs.** Changes: `llm_only` 45.5 % → **45.0 %** (paraphrase
+  50.0 → 48.6). `keyword`/`two_tier` accuracy and over-trigger unchanged.
+  Free-text fabrication reproduced exactly at 85/200.
+- **One claim withdrawn**: two-tier's tier-1 median is NOT below llm_only's
+  (1188 vs 1172 ms) — the old 1141-vs-1992 gap was machine load. The
+  explanation for it is deleted, not softened. Correct C3 form: per-call cost is
+  identical, tiering wins by not making the call for 30 % of traffic.
+  Conversational replies now reported: 4/200 llm_only, 6/200 two_tier.
+- **`paper/references.bib` — 53 entries, all cited** (was zero references,
+  which was disqualifying). Threads: verification asymmetry (MacLeod, Adnin &
+  Das, Stangl), reliance/false alarms (Lee & See, Parasuraman & Riley, Wickens
+  & Dixon, alarm fatigue), abstention (Chow, selective prediction, deferral,
+  calibration), containment (Ji, Toolformer/ReAct/ToolLLM, PICARD), assistive
+  navigation (VizWiz, NavCog, CaBot), non-visual output (vOICe, van Erp).
+  ⚠ **Assembled from memory, no DOIs, NOT machine-verified** — must be
+  re-exported from ACM DL/DBLP before submission. Flagged in README + PAPER.md
+  + PATENT_RESEARCH: a paper about not stating what you can't verify cannot
+  ship an unverified reference list.
+- **`main.tex` rebuilt.** Figure 2's arrows were wrong (validated actions drawn
+  flowing INTO abstain; rejects flowing into the reply channel). Figure 1
+  redrawn as two lanes split by the authority boundary. Added ethics /
+  positionality / availability section (ASSETS expects it; no blind
+  participants is stated as load-bearing). Related work now cited inline.
+  No local LaTeX — **never compiled**; `scratchpad/texcheck.py` verified
+  environments, braces, math mode and that all 53 cite keys resolve. Compile on
+  Overleaf first.
+- Fixed real internal contradictions: thirteen vs fourteen capabilities, four
+  vs five mechanisms, test counts (now 221/159, verified), and two figures
+  (latency waterfall, confusion matrix) promised in §7 that never existed.
+  Clip-eval "100 % of reviewed keyframes" now carries its denominator:
+  **31/31 direction correct, 0/31 phantom, 6/31 wrong name**.
+- ASR condition is stated as **not reported** and the consequence written into
+  §8 (paraphrase/out-of-scope numbers are upper bounds on the deployed
+  pipeline). Slot it in when the recordings land.
+
 - `OllamaRouter` now sends `"think": False`. Reason: the qwen3:4b sensitivity
   arm returned **"no tool call in model output" on 102 of 140 tier-1 calls** at
   6-8 s each — it spends the token budget on a thinking block — so tier 1
