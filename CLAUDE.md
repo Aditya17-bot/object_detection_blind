@@ -773,3 +773,34 @@ artifact: https://claude.ai/code/artifact/d6e5e754-5c6c-4e6e-946e-3fb762f99503
 Republish by redeploying `scratchpad/blindassist_study.html` (same URL).
 
 Test counts: **221 Python / 159 Dart**.
+
+## Overleaf + ASR tooling (2026-08-01, later)
+
+- **`paper/main.tex`** — ACM `acmart` (sigconf, nonacm) draft of the whole
+  paper, **self-contained**: both diagrams are TikZ and both charts are
+  pgfplots, so there are NO images to upload or re-export. Overleaf: upload
+  `main.tex` alone, compiler pdfLaTeX. Setup + submission checklist in
+  **`paper/README_OVERLEAF.md`** (remove `nonacm` + the two draft lines when
+  ACM sends the rights block; references still need writing).
+- **`asr_collect.py`** — the ASR condition of EVAL_PROTOCOL §4, which was
+  specified but had no code. Three subcommands: `sheet` (stratified 60-record
+  reading sheet, 12/category, deterministic), `record --speaker A` (one
+  utterance at a time via sounddevice, WAV per record under
+  `test_output/asr_audio/<speaker>/`), `transcribe` (writes transcripts into
+  each record's `asr` array, one entry per speaker+engine, re-runnable without
+  duplicating). Transcriber: faster-whisper if installed, else the **Vosk model
+  already in the repo with its grammar removed** — which is what the handset
+  itself does for open dictation, so it is a legitimate condition, not a
+  degraded stand-in. NO DOWNLOAD NEEDED for the Vosk path.
+- **`eval_agent.py --condition asr`** — expands one row per TRANSCRIPT (records
+  with no audio are skipped, never silently scored on clean text), reports
+  coverage, and writes `agent_eval_<config>_asr.md`.
+  **Writing transcripts CHANGES THE EVAL-SET HASH** — keep clean-condition
+  numbers under `e4eeca83070e2d66` and quote the new hash for ASR numbers.
+- `OllamaRouter` now sends `"think": False`. Reason: the qwen3:4b sensitivity
+  arm returned **"no tool call in model output" on 102 of 140 tier-1 calls** at
+  6-8 s each — it spends the token budget on a thinking block — so tier 1
+  contributed nothing and the run scored exactly the keyword baseline (39.5 %,
+  5.0 % over-trigger). Written up in PAPER §8 as a limitation: the boundary
+  degraded to fewer capabilities rather than wrong ones (designed behaviour),
+  but the model-size comparison is uninformative until thinking is off.

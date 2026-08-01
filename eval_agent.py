@@ -160,6 +160,27 @@ def gold_of(record):
     return [(g["tool"], g["arg"]) for g in record["gold"]]
 
 
+def asr_expand(records):
+    """The `asr` condition (EVAL_PROTOCOL.md 4): one row per TRANSCRIPT, not
+    per record. A record with no transcripts is skipped entirely rather than
+    silently scored on its clean text — that would quietly turn the ASR
+    condition back into the clean one for whatever was not recorded."""
+    expanded = []
+    for record in records:
+        for entry in record.get("asr") or ():
+            text = entry.get("text") if isinstance(entry, dict) else entry
+            if not isinstance(text, str) or not text.strip():
+                continue
+            copy = dict(record)
+            copy["utterance"] = text.strip()
+            copy["clean_utterance"] = record["utterance"]
+            copy["speaker"] = (entry.get("speaker")
+                               if isinstance(entry, dict) else None)
+            copy["id"] = f"{record['id']}/{copy['speaker'] or 'asr'}"
+            expanded.append(copy)
+    return expanded
+
+
 def run(records, router, config):
     rows = []
     for record in records:
@@ -249,7 +270,8 @@ def freetext_fabrication(records, llm, limit=None):
 # Report
 # --------------------------------------------------------------------------
 
-def report(rows, config, model, set_hash, freetext=None):
+def report(rows, config, model, set_hash, freetext=None,
+           condition="clean"):
     lines = [f"# Agent routing evaluation — `{config}`", ""]
     lines += [
         f"- run: {datetime.now().isoformat(timespec='seconds')}",
@@ -257,6 +279,7 @@ def report(rows, config, model, set_hash, freetext=None):
         f"- model: {model or 'none (keyword only)'}",
         f"- eval set: `paper/eval_set.jsonl` sha256 `{set_hash[:16]}`",
         f"- records: {len(rows)}",
+        f"- condition: {condition}",
         "",
         "> Protocol frozen in `paper/EVAL_PROTOCOL.md` before the router was",
         "> implemented. Quote the set hash with any number taken from here.",
@@ -376,6 +399,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=20.0,
                     help="per-utterance LLM timeout; generous on purpose, the "
                          "point of the run is to MEASURE the latency")
+    ap.add_argument("--condition", default="clean", choices=("clean", "asr"),
+                    help="clean feeds written text; asr feeds the recorded "
+                         "transcripts collected by asr_collect.py")
     ap.add_argument("--limit", type=int, help="first N records (smoke test)")
     ap.add_argument("--out", help="output path (default test_output/)")
     args = ap.parse_args()
@@ -383,6 +409,16 @@ def main():
     raw = SET_PATH.read_bytes()
     set_hash = hashlib.sha256(raw).hexdigest()
     records = [json.loads(line) for line in raw.decode().splitlines() if line]
+    if args.condition == "asr":
+        covered = records
+        records = asr_expand(records)
+        if not records:
+            raise SystemExit(
+                "no transcripts in the set — run asr_collect.py first "
+                "(sheet -> record --speaker A -> transcribe)")
+        ids = {r["id"].split("/")[0] for r in records}
+        print(f"asr condition: {len(records)} transcripts covering "
+              f"{len(ids)}/{len(covered)} records")
     if args.limit:
         records = records[:args.limit]
 
@@ -398,9 +434,12 @@ def main():
         rows = run(records, router, args.config)
         freetext = None
 
-    text = report(rows, args.config, args.model, set_hash, freetext)
+    text = report(rows, args.config, args.model, set_hash, freetext,
+                  args.condition)
     OUT_DIR.mkdir(exist_ok=True)
-    out = Path(args.out) if args.out else OUT_DIR / f"agent_eval_{args.config}.md"
+    suffix = "" if args.condition == "clean" else f"_{args.condition}"
+    out = (Path(args.out) if args.out
+           else OUT_DIR / f"agent_eval_{args.config}{suffix}.md")
     out.write_text(text, encoding="utf-8")
 
     if rows:

@@ -730,6 +730,12 @@ class OllamaRouter:
         data = self._post("/api/chat", {
             "model": self.model, "stream": False, "format": "json",
             "keep_alive": self.keep_alive,
+            # Reasoning models (qwen3 and friends) spend the token budget on a
+            # thinking block and return no JSON at all: the 2026-08-01 qwen3:4b
+            # arm produced "no tool call in model output" on 102 of 140 calls,
+            # at 6-8 s each. Ollama ignores this key on models without a
+            # thinking mode, so it is safe to send unconditionally.
+            "think": False,
             "options": {"temperature": 0, "num_predict": self.num_predict},
             "messages": [
                 {"role": "system", "content": system},
