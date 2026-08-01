@@ -31,6 +31,7 @@ condition in its own right. The choice is recorded in each transcript entry.
 import argparse
 import json
 import sys
+import time
 import wave
 from collections import defaultdict
 from pathlib import Path
@@ -66,7 +67,7 @@ def subset(records):
 
 def cmd_sheet(args):
     records = subset(load_records())
-    lines = ["BlindAssist — ASR reading sheet",
+    lines = ["BlindAssist - ASR reading sheet",
              f"{len(records)} utterances. Read each ONE TIME, at normal pace,",
              "in a normal room. Do not correct yourself; a natural stumble is",
              "part of the condition. Do not read the id.", ""]
@@ -79,6 +80,14 @@ def cmd_sheet(args):
     print(f"wrote {SHEET_PATH}")
 
 
+def _save_wav(path, audio):
+    with wave.open(str(path), "wb") as fh:
+        fh.setnchannels(1)
+        fh.setsampwidth(2)
+        fh.setframerate(SAMPLERATE)
+        fh.writeframes(audio.tobytes())
+
+
 def cmd_record(args):
     try:
         import sounddevice as sd
@@ -89,11 +98,35 @@ def cmd_record(args):
     records = subset(load_records())
     out_dir = AUDIO_DIR / args.speaker
     out_dir.mkdir(parents=True, exist_ok=True)
+    todo = [r for r in records
+            if args.overwrite or not (out_dir / f"{r['id']}.wav").exists()]
+    if not todo:
+        print(f"speaker {args.speaker} already has all {len(records)} "
+              f"recordings - pass --overwrite to redo them")
+        return
 
-    print(f"\nSpeaker {args.speaker} — {len(records)} utterances, "
+    # An ENTER-driven session needs a real terminal. Run through a wrapper that
+    # gives the process no stdin (a tool runner, a pipe, nohup) and input()
+    # raises EOFError on the first prompt, which is a confusing way to find out.
+    interactive = sys.stdin is not None and sys.stdin.isatty()
+    if not interactive and not args.auto:
+        sys.exit(
+            "no interactive terminal on stdin.\n"
+            "  Either run this in a real PowerShell/terminal window:\n"
+            f"      venv\\Scripts\\python.exe asr_collect.py record "
+            f"--speaker {args.speaker}\n"
+            "  or use the self-paced mode, which needs no keypresses:\n"
+            f"      venv\\Scripts\\python.exe asr_collect.py record "
+            f"--speaker {args.speaker} --auto")
+
+    print(f"\nSpeaker {args.speaker} - {len(todo)} utterances to record, "
           f"{args.seconds:.0f}s each.")
-    print("ENTER starts a recording. 's' + ENTER skips. 'r' + ENTER redoes the "
-          "previous one. Ctrl-C stops (progress is kept).\n")
+    if args.auto:
+        print(f"Self-paced: each line is shown, then {args.lead:.0f}s to get "
+              f"ready, then it records. Ctrl-C stops (progress is kept).\n")
+    else:
+        print("ENTER starts a recording. 's' + ENTER skips. 'r' + ENTER redoes "
+              "the previous one. Ctrl-C stops (progress is kept).\n")
 
     index = 0
     while index < len(records):
@@ -102,26 +135,44 @@ def cmd_record(args):
         if target.exists() and not args.overwrite:
             index += 1
             continue
-        print(f"[{index + 1}/{len(records)}]  \"{record['utterance']}\"")
-        choice = input("       ENTER to record > ").strip().lower()
-        if choice == "s":
-            index += 1
-            continue
-        if choice == "r" and index > 0:
-            index -= 1
-            (out_dir / f"{records[index]['id']}.wav").unlink(missing_ok=True)
-            continue
+        print(f"[{index + 1}/{len(records)}]  \"{record['utterance']}\"",
+              flush=True)
+
+        if args.auto:
+            for remaining in range(int(args.lead), 0, -1):
+                print(f"       {remaining}...", end="\r", flush=True)
+                time.sleep(1)
+        else:
+            try:
+                choice = input("       ENTER to record > ").strip().lower()
+            except EOFError:
+                # isatty() can report a terminal that still has no readable
+                # stdin (some tool runners and shells wrap it), so the honest
+                # detection is the failure itself.
+                sys.exit(
+                    "\n\nno keyboard on stdin - this shell cannot run the "
+                    "interactive session.\n"
+                    "  Run it in a real PowerShell/terminal window, or use "
+                    "the self-paced mode:\n"
+                    f"      venv\\Scripts\\python.exe asr_collect.py record "
+                    f"--speaker {args.speaker} --auto")
+            if choice == "s":
+                index += 1
+                continue
+            if choice == "r" and index > 0:
+                index -= 1
+                (out_dir / f"{records[index]['id']}.wav").unlink(missing_ok=True)
+                continue
+
+        print("       >> RECORDING - speak now", end="", flush=True)
         audio = sd.rec(int(args.seconds * SAMPLERATE), samplerate=SAMPLERATE,
                        channels=1, dtype="int16")
         sd.wait()
-        with wave.open(str(target), "wb") as fh:
-            fh.setnchannels(1)
-            fh.setsampwidth(2)
-            fh.setframerate(SAMPLERATE)
-            fh.writeframes(audio.tobytes())
-        print(f"       saved {target.name}\n")
+        _save_wav(target, audio)
+        print(f"\r       saved {target.name}          \n", flush=True)
         index += 1
-    print(f"done — {len(list(out_dir.glob('*.wav')))} files in {out_dir}")
+
+    print(f"done - {len(list(out_dir.glob('*.wav')))} files in {out_dir}")
 
 
 # --------------------------------------------------------------------------
@@ -186,7 +237,7 @@ def cmd_transcribe(args):
     by_id = {r["id"]: r for r in records}
     wavs = sorted(AUDIO_DIR.glob("*/*.wav"))
     if not wavs:
-        sys.exit(f"no recordings under {AUDIO_DIR} — run `record` first")
+        sys.exit(f"no recordings under {AUDIO_DIR} - run `record` first")
 
     added, empty = 0, 0
     for wav in wavs:
@@ -221,7 +272,7 @@ def cmd_transcribe(args):
     covered = sum(1 for r in records if r.get("asr"))
     print(f"\nwrote {SET_PATH}: {added} transcripts, {empty} silent, "
           f"{covered}/{len(records)} records now carry ASR")
-    print("NOTE: the eval-set hash changes — quote the new one with any ASR "
+    print("NOTE: the eval-set hash changes - quote the new one with any ASR "
           "number, and keep the clean-condition numbers under the old hash.")
 
 
@@ -238,6 +289,12 @@ def main():
                      help="short label, e.g. A / B / C (never a real name)")
     rec.add_argument("--seconds", type=float, default=4.0)
     rec.add_argument("--overwrite", action="store_true")
+    rec.add_argument("--auto", action="store_true",
+                     help="self-paced: no keypresses, a countdown before each "
+                          "recording. Required when stdin is not a terminal.")
+    rec.add_argument("--lead", type=float, default=3.0,
+                     help="seconds between showing a line and recording it "
+                          "(--auto only)")
 
     tr = sub.add_parser("transcribe", help="transcribe and write into the set")
     tr.add_argument("--vosk", action="store_true",
