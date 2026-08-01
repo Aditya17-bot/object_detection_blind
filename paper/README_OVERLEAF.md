@@ -27,16 +27,24 @@ powershell -ExecutionPolicy Bypass -File tools/docx_to_pdf.ps1 \
 
 ## About the Overleaf paywall
 
-The free tier stopping and asking for money was a **compile timeout**, not a
-feature limit. The original `main.tex` drew both diagrams in TikZ and both
-charts in pgfplots; rendering four vector figures on top of `acmart` ran past
-the free tier's time budget, and Overleaf presents that as an upgrade prompt.
+Diagnosed from `blind_object.pdf`, the 7-page output of the run that stopped.
 
-Fixed by pre-rendering: `paper/build_figures.py` writes four PNGs into
-`paper/figures/` and `main.tex` now uses `\includegraphics`. No TikZ or pgfplots
-remains in the document, so it compiles in seconds and stays inside the free
-tier. The figure *sources* did not disappear — they are Python now, and easier
-to edit than TikZ was.
+It was **not** a feature limit, and the document was not broken: `acmart`
+rendered correctly, and both TikZ diagrams came out fine. What did not happen is
+the **bibliography pass**. Every citation in that PDF reads `[?]`, so `pdflatex`
+ran once and the `bibtex` + two further `pdflatex` passes that resolve citations
+never did — the compile ran out of time part-way through the sequence, and
+Overleaf surfaces that as an upgrade prompt.
+
+Four vector figures on top of `acmart` is what consumed the budget. Pre-rendering
+them removes it: `paper/build_figures.py` writes four PNGs into `paper/figures/`
+and `main.tex` uses `\includegraphics`, so no TikZ or pgfplots remains and the
+whole sequence finishes in seconds. The figure *sources* did not disappear —
+they are Python now, and easier to edit than the TikZ was.
+
+**If you still see `[?]` citations**, that is this same symptom and not a
+missing `.bib`: hit Recompile again, or Menu → Clear cached files and recompile.
+The `.docx`/`.pdf` build has no such failure mode because there is no compiler.
 
 ## Getting it into Overleaf
 
