@@ -176,6 +176,146 @@ def cmd_record(args):
 
 
 # --------------------------------------------------------------------------
+# Importing audio recorded somewhere else
+# --------------------------------------------------------------------------
+# Recording on a phone or in Audacity is often easier than sitting at the
+# laptop, so `import` accepts what those produce: either one long WAV holding
+# the whole session, which is split on the silences between utterances, or a
+# folder of one-file-per-utterance. Either way the segments are mapped to the
+# reading sheet IN ORDER, which is why the sheet is deterministic.
+
+def _read_wav_mono16k(path):
+    """Any PCM WAV -> mono int16 at 16 kHz, using numpy only (no ffmpeg, no
+    scipy — neither is installed, and requiring them to import a recording
+    would defeat the point)."""
+    import numpy as np
+    with wave.open(str(path), "rb") as fh:
+        channels, width, rate, frames = (fh.getnchannels(), fh.getsampwidth(),
+                                         fh.getframerate(), fh.getnframes())
+        raw = fh.readframes(frames)
+    if width == 2:
+        audio = np.frombuffer(raw, np.int16).astype(np.float32)
+    elif width == 1:                      # unsigned 8-bit
+        audio = (np.frombuffer(raw, np.uint8).astype(np.float32) - 128) * 256
+    elif width == 4:                      # 32-bit PCM
+        audio = np.frombuffer(raw, np.int32).astype(np.float32) / 65536.0
+    else:
+        raise SystemExit(f"{path.name}: {width * 8}-bit WAV is not supported; "
+                         "export 16-bit PCM")
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if rate != SAMPLERATE:                # linear resample is fine for speech
+        n = int(round(len(audio) * SAMPLERATE / rate))
+        audio = np.interp(np.linspace(0, len(audio) - 1, n),
+                          np.arange(len(audio)), audio)
+    return np.clip(audio, -32768, 32767).astype(np.int16)
+
+
+def _split_on_silence(audio, min_silence, min_utterance, margin_db):
+    """Utterance spans in a long recording, as (start, end) sample indices.
+
+    Threshold is derived from the recording's own noise floor rather than a
+    fixed dBFS, because a phone in a bedroom and a laptop mic in a kitchen do
+    not share one."""
+    import numpy as np
+    frame = int(0.02 * SAMPLERATE)                       # 20 ms
+    usable = len(audio) // frame * frame
+    frames = audio[:usable].reshape(-1, frame).astype(np.float32)
+    rms = np.sqrt((frames ** 2).mean(axis=1)) + 1e-6
+    db = 20 * np.log10(rms / 32768.0)
+    floor = np.percentile(db, 10)                        # the quiet 10%
+    threshold = floor + margin_db
+    voiced = db > threshold
+
+    spans, start = [], None
+    silence_frames = max(1, int(min_silence / 0.02))
+    run = 0
+    for i, is_voice in enumerate(voiced):
+        if is_voice:
+            if start is None:
+                start = i
+            run = 0
+        elif start is not None:
+            run += 1
+            if run >= silence_frames:
+                spans.append((start, i - run + 1))
+                start = None
+                run = 0
+    if start is not None:
+        spans.append((start, len(voiced)))
+
+    pad = int(0.12 * SAMPLERATE)                          # keep plosives
+    out = []
+    for a, b in spans:
+        s, e = a * frame, b * frame
+        if (e - s) < min_utterance * SAMPLERATE:
+            continue
+        out.append((max(0, s - pad), min(len(audio), e + pad)))
+    return out, threshold, floor
+
+
+def cmd_import(args):
+    records = subset(load_records())
+    source = Path(args.audio)
+    if not source.exists():
+        sys.exit(f"no such path: {source}")
+    out_dir = AUDIO_DIR / args.speaker
+
+    if source.is_dir():
+        files = sorted([p for p in source.iterdir()
+                        if p.suffix.lower() == ".wav"])
+        if not files:
+            sys.exit(f"no .wav files in {source} (only WAV is supported — "
+                     "there is no ffmpeg on this machine, so export WAV from "
+                     "the recorder, or from Audacity)")
+        print(f"{len(files)} files, mapped to the reading sheet in name order")
+        segments = [(p, _read_wav_mono16k(p)) for p in files]
+        pieces = [audio for _, audio in segments]
+        labels = [p.name for p, _ in segments]
+    else:
+        if source.suffix.lower() != ".wav":
+            sys.exit(f"{source.name}: only WAV is supported (no ffmpeg here). "
+                     "Export 16-bit PCM WAV from your recorder or Audacity.")
+        audio = _read_wav_mono16k(source)
+        spans, threshold, floor = _split_on_silence(
+            audio, args.min_silence, args.min_utterance, args.margin_db)
+        print(f"{source.name}: {len(audio) / SAMPLERATE:.0f}s, noise floor "
+              f"{floor:.0f} dBFS, speech above {threshold:.0f} dBFS")
+        print(f"found {len(spans)} utterances (expected {len(records)})")
+        pieces = [audio[a:b] for a, b in spans]
+        labels = [f"{a / SAMPLERATE:6.1f}s - {b / SAMPLERATE:6.1f}s"
+                  for a, b in spans]
+
+    if args.dry_run or (len(pieces) != len(records) and not args.force):
+        for i, label in enumerate(labels):
+            expected = (records[i]["utterance"] if i < len(records)
+                        else "(no matching record)")
+            print(f"  {i + 1:>3}. {label}   ->  \"{expected}\"")
+        if args.dry_run:
+            print("\ndry run: nothing written")
+            return
+        sys.exit(
+            f"\nsegment count ({len(pieces)}) != records ({len(records)}), so "
+            "the mapping would be wrong from that point on.\n"
+            "  Check the list above, then either:\n"
+            "   - re-run with --min-silence 0.5 (fewer splits) or 0.25 (more)\n"
+            "   - --margin-db 8 if quiet speech is being cut (default 6)\n"
+            "   - --force to map the first "
+            f"{min(len(pieces), len(records))} anyway")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for record, piece in zip(records, pieces):
+        _save_wav(out_dir / f"{record['id']}.wav", piece)
+        written += 1
+    print(f"wrote {written} clips to {out_dir}")
+    print("check a few before transcribing:")
+    for record in records[:3]:
+        print(f"  {out_dir / (record['id'] + '.wav')}  should be "
+              f"\"{record['utterance']}\"")
+
+
+# --------------------------------------------------------------------------
 
 def _whisper_transcriber():
     """The accurate path, if the optional dependency is present."""
@@ -296,13 +436,30 @@ def main():
                      help="seconds between showing a line and recording it "
                           "(--auto only)")
 
+    imp = sub.add_parser("import", help="import audio recorded elsewhere")
+    imp.add_argument("--speaker", required=True, help="short label, e.g. A")
+    imp.add_argument("--audio", required=True,
+                     help="one long WAV of the whole session, or a folder of "
+                          "one WAV per utterance (name order = sheet order)")
+    imp.add_argument("--dry-run", action="store_true",
+                     help="show the segment-to-utterance mapping, write nothing")
+    imp.add_argument("--force", action="store_true",
+                     help="import even when the segment count is wrong")
+    imp.add_argument("--min-silence", type=float, default=0.35,
+                     help="seconds of quiet that separate two utterances")
+    imp.add_argument("--min-utterance", type=float, default=0.35,
+                     help="drop anything shorter than this (coughs, clicks)")
+    imp.add_argument("--margin-db", type=float, default=6.0,
+                     help="dB above the recording's own noise floor that counts "
+                          "as speech")
+
     tr = sub.add_parser("transcribe", help="transcribe and write into the set")
     tr.add_argument("--vosk", action="store_true",
                     help="force the Vosk fallback even if Whisper is present")
     tr.add_argument("--dry-run", action="store_true")
 
     args = ap.parse_args()
-    {"sheet": cmd_sheet, "record": cmd_record,
+    {"sheet": cmd_sheet, "record": cmd_record, "import": cmd_import,
      "transcribe": cmd_transcribe}[args.cmd](args)
 
 
