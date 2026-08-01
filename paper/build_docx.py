@@ -13,6 +13,7 @@ figures -- but the PROSE is duplicated, so when one changes, change both. The
 numbers are declared once, at the top, and both consumers read them from here.
 """
 
+import sys
 from pathlib import Path
 
 from docx_writer import Docx
@@ -24,7 +25,19 @@ COL = 3.33                       # column width, inches
 TITLE = "Say Less, Never Mislead"
 SUBTITLE = ("Cross-Layer Selective Abstention in an Offline Assistive "
             "Perception System, Extended to a Tool-Mediated Voice Agent")
-AUTHOR = "Aditya"
+AUTHOR = "Aditya Sridhar"
+
+# Order as supplied by the authors. ACM convention normally drops honorifics
+# ("Dr.") from the author line; kept here because it was given that way.
+_VIT = ["School of Computer Science and Engineering",
+        "Vellore Institute of Technology",
+        "Vellore, India"]
+AUTHORS = [
+    ("Dr. Vani Rajasekar", _VIT, "vani.rajasekar@vit.ac.in"),
+    ("Aditya Sridhar", _VIT, None),
+    ("Yuvan Raj Mathan", _VIT, None),
+    ("Goureesankar S Nair", _VIT, None),
+]
 
 CLEAN_HASH = "e4eeca83070e2d66"
 ASR_HASH = "f9e775b6a65279a4"
@@ -204,9 +217,8 @@ BF = dict(bold=True)
 def build():
     doc = Docx(title=TITLE, author=AUTHOR)
 
-    doc.title_block(
-        TITLE, SUBTITLE, AUTHOR,
-        ["Add affiliation, Add city, Add country", "aditya17sep@gmail.com"])
+    doc.title_block(TITLE, SUBTITLE)
+    doc.author_grid(AUTHORS, per_row=2)
     doc.section_break_two_columns()
 
     # -- abstract ---------------------------------------------------------
@@ -495,10 +507,11 @@ def build():
     doc.body(
         "We should say where the boundary moved, because it did. The system as "
         "first built enforced a stronger rule, that no spoken token whatsoever "
-        "came from the model. After the first field walk the developer-user "
-        "asked for conversation, by which he meant the ability to ask a "
-        "question in his own words and get an answer instead of getting "
-        "routed, and we granted that and nothing more. A reply travels in a "
+        "came from the model. After the first field walk the author who had "
+        "done the walking asked for conversation, by which they meant being "
+        "able to ask a question in their own words and get an answer instead "
+        "of getting routed, and we granted that and nothing more. A reply "
+        "travels in a "
         "separate channel that the executor cannot push through any "
         "capability, it is grounded in the same state block, it is "
         "length-capped and cut at a sentence, loose prose emitted where a tool "
@@ -548,7 +561,7 @@ def build():
         "not there, while 6 of the 31 used a wrong class name and still gave "
         "the correct warning, which is the pattern behind saying the generic "
         "word “obstacle” when confidence is below threshold. These are "
-        "small numbers reviewed by the author, so we report them as a sanity "
+        "small numbers reviewed by one of us, so we report them as a sanity "
         "check on the deterministic core and not as a perception result.",
         first=True)
     doc.body(
@@ -850,17 +863,11 @@ def build():
         "to fewer capabilities rather than to wrong ones, which is what it is "
         "built to do.",
     ])
-    doc.body(
-        "The obvious confound is that these are four different model families "
-        "and not one family scaled up, so what the table really shows is that "
-        "the collapse is not universal rather than that it is a clean function "
-        "of parameter count. The two llama3.2 sizes are the only within-family "
-        "pair we have and they are identical on the safety metric.")
 
     # -- 8 discussion -----------------------------------------------------
     doc.heading("8", "Discussion and limitations")
     doc.body(
-        "The system has been field-walked by one sighted developer, so "
+        "The system has been field-walked by one sighted author, so "
         "everything in this paper about what is safer is a design argument "
         "backed by mechanism and by tests somebody can go and read, and not by "
         "data from the people it is for. A study with blind participants is "
@@ -893,15 +900,11 @@ def build():
         "family scaled up, so the table shows that the abstention collapse is "
         "not universal and does not show it as a clean function of parameter "
         "count. The only within-family pair we have is 1.2B against 3.2B and "
-        "they are identical on the safety metric. A proper sweep inside one "
-        "family is the obvious next run. The reasoning model, ",
-        ("qwen3:4b", MONO), ", is a separate problem: it returned nothing "
-        "parseable on almost every tier-1 call, first at 6–8 s each with its "
-        "thinking output on and then again after we switched that off, so it "
-        "sits in the table contributing 2 usable calls out of 200. Its "
-        "validation boundary held and degraded to fewer capabilities rather "
-        "than to wrong ones, which is what it is for, but nothing else in that "
-        "row should be read as a result.",
+        "they are identical on the safety metric, so a proper sweep inside one "
+        "family is the obvious next run. The ",
+        ("qwen3:4b", MONO), " row is not a data point about size at all, "
+        "for the reason given in §7.2, and it stayed that way after we "
+        "turned its thinking output off, which we had assumed would fix it.",
     ])
     doc.body(
         "The clock mapping is a camera-frame clock rather than an Orientation "
@@ -932,9 +935,9 @@ def build():
     # -- 9 ethics ---------------------------------------------------------
     doc.heading("9", "Ethics, positionality and availability")
     doc.body(
-        "The author is a sighted student developer and is not a member of the "
+        "None of us is blind or low-vision, so none of us is a member of the "
         "population this system is built for. None of it was co-designed with "
-        "blind users and the one field walk was done by the author. We have "
+        "blind users and the one field walk was done by one of us. We have "
         "tried to make that limitation do some work rather than just sit in a "
         "list, by tying every safety claim to a mechanism and a test that a "
         "reader can go and inspect, so that a study with blind participants "
@@ -1012,7 +1015,9 @@ def build():
         doc.para([(f"[{index}]  ", dict(size=7.6)), (text, dict(size=7.6))],
                  align="both", after=26, hanging=0.16 * 1440, line=200)
 
-    out = HERE / "BlindAssist_paper.docx"
+    # Allow an alternate name so a build can proceed while the real file is
+    # open in Word, which holds an exclusive lock on it.
+    out = HERE / (sys.argv[1] if len(sys.argv) > 1 else "BlindAssist_paper.docx")
     doc.save(out)
     print(f"wrote {out}  ({out.stat().st_size // 1024} KB)")
     print(f"  {len(REFERENCES)} references, {len(doc.images)} figures")

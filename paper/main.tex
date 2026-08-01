@@ -34,12 +34,32 @@
 \subtitle{Cross-Layer Selective Abstention in an Offline Assistive Perception
 System, Extended to a Tool-Mediated Voice Agent}
 
-\author{Aditya}
+%% Order as supplied by the authors. ACM convention normally drops honorifics
+%% from the author line; "Dr." is kept here because it was given that way.
+\author{Dr. Vani Rajasekar}
 \affiliation{%
-  \institution{Add affiliation}
-  \city{Add city}
-  \country{Add country}}
-\email{aditya17sep@gmail.com}
+  \institution{School of Computer Science and Engineering, Vellore Institute of Technology}
+  \city{Vellore}
+  \country{India}}
+\email{vani.rajasekar@vit.ac.in}
+
+\author{Aditya Sridhar}
+\affiliation{%
+  \institution{School of Computer Science and Engineering, Vellore Institute of Technology}
+  \city{Vellore}
+  \country{India}}
+
+\author{Yuvan Raj Mathan}
+\affiliation{%
+  \institution{School of Computer Science and Engineering, Vellore Institute of Technology}
+  \city{Vellore}
+  \country{India}}
+
+\author{Goureesankar S Nair}
+\affiliation{%
+  \institution{School of Computer Science and Engineering, Vellore Institute of Technology}
+  \city{Vellore}
+  \country{India}}
 
 \begin{abstract}
 A sighted person using an assistive app checks what it says almost without
@@ -304,9 +324,10 @@ perception never goes back into the model.
 
 We should say where the boundary moved, because it did. The system as first
 built enforced a stronger rule, that no spoken token whatsoever came from the
-model. After the first field walk the developer-user asked for conversation, by
-which he meant the ability to ask a question in his own words and get an answer
-instead of getting routed, and we granted that and nothing more. A reply travels
+model. After the first field walk the author who had done the walking asked for
+conversation, by which they meant being able to ask a question in their own words
+and get an answer instead of getting routed, and we granted that and nothing
+more. A reply travels
 in a separate channel that the executor cannot push through any capability, it
 is grounded in the same state block, it is length-capped and cut at a sentence,
 loose prose emitted where a tool call belongs is still thrown away, and one flag
@@ -358,7 +379,7 @@ the image. Direction was right on 31 of 31 and no announcement was made for
 something that was not there, while 6 of the 31 used a wrong class name and
 still gave the correct warning, which is the pattern behind saying the generic
 word ``obstacle'' when confidence is below threshold. These are small numbers
-reviewed by the author, so we report them as a sanity check on the deterministic
+reviewed by one of us, so we report them as a sanity check on the deterministic
 core and not as a perception result.
 
 The protocol and a set of 200 labelled utterances were frozen and committed
@@ -649,16 +670,11 @@ backwards. It is worth something as a safety observation though, because the
 validation boundary held and the system degraded to fewer capabilities rather
 than to wrong ones, which is what it is built to do.
 
-The obvious confound is that these are four different model families and not one
-family scaled up, so what the table really shows is that the collapse is not
-universal rather than that it is a clean function of parameter count. The two
-llama3.2 sizes are the only within-family pair we have and they are identical on
-the safety metric.
 
 %% ======================================================================
 \section{Discussion and limitations}
 
-The system has been field-walked by one sighted developer, so everything in this
+The system has been field-walked by one sighted author, so everything in this
 paper about what is safer is a design argument backed by mechanism and by tests
 somebody can go and read, and not by data from the people it is for. A study
 with blind participants is the obvious next step, and it is also the thing most
@@ -689,12 +705,9 @@ one family scaled up, so the table shows that the abstention collapse is not
 universal and does not show it as a clean function of parameter count. The only
 within-family pair we have is 1.2B against 3.2B and they are identical on the
 safety metric, so a proper sweep inside one family is the obvious next run. The
-reasoning model, \tool{qwen3:4b}, is a separate problem: it returned nothing
-parseable on almost every tier-1 call, first at 6--8\,s each with its thinking
-output on and then again after we switched that off, so it sits in the table
-contributing 2 usable calls out of 200. Its validation boundary held and
-degraded to fewer capabilities rather than to wrong ones, which is what it is
-for, but nothing else in that row should be read as a result.
+\tool{qwen3:4b} row is not a data point about size at all, for the reason given
+in \S\ref{sec:ablation}, and it stayed that way after we turned its thinking
+output off, which we had assumed would fix it.
 
 The clock mapping is a camera-frame clock rather than an Orientation and
 Mobility one. Frame width covers 10 to 2 o'clock over roughly a 60$^\circ$ field
@@ -722,9 +735,9 @@ partitions the model cleanly.
 %% ======================================================================
 \section{Ethics, positionality and availability}
 
-The author is a sighted student developer and is not a member of the population
+None of us is blind or low-vision, so none of us is a member of the population
 this system is built for. None of it was co-designed with blind users and the
-one field walk was done by the author. We have tried to make that limitation do
+one field walk was done by one of us. We have tried to make that limitation do
 some work rather than just sit in a list, by tying every safety claim to a
 mechanism and a test that a reader can go and inspect, so that a study with
 blind participants could actually falsify the design arguments instead of merely

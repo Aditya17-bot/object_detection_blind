@@ -34,6 +34,7 @@ CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Default Extension="png" ContentType="image/png"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
 <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>"""
@@ -149,15 +150,55 @@ class Docx:
             content = self.runs(content)
         self.parts.append(f"<w:p>{self._ppr(**ppr)}{content}</w:p>")
 
-    def title_block(self, title, subtitle, author, lines):
+    def title_block(self, title, subtitle):
         self.para([(title, dict(size=17, bold=True))],
                   align="center", after=60)
         if subtitle:
-            self.para([(subtitle, dict(size=11.5))], align="center", after=160)
-        self.para([(author, dict(size=11))], align="center", after=20)
-        for line in lines:
-            self.para([(line, dict(size=8.5))], align="center", after=20)
-        self.para("", after=60)
+            self.para([(subtitle, dict(size=11.5))], align="center", after=150)
+
+    def author_grid(self, authors, per_row=2, width_in=7.0):
+        """ACM lays authors out side by side rather than in one stacked list.
+        A borderless table is the only way to get columns inside a section that
+        is itself single-column.
+
+        authors: list of (name, [affiliation lines], email or None).
+        """
+        col = width_in / per_row
+        rows = [authors[i:i + per_row] for i in range(0, len(authors), per_row)]
+        grid = "".join(f'<w:gridCol w:w="{int(col * TWIP)}"/>'
+                       for _ in range(per_row))
+        xml = ['<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/>'
+               '<w:tblCellMar>'
+               '<w:top w:w="0" w:type="dxa"/><w:left w:w="60" w:type="dxa"/>'
+               '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="60" w:type="dxa"/>'
+               "</w:tblCellMar></w:tblPr>",
+               f"<w:tblGrid>{grid}</w:tblGrid>"]
+        for row in rows:
+            cells = []
+            for index in range(per_row):
+                body = ""
+                if index < len(row):
+                    name, lines, email = row[index]
+                    body = (f"<w:p>{self._ppr(align='center', after=20)}"
+                            f"{self._run(name, size=10.5)}</w:p>")
+                    for line in lines:
+                        body += (f"<w:p>{self._ppr(align='center', after=18)}"
+                                 f"{self._run(line, size=8.5)}</w:p>")
+                    if email:
+                        body += (f"<w:p>{self._ppr(align='center', after=18)}"
+                                 f"{self._run(email, size=8.5)}</w:p>")
+                    # trailing pad so a cell with an email does not butt up
+                    # against the name in the row below it
+                    body += f"<w:p>{self._ppr(after=0)}{self._run('', size=5)}</w:p>"
+                else:
+                    body = f"<w:p>{self._ppr(align='center')}</w:p>"
+                cells.append(
+                    f'<w:tc><w:tcPr><w:tcW w:w="{int(col * TWIP)}" '
+                    'w:type="dxa"/></w:tcPr>' + body + "</w:tc>")
+            xml.append(f"<w:tr>{''.join(cells)}</w:tr>")
+        xml.append("</w:tbl>")
+        self.parts.append("".join(xml))
+        self.para("", after=80)
 
     def heading(self, number, text):
         label = f"{number}  {text}" if number else text
@@ -280,9 +321,21 @@ class Docx:
             'w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>'
             f'<w:cols w:num="2" w:space="{int(0.33 * TWIP)}" w:equalWidth="1"/>'
             "</w:sectPr>")
+        # A continuous section break after the last paragraph makes Word
+        # balance the two columns of the section it closes, instead of filling
+        # the left column and leaving the right one empty on the final page.
+        balance = ("<w:p><w:pPr><w:sectPr>"
+                   '<w:type w:val="continuous"/>'
+                   '<w:pgSz w:w="12240" w:h="15840"/>'
+                   '<w:pgMar w:top="1080" w:right="1080" w:bottom="1440" '
+                   'w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>'
+                   f'<w:cols w:num="2" w:space="{int(0.33 * TWIP)}" '
+                   'w:equalWidth="1"/>'
+                   "</w:sectPr></w:pPr></w:p>")
         return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 f"<w:document {NS}><w:body>"
-                + "".join(self.parts) + final_sect + "</w:body></w:document>")
+                + "".join(self.parts) + balance + final_sect
+                + "</w:body></w:document>")
 
     def _styles_xml(self):
         return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -301,7 +354,10 @@ class Docx:
                 'package/2006/relationships">'
                 '<Relationship Id="rIdStyles" Type="http://schemas.'
                 'openxmlformats.org/officeDocument/2006/relationships/styles" '
-                'Target="styles.xml"/>']
+                'Target="styles.xml"/>'
+                '<Relationship Id="rIdSettings" Type="http://schemas.'
+                'openxmlformats.org/officeDocument/2006/relationships/settings"'
+                ' Target="settings.xml"/>']
         for index, (name, _) in enumerate(self.images, 1):
             rels.append(
                 f'<Relationship Id="rIdImg{index}" Type="http://schemas.'
@@ -309,6 +365,16 @@ class Docx:
                 f'Target="media/{name}"/>')
         rels.append("</Relationships>")
         return "".join(rels)
+
+    def _settings_xml(self):
+        # Without a compatibilityMode of 15, Word opens the file in
+        # "Compatibility Mode" and says so in the title bar, which looks like
+        # the document is damaged when it is only unlabelled.
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                f"<w:settings {NS}><w:compat>"
+                '<w:compatSetting w:name="compatibilityMode" '
+                'w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>'
+                "</w:compat></w:settings>")
 
     def save(self, path):
         path = Path(path)
@@ -319,6 +385,7 @@ class Docx:
             zf.writestr("docProps/app.xml", APP_XML)
             zf.writestr("word/document.xml", self._document_xml())
             zf.writestr("word/styles.xml", self._styles_xml())
+            zf.writestr("word/settings.xml", self._settings_xml())
             zf.writestr("word/_rels/document.xml.rels", self._document_rels())
             for name, data in self.images:
                 zf.writestr(f"word/media/{name}", data)
