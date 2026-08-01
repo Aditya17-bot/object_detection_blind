@@ -910,3 +910,106 @@ PROSE IS DUPLICATED between `main.tex` and `build_docx.py` — change both.
   5.0 % over-trigger). Written up in PAPER §8 as a limitation: the boundary
   degraded to fewer capabilities rather than wrong ones (designed behaviour),
   but the model-size comparison is uninformative until thinking is off.
+
+## Detector investigation + two live defects found (2026-08-02)
+
+User asked what the app needs next, whether a model better than YOLOv8 exists,
+and whether dropping unused COCO classes would be a quick win. Investigation
+only — **no app code changed this session.** Two defects found, both undocumented
+until now, and both still OPEN.
+
+### DEFECT 1 — the NAME_CONFIDENCE gate does not work
+
+`decision.py:113` speaks the generic word "obstacle" instead of a class name
+when confidence < `NAME_CONFIDENCE = 0.8`. That threshold rests on a probe
+recorded in `EVALUATION.md:106-112`: misnames 0.65-0.75, correct names >=0.85.
+**Measured on the actual clips (14 sampled frames, conf 0.6, GPU):**
+
+| | EVALUATION.md claims | measured 2026-08-02 |
+|---|---|---|
+| dustbin -> "toilet" | 0.65-0.72 | **peak 0.94**, mean 0.80 |
+| wardrobe -> "refrigerator" | 0.72-0.75 | **peak 0.82** |
+| correct "chair" | >=0.85 | 0.92 |
+
+The bands OVERLAP, so no threshold separates them and "Toilet ahead" gets spoken
+by name — which `test_output/phase3_WhatsApp Video 2026-07-09 at 10.14.53 PM
+(2)_walk.log:1` already shows happening. **Confidence is not a signal for "is
+this word right".** `EVALUATION.md:106-112` is wrong as written and paper §4.1
+describes a gate whose empirical basis is falsified; both need correcting
+regardless of what else is done. (Paper's routing/ASR/fabrication results are
+untouched — those measure the dialogue layer.)
+
+### DEFECT 2 — clock bearings are ~2x off, in the DEFAULT configuration
+
+`position.py:136-148` maps frame width onto **10-11-12-1-2 o'clock**, with the
+comment justifying it from "a 60-70 degree cone". One clock hour is 30 deg, so
+10->2 spans **120 deg** while the camera sees **60-70 deg**. Every spoken bearing
+is roughly double the true angle: the right frame edge is ~+32 deg and gets
+announced as "2 o'clock" (+60 deg). Clock mode is DEFAULT since 2026-07-14, so
+an O&M-trained traveller — exactly the user the feature targets — is
+systematically over-rotated. Untrained users ignore the number and are fine.
+Correct mapping for 60 deg is **11-12-1**, which also destroys the feature's
+stated rationale ("finer than the 3 zones"): at this FOV clock bearings CANNOT
+be finer than left/center/right.
+
+### Model comparison — answers to the user's questions
+
+Benchmarked on the known-error clips (script was in scratchpad; regenerate from
+the plan file). Downloads: `yolo11s.pt` (18.4 MB), `yolov8s-worldv2.pt`
+(24.7 MB), both now gitignored.
+
+- **YOLO11 does NOT fix the naming.** Still "toilet" @0.93 on the dustbin; on
+  the dark-room clip it is arguably WORSE than yolov8s (loses the wardrobe,
+  emits oven/bowl/chair @0.62-0.69). Do not re-try this expecting a fix.
+- **The errors are VOCABULARY, not capacity.** COCO has no wardrobe/dustbin/
+  window, so the model makes a forced choice over 80 words and picks the nearest.
+  Corroborated by the repo's own evidence: the 6.2 MB nano custom model hit
+  0.91 on doors, beating 21.5 MB yolov8s on exactly the objects it misnames.
+- **YOLO-World (open vocabulary) works but is noisy.** `set_classes` with
+  "trash can" gets it right @0.85 — but simultaneously emits "toilet" @0.87 for
+  the SAME object, "wardrobe" only scores 0.22, and eval_a produces nine
+  competing labels for the same furniture. Needs dedup + per-class thresholds +
+  its own calibration before it is safe. The stairs precedent applies.
+- **ResNet is not an option** — it is a classifier (one label per image, no
+  boxes). The whole pipeline is box geometry: zone from box centre, proximity
+  from box area, distance from box height, sonar pan and clock bearing from
+  `center_x`. A classifier kills every capability. (ResNet as a *backbone*
+  inside Faster R-CNN is real but slower and less accurate than what we have.)
+- **Dropping unused COCO classes gives NO speedup.** The head computes all 80
+  scores in one op; cost is the backbone, which runs identically. Detections are
+  already filtered to `TARGET_CLASSES` post-hoc (`infer_server.py:150`).
+
+### Agreed next step — embedding-based naming head
+
+Full plan, written and approved-in-principle:
+**`C:\Users\rober\.claude\plans\federated-painting-seal.md`**
+
+Keep YOLO for *where* (31/31 direction correct), re-decide *what* from an
+embedding of the crop matched against user-labelled examples. `YOLO.embed()`
+exists, so no second model and no download. Insert at `infer_server.py:182`
+(full-res frame + merged dets both in scope). Phone needs no Dart change —
+`RemoteDetector` passes server names through verbatim.
+
+Key point: **embedding distance is a calibrated abstention signal**, which is
+exactly what Defect 1 proves confidence is not. User will do the manual
+labelling (~20-40 min, dragging pre-grouped crops between folders).
+
+Three constraints that will bite, detailed in the plan: output vocabulary must
+stay within `TARGET_CLASSES` or things fail SILENTLY (person-sized proximity,
+no metres, never walk-warned); `GuidanceEngine._streaks` is keyed by name so an
+unstable namer makes the app QUIETER not better (needs hysteresis); and
+`infer_server.py:150` filters before the hook, so a dustbin labelled "vase"
+never reaches it.
+
+### Also still open from this session
+
+- GPS/Google-Maps indoor guidance was proposed and **dropped** — GPS indoors is
+  10-50 m error against a 10-15 m flat, and a cloud Maps dependency would break
+  the offline architecture and the §9 privacy claim. Camera-based place
+  recognition is the viable route if it comes back.
+- Standing list from 2026-08-01 night, unchanged: router model choice (app ships
+  `llama3.2:3b` at 55 % over-trigger; gemma2 gets 10 % but 6 s/query), dictation
+  audio never sent to the laptop's Whisper (server side is already wired at
+  `agent_server.py:42` and `infer_server.py:217`, the phone just never uses it),
+  the never-run server-kill drill in `FIELD_TEST.md`, battery/thermal never
+  measured, stairs still disabled, and no blind user has ever used the app.

@@ -15,6 +15,8 @@ __pycache__/
 yolov8n.pt
 yolov8s.pt
 yolo11n.pt
+yolo11s.pt
+yolov8s-worldv2.pt
 
 # offline speech model — grab it once from
 # https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
