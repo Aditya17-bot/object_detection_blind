@@ -109,7 +109,7 @@ def _always_miss(_text):
     return None
 
 
-def build_router(config, model, host, timeout):
+def build_router(config, model, host, timeout, allow_chat=True):
     llm = None
     if config in ("llm_only", "two_tier", "llm_freetext"):
         if not model:
@@ -120,7 +120,8 @@ def build_router(config, model, host, timeout):
             raise SystemExit(f"cannot reach Ollama: {llm.error}")
     parse = _always_miss if config in ("llm_only", "llm_freetext") \
         else parse_command
-    return agent.AgentRouter(llm=llm, parse=parse), llm
+    return (agent.AgentRouter(llm=llm, parse=parse, allow_chat=allow_chat),
+            llm)
 
 
 # --------------------------------------------------------------------------
@@ -402,6 +403,11 @@ def main():
     ap.add_argument("--condition", default="clean", choices=("clean", "asr"),
                     help="clean feeds written text; asr feeds the recorded "
                          "transcripts collected by asr_collect.py")
+    ap.add_argument("--no-chat", action="store_true",
+                    help="AgentRouter(allow_chat=False) — the ablation that "
+                         "restores the ORIGINAL absolute rule, that no spoken "
+                         "token whatsoever originates in the model. The paper "
+                         "describes this arm, so it has to be runnable.")
     ap.add_argument("--asr-subset", action="store_true",
                     help="clean condition, but only over the records that "
                          "carry ASR transcripts. This is the matched baseline: "
@@ -436,7 +442,10 @@ def main():
     if args.limit:
         records = records[:args.limit]
 
-    router, llm = build_router(args.config, args.model, args.host, args.timeout)
+    router, llm = build_router(args.config, args.model, args.host, args.timeout,
+                               allow_chat=not args.no_chat)
+    if args.no_chat:
+        print("ablation: allow_chat=False (no model-authored text at all)")
 
     if args.config == "llm_freetext":
         # the ablation does not route; it only feeds T6

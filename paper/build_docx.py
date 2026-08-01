@@ -201,7 +201,6 @@ MONO = dict(font="Consolas", size=8.2)
 IT = dict(italic=True)
 BF = dict(bold=True)
 
-
 def build():
     doc = Docx(title=TITLE, author=AUTHOR)
 
@@ -212,33 +211,32 @@ def build():
 
     # -- abstract ---------------------------------------------------------
     doc.heading("", "Abstract")
-    doc.body([
-        "Sighted users silently discard a system's wrong answers; blind users "
-        "cannot. We report BlindAssist, an offline camera-based guidance "
-        "system for blind and low-vision users, and argue that ",
-        ("selective abstention", IT),
-        "—declining to speak when an output would be unreliable—is a "
-        "first-class design objective at every layer, not an error-handling "
-        "detail. We describe five mechanisms spanning perception "
-        "(reliability-gated metric distance), planning (an openness threshold "
-        "that can answer “stop”), transport (no-data distinguished "
-        "from verified-clear), attention (proximity-gated warnings with an "
-        "on-demand directional counterpart), and dialogue: a tool-mediated "
-        "voice agent in which a local offline language model selects among "
-        "fourteen deterministic capabilities and authors no guidance. On 200 "
-        "labelled utterances, deterministic-first two-tier routing improves "
-        "overall accuracy from 39.5% to 53.0% while keeping 100% on trained "
-        "phrasings that an LLM-only router drops to 45.0%, and the same model "
-        "asked to answer freely rather than to choose a tool fabricates "
-        "perceptual content in 42.5% of responses. It also costs: "
-        "out-of-scope over-triggering rises from 5.0% to 55.0%. A "
-        "spoken-input condition, recorded by two speakers who did not author "
-        "the set, then removes most of the agent layer's remaining advantage "
-        "— two-tier's margin over the keyword baseline falls from 6.8 "
-        "points to 0.9 — while the deterministic tier's abstention "
-        "survives intact. We report both as negative results rather than "
-        "tune them away.",
-    ], first=True)
+    doc.body(
+        "A sighted person using an assistive app checks what it says almost "
+        "without noticing, and when it is wrong they drop the claim and lose "
+        "nothing. A blind person has no cheap way to run that check, so a "
+        "confident wrong answer is accepted and acted on, and it costs more "
+        "than silence would have. We built BlindAssist, an offline "
+        "camera-based guidance system for blind and low-vision users, around "
+        "that difference, and the design idea we want to argue for is that a "
+        "system should be able to decline to answer at every layer where it "
+        "can be wrong, with each layer deciding on its own terms rather than "
+        "on one shared confidence score. We describe five such mechanisms, "
+        "covering distance estimation, path advice, network failure, how often "
+        "the system is allowed to interrupt, and finally a voice agent where a "
+        "local offline language model chooses among fourteen deterministic "
+        "capabilities and writes none of the guidance. On 200 labelled "
+        "utterances, putting a keyword parser in front of the model raises "
+        "overall routing accuracy from 39.5% to 53.0% and keeps 100% on the "
+        "phrasings the parser already covers, which an LLM-only router drops "
+        "to 45.0%, and the same model asked to answer in prose instead of "
+        "choosing a tool invents perceptual content in 42.5% of its replies. "
+        "The cost is that out-of-scope over-triggering rises from 5.0% to "
+        "55.0%. We then recorded two speakers reading the same utterances "
+        "aloud, and most of what the agent layer gained disappears: its margin "
+        "over the keyword baseline falls from 6.8 points to 0.9, while the "
+        "deterministic layer's abstention barely moves. Both of those are "
+        "negative results and we report them as they came out.", first=True)
 
     doc.para([("CCS Concepts: ", BF),
               ("• Human-centered computing → Accessibility "
@@ -255,356 +253,343 @@ def build():
     # -- 1 introduction ---------------------------------------------------
     doc.heading("1", "Introduction")
     doc.body(
-        "A sighted person using an assistive app performs a silent, "
-        "continuous audit. The app says “chair on your right”; they "
-        "glance right; there is no chair; they discard the claim and lose "
-        "nothing. That audit loop is invisible in design documents precisely "
-        "because it is free.", first=True)
-    doc.body([
-        "For a blind user it does not exist. Every spoken claim is accepted "
-        "or acted on, because there is no cheap channel to check it against. "
-        "The asymmetry is not hypothetical: blind readers of "
-        "machine-generated image captions have been shown to construct "
-        "elaborate and confident interpretations of descriptions that were "
-        "simply wrong, because nothing in the interaction offered grounds "
-        "for doubt " + c("macleod2017captions") + ", and the same pattern "
-        "recurs with generative assistants, whose fluency is itself read as "
-        "a reliability signal " + c("adnin2024genai", "stangl2020descriptions")
-        + ". The human-factors literature supplies the other half: unreliable "
-        "automation does not merely fail to help, it drives disuse of the aid "
-        "as a whole " + c("parasuraman1997misuse", "lee2004trust") + ", and "
-        "below a reliability crossover an imperfect alert is worse than no "
-        "alert at all " + c("wickens2007imperfect", "breznitz1984crywolf")
-        + ".",
-    ])
-    doc.body([
-        "This inverts a default that most interactive systems take for "
-        "granted: ", ("answer something", IT),
-        ". Under the asymmetry, a confidently wrong answer is not a degraded "
-        "answer—it is worse than silence, because silence costs the user "
-        "one query and a wrong answer costs them their calibration of when to "
-        "trust the system at all.",
-    ])
+        "A sighted person using an assistive app is running a check the whole "
+        "time without thinking about it. The app says “chair on your "
+        "right”, they glance right, there is no chair, and they drop the "
+        "claim and carry on. Nothing in the design of the app has to account "
+        "for that, because the check is free and it happens whether the "
+        "designer planned it or not.", first=True)
     doc.body(
-        "This paper reports BlindAssist, a working offline guidance system (a "
-        "Python reference implementation and an Android/Flutter port driven "
-        "by a shared pure-logic core with mirrored test suites), and makes "
-        "one architectural claim:")
+        "A blind user does not have that check. Every spoken claim is either "
+        "accepted or acted on, because there is no cheap way to test it "
+        "against anything, and this is not a hypothetical worry. Blind readers "
+        "of machine-generated image captions have been observed building "
+        "detailed and confident interpretations of descriptions that were "
+        "simply wrong, since nothing in the interaction gave them a reason to "
+        "doubt " + c("macleod2017captions") + ", and the same thing shows up "
+        "again with generative assistants, where fluency itself gets read as a "
+        "sign of reliability "
+        + c("adnin2024genai", "stangl2020descriptions") + ". The "
+        "human-factors literature has the other half of it: automation that is "
+        "unreliable does not just fail to help, it makes people stop using the "
+        "aid at all " + c("parasuraman1997misuse", "lee2004trust") + ", and "
+        "past a certain point an imperfect alert leaves the user worse off "
+        "than no alert would have "
+        + c("wickens2007imperfect", "breznitz1984crywolf") + ".")
+    doc.body(
+        "So the default that most interactive systems are built on, which is "
+        "to answer something rather than nothing, is the wrong default here. A "
+        "confident wrong answer costs the user more than silence, because "
+        "silence costs them one query and a wrong answer costs them their "
+        "sense of when the system can be trusted at all, and that is much "
+        "harder to get back.")
+    doc.body(
+        "This paper reports BlindAssist, a working offline guidance system "
+        "with a Python reference implementation and an Android/Flutter port "
+        "that share one pure-logic core and mirrored test suites. The claim we "
+        "want to make about it is architectural:")
     doc.block_quote([
-        ("Under the verification asymmetry, selective abstention should be "
-         "designed per layer, with layer-specific abstention "
-         "criteria—not delegated to a single confidence threshold at "
-         "the output.", IT)])
-    doc.body([
-        ("Contributions. ", BF),
-        ("C1", BF), ", a cross-layer selective-abstention pattern "
-        "instantiated five times with layer-specific criteria. ",
-        ("C2", BF), ", a tool-mediated voice agent for a safety-critical "
-        "speech channel: the model emits only a validated {tool, argument} "
-        "pair drawn from a fixed registry, and every ", ("guidance", IT),
-        " token originates in deterministic code or a fixed template. ",
-        ("C3", BF), ", deterministic-first two-tier routing, which we show "
-        "is not a latency optimisation with an accuracy cost but strictly "
-        "better on the traffic it covers. ",
-        ("C4", BF), ", a capability registry with enforced cross-site "
-        "consistency across two languages. ",
-        ("C5", BF), ", an evaluation, on a protocol frozen before the router "
-        "was implemented, in which abstention rate and fabricated-perception "
-        "count are first-class metrics rather than failure modes.",
-    ])
+        ("Given that the user cannot verify what they are told, the ability to "
+         "decline should be designed into every layer separately, with each "
+         "layer deciding on criteria that come from its own failure mode, "
+         "rather than being handed to one confidence threshold at the output.",
+         IT)])
+    doc.body(
+        "We support that with five mechanisms already running in the system, "
+        "an agent layer built on the same principle, and an evaluation that "
+        "was frozen before the agent existed. The results include two findings "
+        "that did not go the way we expected, and we have kept both.")
 
     # -- 2 related work ---------------------------------------------------
     doc.heading("2", "Related work")
-    doc.body([
-        ("Assistive perception systems. ", BF),
-        "Crowd- and cloud-backed visual question answering established the "
+    doc.body(
+        "Crowd- and cloud-backed visual question answering set up the "
         "interaction " + c("bigham2010vizwiz") + " and the dataset tradition "
-        + c("gurari2018vizwiz") + " this system inherits, against a backdrop "
-        "of everyday interfaces whose visual content is simply unavailable "
-        + c("morris2016twitter") + "; today's scene-description apps "
-        + c("bemyeyes", "seeingai", "envision", "lookout") + " produce rich "
-        "descriptions but are latency- and connectivity-dependent, verbose by "
-        "design, and not built for continuous walking obstacle avoidance. "
-        "Dedicated wearables " + c("orcam") + " give excellent near-field "
-        "reading at hardware cost. Indoor navigation assistants localise the "
-        "traveller rather than the objects in front of them "
+        + c("gurari2018vizwiz") + " that this system inherits, and it did so "
+        "against a background where a lot of everyday visual content simply is "
+        "not available to a blind user at all " + c("morris2016twitter")
+        + ". The scene-description apps in use today "
+        + c("bemyeyes", "seeingai", "envision", "lookout") + " give rich "
+        "descriptions, but they depend on latency and connectivity, they are "
+        "verbose by design, and they are not built for the continuous business "
+        "of not walking into things. Dedicated wearables " + c("orcam")
+        + " read near-field text very well at the price of buying hardware. "
+        "Indoor navigation assistants locate the traveller rather than the "
+        "objects in front of them "
         + c("ahmetovic2016navcog", "sato2017navcog3", "guerreiro2019cabot")
-        + ", spatial-audio wayfinding operates at beacon granularity "
+        + ", spatial-audio wayfinding works at beacon granularity "
         + c("soundscape") + ", and electronic travel aids " + c("wewalk")
-        + " give proximity without object identity or fine direction; surveys "
-        + c("kuriakose2022review") + " and comparative studies "
-        + c("zhao2020wayfinding") + " map the space. Work on blind users "
-        "training their own recognisers " + c("kacorri2017teachable")
-        + " shares our premise that the recogniser is not the whole of the "
-        "problem. What we did not find in this literature is a system that "
-        "treats ", ("declining to answer", IT), " as a designed and evaluated "
-        "behaviour rather than an error path.",
-    ], first=True)
-    doc.body([
-        ("Abstention. ", BF),
-        "Classification with a reject option is old " + c("chow1970reject")
-        + " and has a modern formal treatment in selective prediction "
+        + " report proximity without saying what the object is or exactly "
+        "where; surveys " + c("kuriakose2022review") + " and comparative "
+        "studies " + c("zhao2020wayfinding") + " cover the space. Work on "
+        "blind users training their own recognisers " + c("kacorri2017teachable")
+        + " starts from the same premise we do, that getting the recogniser "
+        "right is not the whole problem. What we could not find in this "
+        "literature was a system where declining to answer is treated as a "
+        "behaviour to be designed and measured rather than as the error path.",
+        first=True)
+    doc.body(
+        "Abstention itself is old. Classification with a reject option goes "
+        "back to Chow " + c("chow1970reject") + ", and it has a modern "
+        "treatment in selective prediction "
         + c("elyaniv2010selective", "geifman2017selectivenet") + ", learning "
-        "to defer " + c("madras2018defer", "mozannar2020defer") + ", and "
+        "to defer " + c("madras2018defer", "mozannar2020defer") + " and "
         "confidence estimation "
-        + c("hendrycks2017baseline", "guo2017calibration") + ". That work "
-        "asks when a ", ("model", IT), " should abstain, and answers with a "
-        "score threshold. We treat abstention as an ", ("interface", IT),
-        " property instead: five different layers of one system, each with a "
-        "failure mode of its own, each abstaining on a criterion derived from "
-        "that failure mode rather than from a shared confidence number.",
-    ])
-    doc.body([
-        ("Hallucination containment. ", BF),
-        "Fluent, unsupported generation is well characterised "
-        + c("ji2023hallucination", "maynez2020faithfulness") + ", and models' "
-        "own confidence signals are only partly informative "
+        + c("hendrycks2017baseline", "guo2017calibration") + ". All of that "
+        "asks when a model should abstain and answers with a threshold on a "
+        "score. We are asking a different question, about an interface rather "
+        "than a classifier, and our answer is that five separate layers of one "
+        "system each have their own way of being wrong and should each abstain "
+        "on grounds that come from that.")
+    doc.body(
+        "Fluent generation that is not supported by anything is well described "
+        + c("ji2023hallucination", "maynez2020faithfulness") + ", and a "
+        "model's own confidence signal only tells you so much "
         + c("kadavath2022know") + ". Tool use "
         + c("schick2023toolformer", "yao2023react", "parisi2022talm",
             "qin2024toolllm") + " and constrained decoding "
-        + c("scholak2021picard", "willard2023guided") + " are standard "
-        "engineering. Our step is not the mechanism but ", ("why", IT),
-        " it is applied: for a consumer who cannot visually reject a wrong "
-        "answer, containment is a safety property, and the design target is "
-        "not “minimise fabricated perception” but “make it "
-        "inexpressible”. We report the ablation that prices that "
-        "constraint.",
-    ])
-    doc.body([
-        ("Non-visual output. ", BF),
+        + c("scholak2021picard", "willard2023guided") + " are ordinary "
+        "engineering by now. What we are adding is the reason for applying "
+        "them: when the person on the other end cannot look and see that the "
+        "answer is wrong, containment stops being a quality measure and "
+        "becomes a safety one, and the target changes from making fabricated "
+        "perception rare to making it something the system cannot express. We "
+        "report the ablation that shows what that costs.")
+    doc.body(
         "Obstacle sonification " + c("meijer1992voice", "csapo2013auditory")
-        + " and vibrotactile direction " + c("vanerp2005waypoint")
-        + " are established modalities; our contribution is not the modality "
-        "but a single ordinal-localisation core that drives speech, stereo "
-        "sonar and haptics with consistent semantics and shared anti-spam "
-        "timing.",
-    ])
+        + " and vibrotactile direction " + c("vanerp2005waypoint") + " are "
+        "established, so the modalities are not our contribution. What we did "
+        "was drive all of them from one ordinal localisation core, so speech, "
+        "stereo sonar and haptics carry the same meaning and share the same "
+        "timing rules.")
 
     # -- 3 system ---------------------------------------------------------
     doc.heading("3", "System")
-    doc.body([
-        "A handset streams camera frames to a tethered laptop over Wi-Fi; the "
-        "laptop runs YOLOv8s " + c("redmon2016yolo", "jocher2023ultralytics")
-        + " trained on COCO " + c("lin2014coco") + " plus a small custom "
-        "door/dustbin detector; the handset keeps every output modality "
-        "native—speech, stereo-panned proximity sonar, haptics, "
-        "grammar-constrained offline speech recognition "
-        + c("vosk", "povey2011kaldi") + ", and on-device OCR. All guidance "
-        "logic lives in a pure layer with no camera, no model and no clock of "
-        "its own, mirrored 1:1 between Python and Dart with identical test "
-        "suites (221 and 159 tests). Figure 1 shows the arrangement.",
-    ], first=True)
-    doc.body([
-        "Objects are localised ", ("ordinally", IT), ": a 3×3 zone grid "
-        "from the box centre, and a per-class proximity bucket (very close / "
-        "close / medium / far) from box area. Metric distance exists but is "
-        "gated (§4).",
-    ])
     doc.body(
-        "On-device inference measured ≈2.5 s per frame on the handset "
-        "for both the GPU and NNAPI delegates, which is why inference is "
-        "tethered. On the laptop GPU both detectors together cost 21 ms; "
-        "total server time per frame during a field walk was ≈305 ms, so "
-        "the dominant cost is frame reconstruction and transport rather than "
-        "detection.")
+        "A handset streams camera frames to a tethered laptop over Wi-Fi, the "
+        "laptop runs YOLOv8s " + c("redmon2016yolo", "jocher2023ultralytics")
+        + " trained on COCO " + c("lin2014coco") + " together with a small "
+        "custom door and dustbin detector, and everything the user actually "
+        "hears or feels stays on the phone: speech, stereo-panned proximity "
+        "sonar, haptics, grammar-constrained offline speech recognition "
+        + c("vosk", "povey2011kaldi") + " and on-device OCR. All the guidance "
+        "logic sits in a layer with no camera, no model and no clock of its "
+        "own, and that layer is written twice, once in Python and once in "
+        "Dart, with test suites that mirror each other (221 and 159 tests). "
+        "Figure 1 shows how it fits together.", first=True)
+    doc.body(
+        "Objects are located ordinally, by which we mean a 3×3 zone grid "
+        "taken from the box centre and a per-class proximity bucket of very "
+        "close, close, medium or far taken from box area. A distance in metres "
+        "does exist, but it is gated (§4).")
+    doc.body(
+        "Running the detectors on the phone measured about 2.5 s per frame for "
+        "both the GPU and the NNAPI delegate, which is why inference is "
+        "tethered at all. On the laptop GPU the two detectors together cost "
+        "21 ms, while total server time per frame during a field walk was "
+        "about 305 ms, so almost all of the remaining cost is reconstructing "
+        "and moving the frame rather than looking at it.")
 
     doc.image("f1_system.png", (FIGS / "f1_system.png").read_bytes(),
               COL, COL * 2.55 / 3.33)
     doc.caption("Figure 1.",
-                "The two dashed arrows crossing the boundary are the whole "
-                "safety argument: the router may point at a capability, but "
-                "it may not speak through one. Tier 0 runs on the handset, so "
-                "every trained phrase still works with the laptop switched "
-                "off.")
+                "The two dashed arrows crossing the boundary carry the whole "
+                "safety argument. The router is allowed to point at a "
+                "capability and is not allowed to speak through one. Tier 0 "
+                "runs on the handset, so every trained phrase still works with "
+                "the laptop switched off.")
 
     # -- 4 mechanisms -----------------------------------------------------
     doc.heading("4", "Five ways to decline")
+    doc.subheading("4.1  Perception: distance that is gated on reliability")
+    doc.body(
+        "Distance comes out of a pinhole model, d = h_real · F / h_box, and it "
+        "is spoken as “about N metres” only when three conditions "
+        "hold, which are that the box does not touch a frame edge, that the "
+        "class name clears a confidence threshold, and that the object is not "
+        "already close. The first of those matters most. A box cut off by the "
+        "edge of the frame is shorter than the object really is, so the model "
+        "reads it as further away, and that error points the wrong way for "
+        "exactly the nearest and largest things in the scene, which are the "
+        "ones most likely to be clipped. When any of the three fails the "
+        "system falls back to the ordinal bucket, which it can always say "
+        "honestly. Learned monocular depth " + c("ranftl2022midas") + " would "
+        "give a better estimate, but it would not remove the need for the "
+        "gate, because its failure cases are quiet too.", first=True)
+
+    doc.subheading("4.2  Planning: path advice with a threshold on openness")
+    doc.body(
+        "Each of left, ahead and right is scored by how close its nearest "
+        "obstacle is, rather than by how much area is occupied in that third. "
+        "Scoring by area inverts in a case that comes up constantly, where a "
+        "bulky object further away outranks a small hazard close by, and the "
+        "advice then points the user at the hazard. Doorways are left out of "
+        "the obstacle mass, since a door is a thing to walk through. If even "
+        "the emptiest third has a close obstacle in it, the system does not "
+        "pick the least bad direction, it says “Stop, no clear path”, "
+        "because a recommender that always names a direction has no way of "
+        "saying that none of them is any good.", first=True)
+
+    doc.subheading("4.3  Transport: absence is not the same as a negative")
     doc.body([
-        ("Perception: reliability-gated metric distance. ", BF),
-        "Distance comes from a pinhole model, d = h_real · F / h_box, "
-        "and is spoken as “about N metres” only if three gates "
-        "pass: the box does not touch a frame edge, the class name clears a "
-        "confidence threshold, and the object is not already close. The "
-        "edge-clip gate matters most: a truncated box reads ",
-        ("falsely far", IT), ", so the error points in the dangerous "
-        "direction, precisely for the nearest and largest objects. When any "
-        "gate fails the system speaks the ordinal bucket instead. Learned "
-        "monocular depth " + c("ranftl2022midas") + " would improve the "
-        "estimate but not remove the need for the gate, since its failure "
-        "cases are also silent.",
+        "A frame that fails to come back returns ", ("null", MONO),
+        " and never an empty list. An empty list means the scene was looked at "
+        "and found clear, and acting on that when it is not true has three "
+        "specific effects: the sonar goes quiet, which means “path "
+        "clear”, the escalation state resets, and Find reports “not "
+        "visible” for something that may be right in front of the user. On "
+        "no data the engine pauses guidance and says that it has, rather than "
+        "turning its own outage into a confident answer.",
     ], first=True)
+
+    doc.subheading("4.4  Attention: fewer warnings, and a way to ask")
     doc.body([
-        ("Planning: openness-thresholded path advice. ", BF),
-        "Each of left/ahead/right is scored by the proximity rank of its ",
-        ("closest", IT), " obstacle rather than by summed occupied area; the "
-        "naive metric lets a far bulky object outrank a near small hazard and "
-        "steers the user into it. Doorways are excluded from obstacle mass. "
-        "If even the emptiest third holds a close obstacle, the system "
-        "refuses to name a least-bad direction and says “Stop, no clear "
-        "path”.",
-    ])
-    doc.body([
-        ("Transport: absence is not a negative. ", BF),
-        "A failed frame returns ", ("null", MONO), ", never an empty list. An "
-        "empty list means a ", ("verified-clear", IT), " scene, and acting on "
-        "it silences the sonar, resets escalation state, and makes Find "
-        "report “not visible” for an object that may be directly "
-        "ahead. On no-data the engine pauses guidance and says so.",
-    ])
-    doc.body([
-        ("Attention: proximity-gated warnings with a pull counterpart. ", BF),
-        "Added after the first field walk, where the verdict was “it "
-        "keeps saying all the objects, it's too much of a cluster”. "
-        "Continuous warnings now fire only at close range or nearer; "
-        "everything removed from the push channel is reachable by asking (",
-        ("check", MONO), ": “is there anything in front of me?”), "
-        "answered by the same ordinal core, in tier 0, with no model and no "
-        "network. The reasoning is the alarm-fatigue result "
-        + c("sendelbach2013alarm", "breznitz1984crywolf") + " applied to a "
-        "user whose only guidance channel is the one being flooded: an "
-        "unheeded warning has negative value, because it spent attention and "
-        "delivered nothing.",
-    ])
-    doc.body([
-        ("Dialogue: routing abstention. ", BF),
-        "Unknown tool, unknown object class, missing argument, prose instead "
-        "of JSON, timeout or any exception all become abstention, and the "
-        "clarifying question is selected from a fixed table by key rather "
-        "than written by the model.",
-    ])
+        "This one came out of the first field walk rather than out of the "
+        "design. The verdict was that it kept saying all the objects and it "
+        "was too much of a cluster, which is the alarm-fatigue result "
+        + c("sendelbach2013alarm", "breznitz1984crywolf") + " arriving in a "
+        "setting where the channel being flooded is the only guidance channel "
+        "the user has. A warning that is not heeded has negative value, since "
+        "it spent attention and gave nothing back. Continuous warnings now "
+        "fire only at close range or nearer, and everything taken out of that "
+        "channel can still be asked for: ", ("check", MONO), " answers "
+        "“is there anything in front of me?” from the same ordinal "
+        "core, in tier 0, with no model and no network involved. A user who "
+        "asks has by asking given the attention that the continuous channel is "
+        "not allowed to assume.",
+    ], first=True)
+
+    doc.subheading("4.5  Dialogue: abstaining from routing")
+    doc.body(
+        "An unknown tool, an unknown object class, a missing argument, prose "
+        "where JSON should be, a timeout, or any exception at all become an "
+        "abstention, and even the clarifying question that gets asked is "
+        "picked from a fixed table by key rather than written by the model.",
+        first=True)
 
     # -- 5 agent layer ----------------------------------------------------
     doc.heading("5", "The agent layer")
-    doc.body([
-        "BlindAssist's offline recogniser is grammar-constrained: only "
-        "phrases in an explicit list can be transcribed ", ("at all", IT),
-        ", so free speech is not mis-parsed—it is never heard. A trigger "
-        "word therefore opens a dictation window, transcribed either by a "
-        "local Whisper model " + c("radford2023whisper") + " on the laptop "
-        "or, with the laptop off, by a second recogniser built on the same "
-        "already-loaded 40 MB model with its grammar removed. The transcript "
-        "goes first to the deterministic parser and only then, on a miss, to "
-        "the router (Figure 2).",
-    ], first=True)
-    doc.body([
-        ("The authority boundary. ", BF),
-        "The model receives the tool registry, the class enumeration, a "
-        "deterministic state block (visible classes with zone, proximity and "
-        "count; mode; last announcement; object memory) and the utterance, "
-        "and must return JSON. Everything after that treats its output as "
-        "untrusted input. Multi-turn references such as “is it still "
-        "there” therefore resolve against the detector's own output, "
-        "never against a description: perception never re-enters the model.",
-    ])
-    doc.body([
-        ("Where the boundary moved. ", BF),
-        "The system as first built enforced the stronger rule—",
-        ("no spoken token whatsoever", IT), " originated in the model. After "
-        "the first field walk the developer-user asked for conversation: the "
-        "ability to ask a question in their own words and be answered rather "
-        "than routed. We granted exactly that. A reply travels in a separate "
-        "channel that the executor cannot route through any capability; it is "
-        "grounded in the same state block, length-capped and truncated at a "
-        "sentence; loose prose emitted where a tool call belongs is still "
-        "discarded; and one flag restores the absolute rule for the ablation. "
-        "The honest formulation of C2 is therefore “no ", ("guidance", IT),
-        " token originates in the model”, which is weaker than where we "
-        "started, and we report it as weakened.",
-    ])
-    doc.body([
-        ("Tiering across a network boundary. ", BF),
-        "On the handset the two tiers fall on opposite sides of a Wi-Fi link. "
-        "The client re-validates the server's reply against the same closed "
-        "registry before executing, so the containment guarantee does not "
-        "rest on trusting the transport, and a reply containing one unusable "
-        "action is discarded whole—executing the half that happened to "
-        "parse is itself an unverified action.",
-    ])
-    doc.body([
-        ("Registry. ", BF),
-        "Fourteen capabilities (Table 4) were previously declared in four "
-        "places: a parser, its phrase list, a dispatcher, and the Dart "
-        "equivalents. The sites had already drifted—the web dispatcher "
-        "silently dropped five capabilities the parser could produce. One "
-        "declarative table now drives the recogniser's phrase list at "
-        "runtime, generates the model's tool schema, backs a single executor, "
-        "and emits a committed manifest that both languages' test suites "
-        "assert against field by field. We claim ",
-        ("enforced consistency across sites", IT), ", not literal "
-        "single-source generation: the field-validated parser is deliberately "
-        "left in place rather than regenerated, because the regression risk "
-        "of rewriting it exceeds the value of the stronger claim.",
-    ])
+    doc.body(
+        "BlindAssist's offline recogniser is grammar-constrained, so only "
+        "phrases in an explicit list can be transcribed at all, and free "
+        "speech is therefore not mis-parsed, it is never heard in the first "
+        "place. A trigger word opens a dictation window, which is transcribed "
+        "either by a local Whisper model " + c("radford2023whisper") + " on "
+        "the laptop or, with the laptop off, by a second recogniser built on "
+        "the same 40 MB model that is already loaded with its grammar removed. "
+        "The transcript goes to the deterministic parser first and only "
+        "reaches the router if that misses (Figure 2).", first=True)
+    doc.body(
+        "The model is given the tool registry, the class enumeration, a "
+        "deterministic state block listing the visible classes with zone, "
+        "proximity and count along with the current mode, the last "
+        "announcement and object memory, and the utterance, and it has to "
+        "return JSON. Everything past that point treats what comes back as "
+        "untrusted input. A reference like “is it still there” "
+        "therefore gets resolved against what the detector saw and not against "
+        "a description, so perception never goes back into the model.")
+    doc.body(
+        "We should say where the boundary moved, because it did. The system as "
+        "first built enforced a stronger rule, that no spoken token whatsoever "
+        "came from the model. After the first field walk the developer-user "
+        "asked for conversation, by which he meant the ability to ask a "
+        "question in his own words and get an answer instead of getting "
+        "routed, and we granted that and nothing more. A reply travels in a "
+        "separate channel that the executor cannot push through any "
+        "capability, it is grounded in the same state block, it is "
+        "length-capped and cut at a sentence, loose prose emitted where a tool "
+        "call belongs is still thrown away, and one flag puts the absolute "
+        "rule back for the ablation in §7.2. So the honest version of the "
+        "claim is that no guidance token comes from the model, which is weaker "
+        "than where we started, and we would rather say that than let the "
+        "earlier wording stand.")
+    doc.body(
+        "On the handset the two tiers sit on opposite sides of a Wi-Fi link, "
+        "and the client re-validates whatever the server sends against the "
+        "same closed registry before executing any of it, so the containment "
+        "guarantee does not depend on trusting the network. A reply with one "
+        "unusable action in it is thrown away whole rather than partly "
+        "executed, since running the half that happened to parse would itself "
+        "be an unverified action.")
+    doc.body(
+        "Fourteen capabilities (Table 4) used to be declared in four places, a "
+        "parser, its phrase list, a dispatcher and the Dart equivalents, and "
+        "those places had already drifted apart: the web dispatcher had "
+        "silently stopped handling five capabilities that the parser could "
+        "still produce. One declarative table now drives the recogniser's "
+        "phrase list at runtime, generates the model's tool schema, backs a "
+        "single executor, and emits a committed manifest that both test suites "
+        "check field by field. We claim consistency that is enforced across "
+        "sites, not single-source generation, because the field-validated "
+        "parser is left in place on purpose rather than being regenerated from "
+        "the table, and rewriting it would risk more than the stronger claim "
+        "is worth.")
 
     doc.image("f2_router.png", (FIGS / "f2_router.png").read_bytes(),
               COL, COL * 2.75 / 3.33)
     doc.caption("Figure 2.",
                 "Two-tier routing. Every path except the amber reply channel "
-                "produces text written by deterministic code or selected from "
-                "a fixed template; the reply channel cannot reach any "
-                "capability's output.")
+                "produces text that was written by deterministic code or "
+                "picked from a fixed template, and the reply channel cannot "
+                "reach any capability's output.")
 
     # -- 6 evaluation -----------------------------------------------------
     doc.heading("6", "Evaluation")
     doc.body(
-        "The perception and guidance layers were checked first on seven "
-        "recorded phone clips, which produced 31 announcements; every "
-        "announcement saves an annotated keyframe, and all 31 were reviewed "
-        "against the image. Direction was correct on 31/31 and there were no "
-        "phantom announcements, while 6 of 31 carried a wrong class name with "
-        "the warning behaviour still correct—the pattern that motivates "
-        "speaking the generic word “obstacle” below a confidence "
-        "threshold. These numbers are small and author-reviewed, and we "
-        "report them as a sanity check on the deterministic core rather than "
-        "as a perception result. The rest of this section concerns the "
-        "dialogue layer.", first=True)
-    doc.body([
+        "Before any of the routing work, the perception and guidance layers "
+        "were checked on seven recorded phone clips, which between them "
+        "produced 31 announcements. Every announcement saves an annotated "
+        "keyframe and all 31 were reviewed against the image. Direction was "
+        "right on 31 of 31 and no announcement was made for something that was "
+        "not there, while 6 of the 31 used a wrong class name and still gave "
+        "the correct warning, which is the pattern behind saying the generic "
+        "word “obstacle” when confidence is below threshold. These are "
+        "small numbers reviewed by the author, so we report them as a sanity "
+        "check on the deterministic core and not as a perception result.",
+        first=True)
+    doc.body(
         "The protocol and a set of 200 labelled utterances were frozen and "
-        "committed ", ("before", IT), " the router was implemented, so the "
-        "router could not be tuned against its own test set. Categories: ",
-        ("canonical", IT), " (40, phrasings the grammar covers), ",
-        ("paraphrase", IT), " (70), ", ("multi-intent", IT), " (20), ",
-        ("out-of-scope", IT), " (40, gold label: abstain) and ",
-        ("ambiguous", IT), " (30, gold depends on a state block encoded in "
-        "the record). Out-of-scope records are plausible things a user would "
-        "say to an assistive device—weather, calls, messages, time, "
-        "battery—rather than nonsense strings, which would be easy to "
-        "abstain on and would inflate the metric.",
-    ])
-    doc.body([
-        "Configurations: keyword-only, LLM-only (tier 0 stubbed to always "
-        "miss), and two-tier. Routing accuracy is exact match on the ",
-        ("ordered", IT), " action list; a two-action utterance routed to one "
-        "correct action scores zero, because the user asked for two things "
-        "and got one. The ", ("over-trigger rate", IT), " is the fraction of "
-        "out-of-scope utterances answered with any action, and is the safety "
-        "metric of this layer. The fabrication check verifies that every "
-        "executed spoken string is a member of the set the deterministic core "
-        "could produce for that record, plus the fixed templates; the harness "
-        "fails loudly otherwise. Intervals are Wilson "
-        + c("wilson1927interval") + "; no significance testing between "
-        "configurations is claimed at this set size, and the comparison is "
-        "descriptive.",
-    ])
-    doc.body([
-        ("The spoken condition. ", BF),
+        "committed before the router was written, so that the router could not "
+        "be tuned against its own test set. The categories are canonical (40, "
+        "phrasings the grammar covers), paraphrase (70), multi-intent (20), "
+        "out-of-scope (40, where the gold label is to abstain) and ambiguous "
+        "(30, where the gold answer depends on a state block stored in the "
+        "record). The out-of-scope records are plausible things somebody would "
+        "say to an assistive device, so weather, calls, messages, time and "
+        "battery, rather than nonsense strings, because nonsense is easy to "
+        "abstain on and would have made the metric look better than it is.")
+    doc.body(
+        "There are three configurations, keyword-only, LLM-only with tier 0 "
+        "stubbed to always miss, and two-tier. Routing accuracy is exact match "
+        "on the ordered action list, and a two-action utterance routed to one "
+        "correct action scores zero, because the user asked for two things and "
+        "got one. The over-trigger rate is the share of out-of-scope "
+        "utterances that got answered with any action at all, and it is the "
+        "safety metric for this layer. The fabrication check confirms that "
+        "every spoken string that was executed is one the deterministic core "
+        "could have produced for that record, or a fixed template, and the "
+        "harness fails loudly on anything else. Intervals are Wilson "
+        + c("wilson1927interval") + ", and we are not claiming significance "
+        "between configurations at this set size, the comparison is "
+        "descriptive.")
+    doc.body(
         "Two speakers who did not author the set read a stratified 60-record "
-        "subset aloud, once each, in a normal room. Recordings were "
+        "subset aloud, once each, in a normal room. The recordings were "
         "transcribed by the same recogniser the handset uses for open "
         "dictation, with the grammar removed, so this is the condition the "
-        "deployed system actually operates in rather than a simulation of "
-        "it. Utterance boundaries were recovered by aligning the recognised "
-        "word stream to the known script; where fewer than a third of an "
-        "utterance's words aligned, the record was dropped rather than paired "
-        "with a transcript we could not trust. 107 transcripts over 59 "
-        "records survived that gate. Because the gate removes the utterances "
-        "the recogniser handled worst, the spoken-condition numbers below are "
-        "if anything optimistic.",
-    ])
+        "system actually runs in rather than a simulation of it. Utterance "
+        "boundaries were recovered by aligning the recognised word stream to "
+        "the known script, and where fewer than a third of an utterance's "
+        "words aligned the record was dropped instead of being paired with a "
+        "transcript we could not trust, which left 107 transcripts over 59 "
+        "records. That gate takes out the utterances the recogniser handled "
+        "worst, so the spoken numbers below are if anything a little kind to "
+        "the system.")
     doc.body([
-        "Model: ", ("llama3.2:3b", MONO), " " + c("llama3", "ollama")
-        + " on the tether laptop. Criteria that would falsify each claim were "
-        "recorded in the protocol before the runs.",
+        "Unless stated otherwise the model is ", ("llama3.2:3b", MONO), " "
+        + c("llama3", "ollama") + " under Ollama on the tether laptop. What "
+        "would falsify each claim was written into the protocol before any of "
+        "the runs.",
     ])
 
     # -- 7 results --------------------------------------------------------
@@ -628,45 +613,44 @@ def build():
               COL, COL * 1.85 / 3.33)
     doc.caption("Figure 3.",
                 "Routing accuracy by category, n = 200. For out-of-scope, "
-                "“accuracy” means correctly abstaining. The keyword "
-                "bars at zero are not degradation but absence: a grammar "
-                "cannot hear what is not in its grammar.")
+                "accuracy means correctly abstaining. The keyword bars sitting "
+                "at zero are not degradation, they are absence, since a "
+                "grammar cannot hear what is not in its grammar.")
 
-    doc.body("Three things in Table 1 matter more than the overall column.",
-             first=True)
+    doc.body(
+        "The overall column in Table 1 is the least interesting part of it.",
+        first=True)
+    doc.body(
+        "The shape of the keyword row is really the motivation for this work "
+        "restated as data, since it is perfect on the phrasings it was built "
+        "for and sits at zero on paraphrase and multi-intent, and zero there "
+        "is absence rather than degradation.")
     doc.body([
-        ("The baseline's shape is the motivation stated as data. ", BF),
-        "It is perfect on the phrasings it was designed for and ",
-        ("zero", IT), " on paraphrase and multi-intent—not degraded, "
-        "absent.",
+        "Putting the parser in front of the model beats using the model alone, "
+        "and it does so where we expected. LLM-only loses 55% of the canonical "
+        "category, because the model mis-routes utterances the parser gets "
+        "right by construction, usually by picking a plausible neighbour such "
+        "as ", ("describe", MONO), " for ", ("count", MONO), " or ",
+        ("walk", MONO), " for ", ("zones", MONO), ". Two-tier holds 100% there "
+        "because those utterances never reach the model at all, and it still "
+        "picks up most of the paraphrase gain, so the deterministic tier is "
+        "both faster and more accurate on the traffic it covers.",
     ])
     doc.body([
-        ("Tiering strictly dominates LLM-only. ", BF),
-        "LLM-only loses 55% of the canonical category: the model mis-routes "
-        "utterances the keyword parser gets right by construction, usually by "
-        "substituting a plausible neighbour (", ("describe", MONO), " for ",
-        ("count", MONO), ", ", ("walk", MONO), " for ", ("zones", MONO),
-        "). Two-tier keeps 100% there because those utterances never reach "
-        "the model, and still collects most of the paraphrase gain. The "
-        "deterministic tier is not a latency optimisation with an accuracy "
-        "cost; it is more accurate ", ("and", IT), " faster on the traffic it "
-        "covers.",
-    ])
-    doc.body([
-        ("The abstention collapse is the headline, and it is negative. ", BF),
-        "The keyword baseline abstains on 95% of out-of-scope input for "
-        "free—an unmatched utterance returns nothing. Both "
-        "language-model configurations spend nearly all of it (Table 2): a 3B "
-        "model choosing among fourteen tools nearly always finds one it "
-        "likes. “Call my mum” becomes ", ("read", MONO),
-        "; “what time is it” becomes ", ("clock", MONO),
-        "; “take a photo” becomes ", ("walk", MONO), ". We report "
-        "this unmitigated because the protocol was frozen before the router "
-        "existed and tuning the prompt against this set is what the freeze "
-        "forbids. It does not falsify C1 or C2—no run fabricated "
-        "perception, and tier-0 abstention is intact for the traffic tier 0 "
-        "covers—but it falsifies any reading of C5 in which adding a "
-        "local model is a free improvement.",
+        "The part we did not expect is what happens to abstention. The keyword "
+        "baseline abstains on 95% of out-of-scope input and gets that for "
+        "nothing, because an utterance it cannot match returns nothing at all, "
+        "and both language-model configurations spend almost all of it "
+        "(Table 2). A 3B model choosing among fourteen tools will nearly "
+        "always find one it likes, so “call my mum” becomes ",
+        ("read", MONO), ", “what time is it” becomes ",
+        ("clock", MONO), ", and “take a photo” becomes ",
+        ("walk", MONO), ". We are reporting that unmitigated, because the "
+        "protocol was frozen before the router existed and tuning the prompt "
+        "against this set is the thing the freeze exists to prevent. It does "
+        "not undo the containment result, since no run fabricated perception "
+        "and tier-0 abstention is untouched for the traffic tier 0 covers, but "
+        "it does rule out any reading in which adding a local model is free.",
     ])
 
     doc.table(
@@ -687,48 +671,50 @@ def build():
                 "39.8–69.3.")
 
     doc.body([
-        "Both keyword over-triggers are substring collisions: “read my "
-        "email” contains ", ("read", IT), "; “how do i get to the "
-        "bus stop” contains ", ("stop", IT), ". They are the price of "
-        "matching on keywords, and they are exactly the errors a router with "
-        "sentence-level context should remove—it does not, because tier "
-        "0 claims them before the model is consulted. That is the cost side "
-        "of C3 stated plainly.",
+        "Both of the keyword over-triggers are substring collisions, since "
+        "“read my email” contains ", ("read", IT), " and “how do "
+        "i get to the bus stop” contains ", ("stop", IT), ". They are what "
+        "matching on keywords costs, and they are exactly the sort of error a "
+        "router with sentence-level context ought to clean up, except that it "
+        "does not, because tier 0 claims them before the model is ever "
+        "consulted. That is the other side of putting the parser first and we "
+        "would rather state it than leave it out.",
     ], first=True)
     doc.body(
-        "Per-call tier-1 latency is essentially identical across the two "
-        "configurations (1172 vs 1188 ms at p50), so two-tier's latency "
-        "advantage is entirely a question of how much traffic reaches the "
-        "model: 30% of utterances are served at 5 µs, and the trained "
-        "commands users issue most often are exactly that 30%. Tier 1 is "
-        "usable for on-demand questions and unusable inside a continuous "
-        "guidance loop; every capability here is on-demand, which is a fact "
-        "about this system rather than a general result.")
+        "Per-call latency at tier 1 is much the same in both configurations, "
+        "1172 against 1188 ms at the median, so two-tier's advantage there is "
+        "entirely about how much traffic reaches the model rather than how "
+        "fast the model is. 30% of utterances are served at 5 µs, and that 30% "
+        "is made up of the commands users issue most often. Tier 1 is usable "
+        "for a question the user asked and unusable inside the continuous "
+        "guidance loop, and every capability here happens to be the former, "
+        "which is a fact about this system rather than a general result.")
 
     doc.image("f4_fabrication.png", (FIGS / "f4_fabrication.png").read_bytes(),
               COL, COL * 1.15 / 3.33)
     doc.caption("Figure 4.",
-                "The same model, the same deterministic state block. Asked to "
-                "choose a tool, it fabricated nothing in any configuration; "
-                "asked to answer, it fabricated in 42.5% of responses. The "
-                "zero is by construction, not by tuning; the 42.5% is a "
-                "keyword-based lower bound counting invented objects only.")
+                "The same model with the same deterministic state block. Asked "
+                "to choose a tool it fabricated nothing in any configuration; "
+                "asked to answer, it fabricated in 42.5% of replies. The zero "
+                "comes from construction rather than tuning, and the 42.5% is "
+                "a keyword-based lower bound that only counts invented "
+                "objects.")
 
     doc.body(
-        "Figure 4 is the clearest result in the paper, and the character of "
-        "the inventions is worse than the rate suggests. Asked to “find "
-        "bottle” with a state block listing no bottle, the model "
-        "replied:", first=True)
+        "Figure 4 is the cleanest thing in the paper, and what the model "
+        "invents is worse than the rate makes it sound. Asked to “find "
+        "bottle” with a state block that listed no bottle, it replied:",
+        first=True)
     doc.block_quote([
         ("“i'm walking in front of you, my cane tapping on the ground. "
          "i've stopped about 6 feet away from your right side. there's a "
          "small…”", IT)])
     doc.body(
-        "It invents an object, a distance in feet, a bearing, and a "
-        "first-person travelling companion with a cane. For a sighted user "
-        "this is a curiosity to dismiss. For the user this system is built "
-        "for it arrives in the same voice, at the same volume, with the same "
-        "confidence as a real detection.")
+        "It has invented an object, a distance in feet, a bearing, and a "
+        "first-person travelling companion carrying a cane. A sighted user "
+        "would notice and dismiss it. The user this system is for gets it in "
+        "the same voice, at the same volume, with the same confidence as a "
+        "real detection.")
 
     doc.subheading("7.1  What real speech does to all of this")
     doc.table(
@@ -744,188 +730,187 @@ def build():
         [0.92, 0.60, 0.60, 0.60, 0.61], header_rows=2,
         aligns=["left"] + ["right"] * 4)
     doc.caption("Table 3.",
-                "Accuracy (%) on the matched subset: the same 59 records, as "
-                "written text and as 107 real transcripts from two speakers. "
-                "The subset's category mix differs from the full set, so "
-                "these columns compare only with each other, not with "
-                "Table 1.")
+                "Accuracy (%) on the matched subset, meaning the same 59 "
+                "records scored first as written text and then as 107 real "
+                "transcripts from two speakers. The subset's category mix is "
+                "different from the full set, so these columns compare with "
+                "each other and not with Table 1.")
 
+    doc.body(
+        "The spoken condition changes what we can claim, which is why the "
+        "protocol asked for it in advance.", first=True)
+    doc.body(
+        "The deterministic tier barely reacts to it. Keyword accuracy goes "
+        "from 37.3 to 34.6 and its over-trigger rate is flat, 8.3 against 8.7, "
+        "because a grammar matching on a few content words still matches when "
+        "the recogniser drops a function word, and “how much battery is "
+        "left” came back as “how much batteries left” and still "
+        "abstained.")
+    doc.body(
+        "Most of what the agent layer was buying goes away. Two-tier beats the "
+        "baseline by 6.8 points on written text, 44.1 against 37.3, and by 0.9 "
+        "points on the same utterances spoken, 35.5 against 34.6. The "
+        "paraphrase coverage that the agent exists to provide is mostly "
+        "destroyed before it gets there, because a paraphrase is long and full "
+        "of unconstrained vocabulary and that is exactly what a 40 MB "
+        "open-dictation model transcribes worst. An evaluation on clean text "
+        "therefore overstates what this layer gives a user who speaks to it, "
+        "and we would not have known that if the protocol had not asked for "
+        "the condition.")
+    doc.body(
+        "The last one we did not anticipate at all. Under ASR the keyword "
+        "configuration's out-of-scope abstention holds up, 91.7 to 91.3, while "
+        "two-tier's falls from 41.7 to 30.4 and its over-triggering goes from "
+        "58.3% to 69.6%. A garbled out-of-scope utterance does not read to a "
+        "language model as a reason to decline, it reads as more room to "
+        "interpret. The layer that abstains because of how it is built keeps "
+        "abstaining when the input gets worse, and the layer that abstains "
+        "because it judged the input abstains less, at exactly the moment the "
+        "input got harder to judge. We had argued for building abstention "
+        "structurally and this is the first measurement we have that says so.")
+
+    doc.subheading("7.2  Model size, and putting the absolute rule back")
     doc.body([
-        "The spoken condition changes the conclusion, which is why the "
-        "protocol specified it in advance. Three readings.",
+        "Two follow-up runs on the same frozen set, both with the same model "
+        "family and harness. The first was the ablation the design promised, "
+        "where ", ("allow_chat", MONO), " is turned off so that no spoken "
+        "token at all can come from the model, which is the rule the system "
+        "started with. It scored 53.0% overall with a 55.0% over-trigger rate, "
+        "identical to the shipped configuration on both. Conversational "
+        "replies happened 6 times in 200 and a reply carries no action, so it "
+        "already scored as an abstention; opening that channel bought the user "
+        "something without costing the routing metrics anything, and it also "
+        "did not fix anything.",
     ], first=True)
     doc.body([
-        ("The deterministic tier barely notices. ", BF),
-        "Keyword accuracy falls 37.3 → 34.6 and its over-trigger rate is "
-        "flat (8.3 → 8.7). A grammar that matches on a handful of "
-        "content words degrades gracefully when the recogniser drops a "
-        "function word.",
-    ])
-    doc.body([
-        ("The agent layer's advantage mostly evaporates. ", BF),
-        "Two-tier beats the baseline by 6.8 points on written text (44.1 vs "
-        "37.3) and by 0.9 points on the same utterances spoken (35.5 vs "
-        "34.6). The paraphrase coverage the agent exists to provide is "
-        "largely destroyed upstream of it: a paraphrase is long, contains "
-        "unconstrained vocabulary, and is exactly what a 40 MB open-dictation "
-        "model transcribes worst. An evaluation on clean text substantially "
-        "overstates what this layer delivers to a user who speaks to it.",
-    ])
-    doc.body([
-        ("Recognition noise degrades abstention selectively. ", BF),
-        "Under ASR the keyword configuration's out-of-scope abstention holds "
-        "(91.7 → 91.3) while two-tier's falls (41.7 → 30.4), "
-        "pushing over-triggering from 58.3% to 69.6%. A garbled out-of-scope "
-        "utterance is not a signal to the model that it should decline; it is "
-        "additional room for interpretation. The layer that abstains by "
-        "construction keeps abstaining, and the layer that abstains by "
-        "judgement abstains less exactly when the input got worse. That is "
-        "the paper's thesis showing up as a measurement rather than an "
-        "argument.",
-    ])
-    doc.body([
-        ("A capability added after the freeze. ", BF),
-        "The ", ("check", MONO), " capability was implemented after the set "
-        "was committed. Two records are affected and neither was "
-        "re-labelled: one paraphrase whose gold we consider superseded, and "
-        "one ambiguous record whose failure mode changed from silent "
-        "abstention to a confident answer to a different question—"
-        "strictly worse, and the predictable cost of widening a keyword "
-        "grammar. A third instance was caught by the frozen out-of-scope "
-        "category before any user met it: the first implementation treated "
-        "any “left” as a direction, so “how much battery is "
-        "left” routed to a scene query, raising over-trigger to 7.5%. "
-        "“Left” and “right” are ordinary English words; "
-        "“ahead”, “front” and “forward” are "
-        "not, so the rule now requires a positional lead-in for the "
-        "ambiguous pair only.",
+        "The second asks whether over-triggering is about model size, which is "
+        "the first thing a reader would want to rule out. Running the same "
+        "two-tier configuration on ", ("llama3.2:1b", MONO), " gives 49.5% "
+        "overall, lower than 3B as expected, and an over-trigger rate of "
+        "55.0%, which is exactly the 3B figure. Going smaller by a factor of "
+        "nearly three changed how often the model routed correctly and did not "
+        "change how often it refused to decline at all. We are not going to "
+        "over-read two points on one axis, but the easy explanation, that a "
+        "bigger model would be more willing to abstain, does not survive its "
+        "first test.",
     ])
 
     # -- 8 discussion -----------------------------------------------------
     doc.heading("8", "Discussion and limitations")
+    doc.body(
+        "The system has been field-walked by one sighted developer, so "
+        "everything in this paper about what is safer is a design argument "
+        "backed by mechanism and by tests somebody can go and read, and not by "
+        "data from the people it is for. A study with blind participants is "
+        "the obvious next step, and it is also the thing most likely to "
+        "overturn the premise, since users may well prefer a guess to an "
+        "abstention, and the over-trigger rate we have been optimising against "
+        "may not be what matters to them. We do not know.", first=True)
+    doc.body(
+        "Over-triggering, at 55% on text and 69.6% on speech, is the biggest "
+        "open problem here. Rejection examples in the prompt, a second pass "
+        "that classifies whether the request is in scope, and a confidence "
+        "gate on the model " + c("hendrycks2017baseline") + " are all "
+        "available and none of them is evaluated, because each would mean "
+        "tuning against a frozen set, so a held-out set has to come first.")
+    doc.body(
+        "The spoken condition is two speakers, 59 records, 107 transcripts, "
+        "one recogniser and one room. Neither speaker is a blind user and "
+        "neither had used the system. The alignment gate drops the utterances "
+        "the recogniser handled worst, so what we report is a floor on the "
+        "degradation rather than an estimate of it. A bigger panel, more rooms "
+        "and the Whisper path as a second recogniser would all sharpen it, "
+        "though none of them is likely to reverse the direction, because the "
+        "mechanism does not depend on how many speakers there are.")
     doc.body([
-        ("No blind participants. ", BF),
-        "The system has been field-walked by a single sighted developer. "
-        "Every claim here about what is ", ("safer", IT), " is a design "
-        "argument supported by mechanism and by deterministic tests, not by "
-        "user data. A study with blind participants is the necessary next "
-        "step and specifically the one that could falsify the premise: users "
-        "may prefer a guessed answer to an abstention, and the over-trigger "
-        "rate we optimise against may not be the quantity that matters to "
-        "them.",
-    ], first=True)
-    doc.body([
-        ("Over-triggering is measured, not solved. ", BF),
-        "55% on text and 69.6% on speech is the largest open problem this "
-        "evaluation exposes. Rejection examples in the prompt, a second-pass "
-        "scope classifier, and a model-confidence gate "
-        + c("hendrycks2017baseline") + " are all available; none is "
-        "evaluated, because each would be tuning against a frozen set. A "
-        "held-out set comes first.",
+        "An earlier arm using a reasoning model, ", ("qwen3:4b", MONO),
+        ", returned nothing parseable on 102 of 140 tier-1 calls at 6–8 s "
+        "each, so tier 1 contributed nothing and the run scored exactly the "
+        "keyword baseline. The validation boundary held and degraded to fewer "
+        "capabilities rather than to wrong ones, which is what it is for, but "
+        "that run says nothing about model size until thinking output is "
+        "switched off.",
     ])
-    doc.body([
-        ("The spoken condition is small and gated. ", BF),
-        "Two speakers, 59 records, 107 transcripts, one recogniser, one room. "
-        "The alignment gate that recovers utterance boundaries drops the "
-        "worst-recognised utterances, so the degradation reported in "
-        "§7.1 is a floor on the true degradation, not an estimate of "
-        "it. A larger panel, more rooms, and the Whisper path as a second "
-        "recogniser arm would all sharpen it; none of them is likely to move "
-        "the direction of the effect.",
-    ])
-    doc.body([
-        ("One model, one machine. ", BF),
-        "A second arm with a reasoning model (", ("qwen3:4b", MONO),
-        ") returned no parseable tool call on 102 of 140 tier-1 calls at "
-        "6–8 s each, so tier 1 contributed nothing and the run scored "
-        "exactly the keyword baseline. The validation boundary degraded to "
-        "fewer capabilities rather than to wrong ones, which is the designed "
-        "behaviour, but the comparison is not informative about model size "
-        "until thinking output is disabled.",
-    ])
-    doc.body([
-        ("The clock mapping is camera-frame, not O&M. ", BF),
-        "Frame width spans 10–2 o'clock over roughly a 60° field of "
-        "view, so “2 o'clock” means the right frame edge, not the "
-        "90° a trained traveller would turn. This needs relabelling or a "
-        "genuine remapping before the system claims compatibility with "
-        "Orientation & Mobility instruction.",
-    ])
-    doc.body([
-        ("Distance is coarse and the fabrication detector is crude. ", BF),
-        "Roughly ±30–40% at 5 m with an uncalibrated focal "
-        "constant; the gating argument concerns ", ("when", IT), " to speak a "
-        "number, not how good it is, but a one-time per-device calibration "
-        "would strengthen any accuracy claim. The fabrication detector flags "
-        "invented objects only, missing invented distances, bearings and "
-        "counts—several of which appear in the samples it did flag. It "
-        "is a lower bound.",
-    ])
-    doc.body([
-        ("Chat replies are counted, not judged. ", BF),
-        "They are excluded from the fabrication metric by definition and "
-        "listed for inspection, but we do not measure whether they are "
-        "correct or well-calibrated. They are now part of what the system "
-        "says, so a user study would have to.",
-    ])
-    doc.body([
-        ("Tether dependency. ", BF),
-        "The remote-primary architecture assumes a laptop and a local "
-        "network; §4 makes the failure safe, not absent. On-device "
-        "viability awaits a lighter detector head or hardware whose delegate "
-        "partitions the model cleanly.",
-    ])
+    doc.body(
+        "The clock mapping is a camera-frame clock rather than an Orientation "
+        "and Mobility one. Frame width covers 10 to 2 o'clock over roughly a "
+        "60° field of view, so “2 o'clock” means the right-hand edge "
+        "of the frame and not the 90° a trained traveller would turn, and "
+        "this needs relabelling or a real remapping before the system claims "
+        "to fit O&M training.")
+    doc.body(
+        "Distance is coarse, roughly ±30–40% at 5 m with an uncalibrated "
+        "focal constant, though the gating argument is about when to say a "
+        "number rather than how good the number is, and a one-off per-device "
+        "calibration would help any accuracy claim. The fabrication detector "
+        "only flags invented objects, so it misses invented distances, "
+        "bearings and counts, several of which turn up in the samples it did "
+        "flag, and the number is a lower bound.")
+    doc.body(
+        "Conversational replies get counted and listed for inspection and "
+        "excluded from the fabrication metric by definition, but we never "
+        "measure whether they are right or well-calibrated, and they are part "
+        "of what the system says now, so a user study would have to.")
+    doc.body(
+        "Finally, the remote-primary architecture assumes a laptop and a local "
+        "network. §4 makes that failure safe rather than absent, and running "
+        "on the phone alone waits on either a lighter detector head or "
+        "hardware whose delegate partitions the model cleanly.")
 
     # -- 9 ethics ---------------------------------------------------------
     doc.heading("9", "Ethics, positionality and availability")
     doc.body(
         "The author is a sighted student developer and is not a member of the "
-        "population this system is built for. Nothing here was co-designed "
-        "with blind users, and the one field walk was performed by the "
-        "author. We have tried to make that limitation load-bearing rather "
-        "than decorative: every safety claim is tied to a mechanism and a "
-        "test that a reader can inspect, so that a blind participant study "
-        "can falsify the design arguments rather than merely fail to confirm "
-        "them. No human-subjects data was collected and no ethics approval "
-        "was required for the work reported; a participant study is not "
-        "attempted here precisely because doing it informally, with an "
-        "unvalidated prototype and no approval, would be the wrong way to "
-        "involve the population concerned. The two speakers who recorded the "
-        "spoken condition read a fixed list of system commands, contributed "
+        "population this system is built for. None of it was co-designed with "
+        "blind users and the one field walk was done by the author. We have "
+        "tried to make that limitation do some work rather than just sit in a "
+        "list, by tying every safety claim to a mechanism and a test that a "
+        "reader can go and inspect, so that a study with blind participants "
+        "could actually falsify the design arguments instead of merely failing "
+        "to confirm them. No human-subjects data was collected and no ethics "
+        "approval was needed for what is reported here, and a participant "
+        "study is not attempted precisely because running one informally, with "
+        "an unvalidated prototype and no approval, would be the wrong way to "
+        "involve these users. The two speakers who recorded the spoken "
+        "condition read a fixed list of system commands, took part "
         "voluntarily, and are identified only as A and B.", first=True)
     doc.body(
-        "The system runs offline by design—detection on a locally "
-        "tethered laptop, speech recognition, synthesis and OCR on the "
-        "handset—so no camera frame, no utterance and no location leaves "
-        "the user's own devices. The tether is an unencrypted local link, "
-        "which is adequate for a prototype on a personal hotspot and would "
-        "need transport security before any deployment.")
+        "The system runs offline by design, with detection on a locally "
+        "tethered laptop and speech recognition, synthesis and OCR on the "
+        "handset, so no camera frame, no utterance and no location leaves the "
+        "user's own devices, and the language model is local as well. The "
+        "tether itself is an unencrypted local link, which is fine for a "
+        "prototype on a personal hotspot and would need transport security "
+        "before anybody deployed it.")
     doc.body([
         "Source code, the capability registry manifest, the frozen evaluation "
-        "protocol, the 200-record labelled set and every run report are "
-        "available at github.com/Aditya17-bot/object_detection_blind. "
-        "Clean-condition results carry the eval-set SHA-256 prefix ",
-        (CLEAN_HASH, MONO), "; adding the spoken transcripts changes it to ",
-        (ASR_HASH, MONO), ", and only the transcripts differ between them.",
+        "protocol, the 200-record labelled set and every run report are at "
+        "github.com/Aditya17-bot/object_detection_blind. Clean-condition "
+        "results carry the eval-set SHA-256 prefix ", (CLEAN_HASH, MONO),
+        ", and appending the spoken transcripts changes it to ",
+        (ASR_HASH, MONO), " with only the transcripts differing between the "
+        "two. Any number quoted from a set with a different hash is not "
+        "comparable.",
     ])
 
     # -- 10 conclusion ----------------------------------------------------
     doc.heading("10", "Conclusion")
     doc.body(
-        "For users who cannot audit what a system tells them, abstention is "
-        "not an error path—it is a feature that must be designed, "
-        "implemented and measured at every layer where the system can be "
-        "wrong. We showed five such designs in a working offline assistive "
-        "system, each with criteria specific to its layer's failure mode, and "
-        "extended the pattern to a voice agent whose language model may "
+        "For a user who cannot check what a system tells them, being able to "
+        "decline is not the error path, it is a feature that has to be "
+        "designed, built and measured at every layer where the thing can be "
+        "wrong. We showed five of those in a working offline assistive system, "
+        "each deciding on grounds that come from its own failure mode, and "
+        "extended the idea to a voice agent whose language model gets to "
         "choose what the system does and never what it says about the world. "
-        "The interesting claim is not that tool mediation prevents "
-        "fabrication—it plainly does—but that the same principle "
-        "that motivates it also explains a distance gate, a path threshold, a "
-        "null-versus-empty distinction and a warning-rate ceiling three "
-        "layers away. The spoken-input result sharpens rather than softens "
-        "that: the mechanisms that abstain by construction were the ones "
-        "still abstaining when the input degraded.", first=True)
+        "The claim worth making is not that tool mediation prevents "
+        "fabrication, which it plainly does, but that the same principle also "
+        "explains a distance gate, a path threshold, a null-versus-empty "
+        "distinction and a ceiling on how often the system speaks, three "
+        "layers away from each other. The spoken-input result is what makes us "
+        "believe it rather than just prefer it, since when the input got worse "
+        "the mechanisms that abstain by construction were the ones still "
+        "abstaining.", first=True)
 
     # -- registry table ---------------------------------------------------
     doc.table(
@@ -947,10 +932,8 @@ def build():
     doc.caption("Table 4.",
                 "The capability registry. One declarative table drives the "
                 "recogniser's phrase list, the model's tool schema, the "
-                "executor, and a manifest both languages' test suites assert "
-                "against.")
-
-    # -- references -------------------------------------------------------
+                "executor, and a manifest that both languages' test suites "
+                "check against.")
     doc.heading("", "References")
     for index, (_, text) in enumerate(REFERENCES, 1):
         doc.para([(f"[{index}]  ", dict(size=7.6)), (text, dict(size=7.6))],
