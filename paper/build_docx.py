@@ -239,7 +239,8 @@ def build():
         "what the agent layer gained disappears, with its margin over the "
         "keyword baseline falling from 6.8 points to 0.9 while the "
         "deterministic layer's abstention barely moves. We report the negative "
-        "results as they came out.", first=True)
+        "results, and one finding we retracted after running a larger model, "
+        "as they came out.", first=True)
 
     doc.para([("CCS Concepts: ", BF),
               ("• Human-centered computing → Accessibility "
@@ -721,23 +722,20 @@ def build():
 
     doc.subheading("7.1  What real speech does to all of this")
     doc.table(
-        [("", "keyword", "keyword", "two-tier", "two-tier"),
-         ("", "text", "spoken", "text", "spoken"),
-         ("canonical", "100.0", "84.2", "100.0", "84.2"),
-         ("paraphrase", "0.0", "0.0", "16.7", "13.0"),
-         ("multi-intent", "0.0", "0.0", "8.3", "8.7"),
-         ("out-of-scope", "91.7", "91.3", "41.7", "30.4"),
-         ("ambiguous", "0.0", "0.0", "58.3", "52.6"),
-         ("overall", "37.3", "34.6", "44.1", "35.5"),
-         ("over-trigger", "8.3", "8.7", "58.3", "69.6")],
-        [0.92, 0.60, 0.60, 0.60, 0.61], header_rows=2,
+        [("", "accuracy", "", "over-trigger", ""),
+         ("configuration", "text", "spoken", "text", "spoken"),
+         ("keyword only", "37.3", "34.6", "8.3", "8.7"),
+         ("two-tier, 3.2B", "44.1", "35.5", "58.3", "69.6"),
+         ("two-tier, 9.2B", "52.5", "48.6", "25.0", "21.7")],
+        [1.05, 0.53, 0.53, 0.53, 0.53], header_rows=2,
         aligns=["left"] + ["right"] * 4)
     doc.caption("Table 3.",
-                "Accuracy (%) on the matched subset, meaning the same 59 "
-                "records scored first as written text and then as 107 real "
+                "Percentages on the matched subset, meaning the same 59 "
+                "records scored first as written text and then as the 107 real "
                 "transcripts from two speakers. The subset's category mix is "
-                "different from the full set, so these columns compare with "
-                "each other and not with Table 1.")
+                "different from the full set, so these figures compare with "
+                "each other and not with Table 1, and the per-category "
+                "breakdown is in the run reports.")
 
     doc.body(
         "The spoken condition changes what we can claim, which is why the "
@@ -761,16 +759,28 @@ def build():
         "and we would not have known that if the protocol had not asked for "
         "the condition.")
     doc.body(
-        "The last one we did not anticipate at all. Under ASR the keyword "
-        "configuration's out-of-scope abstention holds up, 91.7 to 91.3, while "
-        "two-tier's falls from 41.7 to 30.4 and its over-triggering goes from "
-        "58.3% to 69.6%. A garbled out-of-scope utterance does not read to a "
-        "language model as a reason to decline, it reads as more room to "
-        "interpret. The layer that abstains because of how it is built keeps "
-        "abstaining when the input gets worse, and the layer that abstains "
-        "because it judged the input abstains less, at exactly the moment the "
-        "input got harder to judge. We had argued for building abstention "
-        "structurally and this is the first measurement we have that says so.")
+        "The third thing is one we thought we had found and then did not. The "
+        "keyword configuration's over-trigger rate is stable under recognition "
+        "noise, 8.3 against 8.7, while two-tier on the 3B model goes from "
+        "58.3% to 69.6%, and we wrote that up as the deterministic layer "
+        "keeping its abstention while the model layer loses exactly when the "
+        "input gets harder to judge. It would have been the neatest result in "
+        "the paper. Then we ran both conditions on the 9.2B model and its "
+        "over-trigger rate went from 25.0% to 21.7%, which is flat or a little "
+        "better rather than worse, so whatever we were looking at was not a "
+        "property of language models under noise.")
+    doc.body(
+        "It is also worth saying how thin these particular numbers are. The "
+        "out-of-scope slice of the matched subset is 12 records as text and 23 "
+        "transcripts as speech, and the Wilson intervals on the 3B pair "
+        "overlap each other comfortably, so that pair on its own would not "
+        "have supported the claim either. What survives is that the keyword "
+        "tier's abstention does not move when the input degrades, which we can "
+        "say because it is the same parser matching the same keywords, and "
+        "that we do not have the sample to say what happens to the model "
+        "tier's. We are leaving the version we got wrong visible here, because "
+        "it was the result we most wanted and that is exactly when a frozen "
+        "protocol earns its keep.")
 
     doc.subheading("7.2  Putting the absolute rule back, and model size")
     doc.body([
@@ -969,10 +979,11 @@ def build():
         "fabrication, which it plainly does, but that the same principle also "
         "explains a distance gate, a path threshold, a null-versus-empty "
         "distinction and a ceiling on how often the system speaks, three "
-        "layers away from each other. The spoken-input result is what makes us "
-        "believe it rather than just prefer it, since when the input got worse "
-        "the mechanisms that abstain by construction were the ones still "
-        "abstaining.", first=True)
+        "layers away from each other. What we cannot yet tell you is whether "
+        "abstaining by construction holds up better than abstaining by "
+        "judgement when the input gets worse. We thought we had measured that "
+        "and a larger model took it back, and finding out properly needs a "
+        "held-out set and more speakers than two.", first=True)
 
     # -- registry table ---------------------------------------------------
     doc.table(

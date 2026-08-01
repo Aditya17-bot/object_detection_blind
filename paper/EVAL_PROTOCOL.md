@@ -315,3 +315,24 @@ Recorded in advance, so the results section cannot quietly move the goalposts:
   usable tool call; 138 abstained. Turning `think` off did not fix it, which
   supersedes the earlier note that the comparison would be uninformative until
   thinking was disabled.
+- **2026-08-01 (latest) — a §7.1 finding RETRACTED after running the 9.2B model
+  on the spoken condition.** The draft claimed that abstention built into the
+  parser survives recognition noise while abstention judged by a model does not,
+  on the strength of the keyword tier holding at 8.3 -> 8.7 % over-trigger while
+  two-tier on `llama3.2:3b` went 58.3 -> 69.6 %. Running the identical pair of
+  conditions on `gemma2` (9.2B) gives **25.0 -> 21.7 %**, flat or slightly
+  better, so the effect is not a property of language models under noise.
+  Reports: `agent_eval_two_tier_gemma9b_asr.md`, `..._gemma9b_asrsubset.md`.
+  Two things follow and both are now in the paper.
+  1. **The claim is withdrawn, not softened.** The conclusion previously rested
+     on it and now says plainly that we cannot yet tell.
+  2. **The sample was never large enough to carry it.** The out-of-scope slice
+     of the matched subset is 12 records as text and 23 transcripts as speech;
+     the Wilson intervals on the 3B pair overlap each other, so that pair alone
+     would not have supported the claim even without the 9.2B counter-example.
+     What survives is that the KEYWORD tier's over-trigger rate does not move,
+     which is defensible because it is the same parser matching the same
+     keywords rather than an inference from 12 records.
+  Recorded here in full because this is precisely the failure mode §7 of this
+  protocol was written to catch: the result we most wanted, arriving first, on
+  the smallest sample in the study.
