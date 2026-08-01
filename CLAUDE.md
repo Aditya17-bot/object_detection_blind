@@ -844,6 +844,65 @@ changed is that the paper's evidence now matches its claims.
   §8 (paraphrase/out-of-scope numbers are upper bounds on the deployed
   pipeline). Slot it in when the recordings land.
 
+## Spoken-input evaluation + Word build (2026-08-01, night)
+
+User supplied two WhatsApp voice notes of friends reading the 60-utterance
+sheet, and asked for a DOCX in Overleaf style because Overleaf's free tier
+stopped compiling and asked for payment.
+
+**The Overleaf "paywall" was a compile timeout.** Four vector figures (2 TikZ
+diagrams + 2 pgfplots charts) on top of `acmart` exceeded the free tier's time
+budget. Fix: `paper/build_figures.py` renders all four as PNGs with matplotlib;
+`main.tex` now uses `\includegraphics` and has zero TikZ/pgfplots. Upload
+`main.tex` + `references.bib` + **the `figures/` folder**.
+
+**Audio pipeline — no downloads.** Files were AAC in MP4 (`mp4a`), no ffmpeg on
+this machine. `tools/aac_to_wav.ps1` uses the WinRT `MediaTranscoder` that ships
+with Windows. Gotcha: `TranscodeAsync()` returns `IAsyncActionWithProgress<double>`,
+not `IAsyncAction` — picking the wrong AsTask overload fails with a useless
+`__ComObject` cast error.
+
+**Segmentation: silence-splitting was tried and REJECTED.** `import` found 34
+and 60 segments against a 60-line script; no parameters gave 60 for both
+speakers. Worse, a count of 60 does not prove correct boundaries — one merge
+plus one over-split cancels in the count and shifts every label between them,
+silently. New `asr_collect.py align`: transcribe the whole session with word
+timings, Levenshtein-align the word stream to the known script, take boundaries
+from the script. Records where <34 % of script words aligned are DROPPED, not
+guessed (11 for A, 2 for B). **107 transcripts over 59 records.**
+- Bug worth remembering: first run fed 48 kHz interleaved **stereo** to Vosk as
+  mono and got 101 fluent-nonsense words ("shoo shoo whoosh"). No crash, no
+  warning. Always go through `_read_wav_mono16k`.
+
+**Set hash changed: `e4eeca83070e2d66` (clean) → `f9e775b6a65279a4` (with
+transcripts).** Only `asr` arrays differ. New `--asr-subset` flag re-runs the
+clean condition over just the 59 recorded records — without it the comparison
+would be between two different populations (the ASR subset is stratified
+12/category, the full set is not).
+
+**THE RESULT THAT MATTERS — spoken input mostly erases the agent layer's gain:**
+
+| matched, 59 records | keyword text | keyword spoken | two-tier text | two-tier spoken |
+|---|---|---|---|---|
+| overall | 37.3 | 34.6 | **44.1** | 35.5 |
+| out-of-scope abstention | 91.7 | 91.3 | 41.7 | 30.4 |
+| over-trigger | 8.3 | 8.7 | 58.3 | **69.6** |
+
+Two-tier's margin over baseline: **+6.8 points on text, +0.9 spoken.** Keyword
+is nearly ASR-invariant; the LLM tier's abstention degrades exactly when input
+quality drops. Written up as PAPER §7.1 + main.tex §7.1 + docx Table 3. The
+gate biases optimistically (drops worst-recognised utterances) so the reported
+degradation is a FLOOR — stated in all three.
+
+**Word build:** `paper/docx_writer.py` = hand-rolled OOXML (no python-docx, no
+pandoc, no LibreOffice here), `paper/build_docx.py` = the paper content.
+Verified for real: Word COM opens it, **6 pages / 5889 words**, PDF exported
+(`tools/docx_to_pdf.ps1`), pages rendered to PNG via WinRT
+(`tools/pdf_to_png.ps1`) and inspected. Two bugs that only a render showed:
+drawing XML was being escaped as visible text, and the final `sectPr` needs
+`<w:type w:val="continuous"/>` or the title block sits alone on page 1.
+PROSE IS DUPLICATED between `main.tex` and `build_docx.py` — change both.
+
 - `OllamaRouter` now sends `"think": False`. Reason: the qwen3:4b sensitivity
   arm returned **"no tool call in model output" on 102 of 140 tier-1 calls** at
   6-8 s each — it spends the token budget on a thinking block — so tier 1

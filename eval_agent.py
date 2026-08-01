@@ -402,6 +402,12 @@ def main():
     ap.add_argument("--condition", default="clean", choices=("clean", "asr"),
                     help="clean feeds written text; asr feeds the recorded "
                          "transcripts collected by asr_collect.py")
+    ap.add_argument("--asr-subset", action="store_true",
+                    help="clean condition, but only over the records that "
+                         "carry ASR transcripts. This is the matched baseline: "
+                         "the ASR run covers a stratified subset with a "
+                         "different category mix, so its overall accuracy is "
+                         "NOT comparable to the full clean run.")
     ap.add_argument("--limit", type=int, help="first N records (smoke test)")
     ap.add_argument("--out", help="output path (default test_output/)")
     args = ap.parse_args()
@@ -419,6 +425,14 @@ def main():
         ids = {r["id"].split("/")[0] for r in records}
         print(f"asr condition: {len(records)} transcripts covering "
               f"{len(ids)}/{len(covered)} records")
+    if args.asr_subset:
+        if args.condition == "asr":
+            raise SystemExit("--asr-subset is for the clean condition; the asr "
+                             "condition is already restricted to those records")
+        records = [r for r in records if r.get("asr")]
+        if not records:
+            raise SystemExit("no records carry ASR transcripts yet")
+        print(f"matched clean baseline: {len(records)} records that have audio")
     if args.limit:
         records = records[:args.limit]
 
@@ -438,6 +452,8 @@ def main():
                   args.condition)
     OUT_DIR.mkdir(exist_ok=True)
     suffix = "" if args.condition == "clean" else f"_{args.condition}"
+    if args.asr_subset:
+        suffix = "_asrsubset"
     out = (Path(args.out) if args.out
            else OUT_DIR / f"agent_eval_{args.config}{suffix}.md")
     out.write_text(text, encoding="utf-8")

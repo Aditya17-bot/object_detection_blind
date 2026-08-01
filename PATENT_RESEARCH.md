@@ -608,3 +608,51 @@ vs. useful announcements retained.
      before a preprint goes up, for the obvious reason that this is a paper
      about not stating what you cannot check.
   Reduction to practice unchanged this session: **221 Python / 159 Dart** tests.
+- **2026-08-01 (night) — the spoken-input evaluation. THE STRONGEST EVIDENCE IN
+  THIS FILE FOR THE §9 THESIS, and it arrived as a negative result.**
+  Two volunteer speakers read the 60-utterance sheet; transcripts came from the
+  handset's own open-dictation configuration (Vosk, grammar removed). Matched
+  comparison over the same 59 records, written text vs 107 real transcripts:
+
+  | | keyword text | keyword spoken | two-tier text | two-tier spoken |
+  |---|---|---|---|---|
+  | overall accuracy | 37.3 | 34.6 | 44.1 | 35.5 |
+  | out-of-scope abstention | 91.7 | 91.3 | 41.7 | 30.4 |
+  | over-trigger | 8.3 | 8.7 | 58.3 | 69.6 |
+
+  1. **Claim-relevant finding.** The deterministic tier is nearly ASR-invariant
+     (over-trigger 8.3 -> 8.7) while the model tier's abstention *degrades under
+     degraded input* (41.7 -> 30.4 abstention, 58.3 -> 69.6 over-trigger). A
+     garbled utterance is not a signal to a language model that it should
+     decline; it is additional room for interpretation. **Abstention by
+     construction survives noise; abstention by judgement does not.** That is
+     the §9 thesis measured rather than argued, and it is the best available
+     support for why §4.1-4.3 and §4.8 gate on layer-specific *structural*
+     criteria instead of on a confidence score.
+  2. **Claim-limiting finding, and it must be disclosed.** The agent layer's
+     accuracy advantage over the keyword baseline falls from **+6.8 points on
+     written text to +0.9 points on the same utterances spoken**. §4.7's value
+     proposition is paraphrase coverage, and paraphrases are long with open
+     vocabulary — exactly what a 40 MB recogniser transcribes worst. Any
+     claim framed around routing accuracy is weak on real speech. The claim
+     that survives is the *containment* one (boundary leaks 0 in every run,
+     including both spoken runs), not the coverage one. Do not draft a claim
+     that rests on the agent improving task success from speech input without
+     this data in front of the drafter.
+  3. **Method, because it can bias the number.** Silence-splitting was tried and
+     rejected: it cannot be validated by segment count, since one merge plus one
+     over-split cancels out while shifting every label between them. The
+     condition uses forced alignment of the recognised word stream to the known
+     script (`asr_collect.py align`), and DROPS any utterance where under a
+     third of the script words aligned rather than pairing it with an untrusted
+     transcript — the §4.3 absence-vs-negative rule applied to our own
+     measurement. That gate removes the worst-recognised utterances, so the
+     reported degradation is a **floor**, not an estimate. Stated in the paper.
+  4. Reduction to practice: `asr_collect.py align`, `tools/aac_to_wav.ps1`
+     (WinRT Media Foundation decode, nothing downloaded), `eval_agent.py
+     --asr-subset` for the matched baseline. Eval set hash moves from
+     `e4eeca83070e2d66` to `f9e775b6a65279a4`; only the `asr` arrays differ.
+  5. Paper also now ships as a Word/PDF build (`paper/build_docx.py`, 6 pages)
+     in addition to `main.tex`. ⚠ Both are disclosures — §8a applies to
+     whichever goes out first, and the .docx is the one most likely to be
+     emailed casually.

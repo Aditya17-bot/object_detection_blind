@@ -578,14 +578,54 @@ Gate behaviours are pinned by named tests
 grammar already covers), `paraphrase`, `multi_intent`, `out_of_scope` (gold
 label: abstain), and `ambiguous` (gold depends on a state block encoded in the
 record) — evaluated under three configurations (keyword-only, LLM-only,
-two-tier).
+two-tier), and separately under the **spoken condition** of §6.5, whose
+results are in §7.1.
 
-The protocol also specifies an **ASR condition** — the same records read aloud
-by 2–3 speakers who did not author the set, transcribed by the same recogniser
-the system uses. It is **not reported here**: the recordings are still being
-collected (`asr_collect.py` implements collection, `eval_agent.py
---condition asr` the scoring). Every routing number below is therefore on clean
-written text, and §8 states the consequence.
+### 6.5 How the spoken condition was actually collected
+
+The protocol assumed one recording per utterance, captured on the laptop. What
+arrived was one continuous recording per speaker, made on a phone — which is
+the realistic thing to ask of a volunteer, and which the protocol did not
+anticipate. Recovering per-utterance transcripts from a continuous session is
+therefore a method decision, and it is recorded here because it can bias the
+result.
+
+The obvious approach — split on silences, map the *n*-th segment to the *n*-th
+line of the sheet — was tried and rejected. Segment counts came out at 34 and
+60 for the two speakers against a script of 60, and the parameters that produced
+exactly 60 for one speaker produced 56 or 62 for the other. Worse, a count of 60
+is not evidence of correctness: one merge and one over-split cancel out in the
+count while shifting every label between them. That failure mode is silent, and
+it would have mislabelled the data rather than losing it.
+
+Instead the whole session is transcribed in one pass with word timings, and the
+recognised word stream is **aligned to the known script** by Levenshtein
+alignment (`asr_collect.py align`). Each script word receives the hypothesis
+words that landed on it, so utterance boundaries come from the script rather
+than from silence. Three properties matter:
+
+- The transcript for each record is still **whatever the recogniser produced** —
+  alignment decides only where one utterance ends and the next begins.
+- Near-miss substitutions ("chairs"/"chair") cost less than unrelated words in
+  the alignment, so it does not walk off the script precisely where the
+  recogniser struggled, which is where the data matters most.
+- Where fewer than a third of an utterance's script words aligned, the record is
+  **dropped rather than paired with a transcript we cannot trust** — 11 records
+  for speaker A, 2 for speaker B. This is the §4.3 rule applied to our own
+  measurement: no data beats data we would have to guess at.
+
+That last gate is also the method's main bias, and it points one way: it removes
+the utterances the recogniser handled *worst*, so the degradation reported in
+§7.1 is a **floor** on the true degradation, not an estimate of it.
+
+One bug is worth recording because it produced plausible-looking output rather
+than an error. The first run fed 48 kHz interleaved stereo to a recogniser
+expecting 16 kHz mono; it returned 101 fluent-looking nonsense words ("shoo shoo
+whoosh", "shh"), and the alignment dutifully distributed them across the script.
+Nothing crashed and nothing warned. The transcripts were obviously wrong to a
+reader, which is the only reason it was caught — a reminder that a pipeline
+which never abstains will hand you a confident answer from garbage input, which
+is the paper's own subject.
 
 ### 6.3 Metrics
 
@@ -781,12 +821,69 @@ courtesy to the reader; it is the only way the T6 zero means anything, because a
 metric that silently absorbs a channel it was not defined over is not a
 measurement.
 
-**Figures.** Four, all drawn in `main.tex` as TikZ/pgfplots so there are no
-image files to keep in sync: F1 the system with the authority boundary drawn as
-a line the router's output crosses carrying only a tool and an argument; F2 the
-two-tier router including the abstain and reply branches; F3 accuracy by
-category across the three configurations (the chart form of T3); F4 the
-fabrication contrast of T6.
+### 7.1 What real speech does to all of this — T7
+
+The clean-text numbers above are what the system scores on written input. The
+protocol also specified a spoken condition, and it changes the conclusion.
+
+Two speakers who did not author the set (labelled A and B; neither is the
+author) read the stratified 60-record sheet aloud once each, in a normal room,
+on a phone. Recordings were transcribed by the **same recogniser the handset
+uses for open dictation, grammar removed** — so this is the condition the
+deployed system actually operates in, not a simulation of it. **107 transcripts
+over 59 records** survived the alignment gate described in §6.5.
+
+Because the ASR subset is stratified 12-per-category and the full set is not,
+its overall accuracy is **not comparable to T3**. The comparison below is
+therefore matched: the same 59 records, scored first as written text and then as
+their transcripts.
+
+| | keyword text | keyword spoken | two-tier text | two-tier spoken |
+|---|---|---|---|---|
+| canonical | 100.0 | 84.2 | 100.0 | 84.2 |
+| paraphrase | 0.0 | 0.0 | 16.7 | 13.0 |
+| multi_intent | 0.0 | 0.0 | 8.3 | 8.7 |
+| out_of_scope | 91.7 | 91.3 | 41.7 | 30.4 |
+| ambiguous | 0.0 | 0.0 | 58.3 | 52.6 |
+| **overall** | 37.3 | 34.6 | **44.1** | 35.5 |
+| **over-trigger** | **8.3** | **8.7** | 58.3 | 69.6 |
+
+**The deterministic tier barely notices.** Keyword accuracy falls 37.3 → 34.6
+and its over-trigger rate is flat (8.3 → 8.7). A grammar matching on a handful
+of content words degrades gracefully when the recogniser drops a function word:
+"how much battery is left" came back as "how much batteries left" and still
+abstained.
+
+**The agent layer's advantage mostly evaporates.** Two-tier beats the baseline
+by **6.8 points on written text** (44.1 vs 37.3) and by **0.9 points on the same
+utterances spoken** (35.5 vs 34.6). The paraphrase coverage the agent exists to
+provide is largely destroyed upstream of it — a paraphrase is long, carries
+unconstrained vocabulary, and is exactly what a 40 MB open-dictation model
+transcribes worst. This is the single most important thing the evaluation
+produced: **an evaluation on clean text substantially overstates what this layer
+delivers to a user who speaks to it**, and only a protocol that specified the
+spoken condition in advance would have caught it.
+
+**Recognition noise degrades abstention selectively.** Under ASR the keyword
+configuration's out-of-scope abstention holds (91.7 → 91.3) while two-tier's
+falls (41.7 → 30.4), pushing over-triggering from 58.3 % to **69.6 %**. A
+garbled out-of-scope utterance is not a signal to the model that it should
+decline; it is additional room for interpretation. The layer that abstains **by
+construction** keeps abstaining, and the layer that abstains **by judgement**
+abstains less exactly when the input got worse. That is the thesis of this paper
+appearing as a measurement rather than as an argument, and it was not
+anticipated when the protocol was written.
+
+Runs: `test_output/agent_eval_{keyword,two_tier}_asr.md` (spoken) and
+`..._asrsubset.md` (matched clean baseline), eval set sha256
+`f9e775b6a65279a4`. Boundary leaks 0 in all four.
+
+**Figures.** Four, rendered by `paper/build_figures.py` and shared by
+`main.tex` and the Word build so a number cannot differ between them: F1 the
+system with the authority boundary drawn as a line the router's output crosses
+carrying only a tool and an argument; F2 the two-tier router including the
+abstain and reply branches; F3 accuracy by category across the three
+configurations (the chart form of T3); F4 the fabrication contrast of T6.
 
 Two figures considered and dropped, recorded so they are not re-proposed: a
 latency waterfall (ASR → route → execute → speak) would be misleading while the
@@ -850,14 +947,14 @@ the prompt; a second-pass "is this in scope" classification; or a confidence
 signal from the model used as an abstention gate. A held-out set would be
 needed for any of them, and building one is the first item of future work.
 
-**Clean text, not speech.** Routing is evaluated on written utterances, so
-recognition errors sit outside the loop entirely. This matters more here than it
-would for a typed interface, because §5.1's whole argument is that the open path
-exists to carry speech the grammar cannot hear — and free dictation on the
-handset's 40 MB model is the least accurate component in the system. The
-paraphrase and out-of-scope numbers should therefore be read as **upper bounds**
-on what the deployed pipeline achieves. The protocol specifies the condition
-(§4 of `EVAL_PROTOCOL.md`) and the tooling exists; the recordings do not yet.
+**The spoken condition is small and gated.** Two speakers, 59 records, 107
+transcripts, one recogniser, one room, one phone. Neither speaker is a blind
+user, and neither had used the system. The alignment gate of §6.5 removes the
+worst-recognised utterances, so §7.1's degradation is a floor rather than an
+estimate. A larger panel, more rooms, and the Whisper path as a second
+recogniser arm would each sharpen it; none is likely to reverse the direction of
+the effect, because the mechanism — long paraphrases with open vocabulary are
+what a 40 MB model transcribes worst — does not depend on the panel size.
 
 **One model, one machine.** All routing numbers come from `llama3.2:3b` under
 Ollama on a single laptop. Model size is an obvious confound for the

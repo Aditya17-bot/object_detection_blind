@@ -1,30 +1,25 @@
 %% BlindAssist --- ACM submission draft.
 %%
-%% Overleaf: New Project -> Upload Project -> upload main.tex AND references.bib.
-%% Every figure is TikZ/pgfplots, so there are no images to manage and every
-%% diagram stays editable. Compiler: pdfLaTeX. Run it twice (BibTeX pass).
+%% Overleaf: New Project -> Upload Project -> upload main.tex, references.bib
+%% AND the figures/ folder (4 PNGs). Compiler: pdfLaTeX, run twice.
 %%
 %% Before submission: remove `nonacm`, add the rights commands ACM sends you,
 %% fill in \author, and VERIFY EVERY BIBLIOGRAPHY ENTRY. See README_OVERLEAF.md.
 %%
-%% Numbers come from test_output/agent_eval_*.md,
-%% eval set sha256 e4eeca83070e2d66, model llama3.2:3b under Ollama.
+%% Numbers come from test_output/agent_eval_*.md. Clean condition: eval set
+%% sha256 e4eeca83070e2d66. Spoken condition: f9e775b6a65279a4 (same records,
+%% transcripts appended). Model llama3.2:3b under Ollama.
 
 \documentclass[sigconf,nonacm]{acmart}
 
 \usepackage{booktabs}
-\usepackage{tikz}
-\usepackage{pgfplots}
-\pgfplotsset{compat=1.18}
-\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, calc}
+\usepackage{graphicx}
 
-%% ---- palette (matches the running system's own UI colours) -------------
-\definecolor{amber}{HTML}{B57500}
-\definecolor{teal}{HTML}{10707F}
-\definecolor{rose}{HTML}{C13239}
-\definecolor{moss}{HTML}{3B7A4E}
-\definecolor{slate}{HTML}{5A6672}
-\definecolor{panel}{HTML}{F2F5F8}
+%% Figures are PNGs built by paper/build_figures.py rather than TikZ/pgfplots.
+%% The TikZ originals were correct but pushed compile time past Overleaf's
+%% free-tier timeout, which the site presents to the user as a paywall.
+%% Regenerate with:  venv/Scripts/python.exe paper/build_figures.py
+\graphicspath{{figures/}}
 
 \newcommand{\tool}[1]{\texttt{#1}}
 
@@ -60,8 +55,11 @@ two-tier routing improves overall accuracy from 39.5\% to 53.0\% while keeping
 100\% on trained phrasings that an LLM-only router drops to 45.0\%, and the same
 model asked to answer freely rather than to choose a tool fabricates perceptual
 content in 42.5\% of responses. It also costs: out-of-scope over-triggering
-rises from 5.0\% to 55.0\%, which we report as a negative result about small
-local routers rather than tune away.
+rises from 5.0\% to 55.0\%. A spoken-input condition, recorded by two speakers
+who did not author the set, then removes most of the agent layer's remaining
+advantage---two-tier's margin over the keyword baseline falls from 6.8 points to
+0.9---while the deterministic tier's abstention survives intact. We report both
+as negative results rather than tune them away.
 \end{abstract}
 
 \begin{CCSXML}
@@ -207,43 +205,7 @@ and transport rather than detection.
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}[
-  font=\scriptsize,
-  box/.style={draw=slate, fill=white, rounded corners=2pt, align=center,
-              inner sep=3pt, minimum height=6mm, text width=21mm},
-  core/.style={box, draw=amber, very thick, fill=amber!8},
-  ar/.style={-{Stealth[length=1.6mm]}, draw=slate},
-  cross/.style={-{Stealth[length=1.6mm]}, draw=teal, dashed, thick}]
-
-%% --- untrusted lane (left) ------------------------------------------
-\node[box] (mic) at (0,0)      {microphone};
-\node[box] (asr) at (0,-1.15)  {Vosk ASR\\[-1pt]{\tiny grammar-constrained}};
-\node[box] (t0)  at (0,-2.30)  {tier 0 parser\\[-1pt]{\tiny 5\,$\mu$s, on handset}};
-\node[box] (t1)  at (0,-3.55)  {tier 1 router\\[-1pt]{\tiny local LLM, on laptop}};
-
-%% --- deterministic lane (right) -------------------------------------
-\node[box]  (cam) at (4.7,0)     {camera\\[-1pt]{\tiny YUV420 frames}};
-\node[box]  (det) at (4.7,-1.15) {YOLOv8s + custom\\[-1pt]{\tiny on laptop}};
-\node[core] (pos) at (4.7,-2.30) {position\\[-1pt]{\tiny zone, bucket, gated metres}};
-\node[core] (dec) at (4.7,-3.55) {decision\\[-1pt]{\tiny what to say now}};
-\node[box]  (out) at (4.7,-4.75) {speech $\cdot$ sonar $\cdot$ haptics};
-
-%% --- the boundary ---------------------------------------------------
-\draw[dashed, slate!70] (2.35,0.55) -- (2.35,-5.25);
-\node[font=\tiny, slate, align=center] at (0,0.75) {may SELECT\\[-2pt]a capability};
-\node[font=\tiny, amber, align=center] at (4.7,0.75) {authors ALL\\[-2pt]spoken guidance};
-
-\draw[ar] (mic) -- (asr);
-\draw[ar] (asr) -- (t0);
-\draw[ar] (t0)  -- node[left,font=\tiny,align=right,xshift=-1mm]{miss\\only} (t1);
-\draw[ar] (cam) -- node[right,font=\tiny]{Wi-Fi} (det);
-\draw[ar] (det) -- (pos);
-\draw[ar] (pos) -- (dec);
-\draw[ar] (dec) -- (out);
-
-\draw[cross] (t0.east) -- node[above,font=\tiny,sloped]{tool + arg} (dec.north west);
-\draw[cross] (t1.east) -- node[above,font=\tiny]{tool + arg} (dec.west);
-\end{tikzpicture}
+\includegraphics[width=\columnwidth]{f1_system.png}
 \caption{The two dashed arrows crossing the boundary are the whole safety
 argument: the router may point at a capability, but it may not speak through
 one. Tier 0 runs on the handset, so every trained phrase still works with the
@@ -353,39 +315,7 @@ claim.
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}[
-  font=\scriptsize,
-  b/.style={draw=slate, fill=white, rounded corners=2pt, align=center,
-            inner sep=3pt, minimum height=5.5mm},
-  d/.style={b, fill=panel},
-  ok/.style={b, draw=moss, fill=moss!8},
-  no/.style={b, draw=rose, fill=rose!8},
-  ch/.style={b, draw=amber, fill=amber!8},
-  ar/.style={-{Stealth[length=1.5mm]}, draw=slate}]
-
-\node[b]  (u)    at (0,0)        {utterance};
-\node[d]  (t0)   at (0,-0.95)    {tier 0 keyword grammar};
-\node[d]  (llm)  at (2.55,-2.05) {local LLM\\[-1pt]{\tiny JSON tool call}};
-\node[d]  (val)  at (2.55,-3.20) {validate};
-\node[ok] (act)  at (-2.15,-3.20){validated\\[-1pt]action list};
-\node[ok] (ex)   at (-2.15,-4.40){execute\\[-1pt]{\tiny decision.py}};
-\node[no] (ab)   at (0.35,-4.60) {abstain\\[-1pt]{\tiny fixed template}};
-\node[ch] (say)  at (2.80,-4.60) {grounded reply\\[-1pt]{\tiny capped}};
-\node[b]  (sp)   at (0,-5.75)    {speak};
-
-\draw[ar] (u) -- (t0);
-\draw[ar] (t0.west) -| node[pos=.72,left,font=\tiny]{hit, 5\,$\mu$s} (act.north);
-\draw[ar] (t0.east) -| node[pos=.25,above,font=\tiny]{miss} (llm.north);
-\draw[ar] (llm) -- (val);
-\draw[ar] (val.west) -- node[above,font=\tiny]{pass} (act.east);
-\draw[ar, draw=rose] (val.south) -- node[right,font=\tiny,align=left,xshift=.5mm]
-      {reject,\\prose,\\timeout} (ab.north east);
-\draw[ar, draw=amber] (val.south east) -- (say.north);
-\draw[ar] (act) -- (ex);
-\draw[ar] (ex.south) |- (sp.west);
-\draw[ar] (ab.south) -- (sp.north);
-\draw[ar] (say.south) |- (sp.east);
-\end{tikzpicture}
+\includegraphics[width=\columnwidth]{f2_router.png}
 \caption{Two-tier routing. Every path except the amber reply channel produces
 text written by deterministic code or selected from a fixed template; the reply
 channel cannot reach any capability's output.}
@@ -432,6 +362,17 @@ the fixed templates; the harness fails loudly otherwise. Intervals are
 Wilson \cite{wilson1927interval}; no significance testing between configurations
 is claimed at this set size, and the comparison is descriptive.
 
+\textbf{The spoken condition.} Two speakers who did not author the set read a
+stratified 60-record subset aloud, once each, in a normal room. Recordings were
+transcribed by the same recogniser the handset uses for open dictation, with the
+grammar removed, so this is the condition the deployed system actually operates
+in rather than a simulation of it. Utterance boundaries were recovered by
+aligning the recognised word stream to the known script; where fewer than a
+third of an utterance's words aligned, the record was dropped rather than paired
+with a transcript we could not trust. 107 transcripts over 59 records survived
+that gate. Because the gate removes the utterances the recogniser handled worst,
+the spoken-condition numbers are if anything optimistic.
+
 Model: \tool{llama3.2:3b} \cite{llama3} under Ollama \cite{ollama} on the tether
 laptop. Criteria that would falsify each claim were recorded in the protocol
 before the runs.
@@ -461,31 +402,7 @@ overall       & 200 & 39.5  & 45.0 & \textbf{53.0} \\
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}
-\begin{axis}[
-  width=\columnwidth, height=4.6cm,
-  ybar, bar width=4.2pt,
-  ymin=0, ymax=105,
-  ylabel={accuracy (\%)},
-  ylabel style={font=\scriptsize},
-  symbolic x coords={canonical, paraphrase, multi-intent, out-of-scope, ambiguous, overall},
-  xtick=data,
-  x tick label style={font=\tiny, rotate=20, anchor=east},
-  y tick label style={font=\tiny},
-  ymajorgrids, grid style={dashed, slate!30},
-  legend style={font=\tiny, at={(0.5,1.16)}, anchor=north, legend columns=3,
-                draw=none, fill=none},
-  enlarge x limits=0.11,
-]
-\addplot[fill=slate!60, draw=slate] coordinates
-  {(canonical,100) (paraphrase,0) (multi-intent,0) (out-of-scope,95) (ambiguous,3.3) (overall,39.5)};
-\addplot[fill=teal!70, draw=teal] coordinates
-  {(canonical,45) (paraphrase,48.6) (multi-intent,30) (out-of-scope,47.5) (ambiguous,43.3) (overall,45.0)};
-\addplot[fill=amber!75, draw=amber] coordinates
-  {(canonical,100) (paraphrase,47.1) (multi-intent,10) (out-of-scope,45) (ambiguous,43.3) (overall,53)};
-\legend{keyword, LLM only, two-tier}
-\end{axis}
-\end{tikzpicture}
+\includegraphics[width=\columnwidth]{f3_accuracy.png}
 \caption{Routing accuracy by category, $n=200$. For out-of-scope, ``accuracy''
 means correctly abstaining. The keyword bars at zero are not degradation but
 absence: a grammar cannot hear what is not in its grammar.}
@@ -569,25 +486,7 @@ is not an over-trigger; we list the counts so the reader can subtract them.
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}
-\begin{axis}[
-  width=\columnwidth, height=3.0cm,
-  xbar, bar width=8pt,
-  xmin=0, xmax=100,
-  xlabel={responses containing fabricated perception (\%)},
-  xlabel style={font=\scriptsize},
-  symbolic y coords={tool-mediated, free text},
-  ytick=data,
-  y tick label style={font=\tiny},
-  x tick label style={font=\tiny},
-  xmajorgrids, grid style={dashed, slate!30},
-  nodes near coords, nodes near coords style={font=\tiny},
-  enlarge y limits=0.6,
-]
-\addplot[fill=moss!70, draw=moss] coordinates {(0,tool-mediated)};
-\addplot[fill=rose!70, draw=rose] coordinates {(42.5,free text)};
-\end{axis}
-\end{tikzpicture}
+\includegraphics[width=\columnwidth]{f4_fabrication.png}
 \caption{The same model, the same deterministic state block. Asked to
 \emph{choose a tool}, it fabricated nothing in any configuration (0 of 200);
 asked to \emph{answer}, it fabricated in 42.5\% of responses (85 of 200). The
@@ -612,6 +511,58 @@ travelling companion with a cane. For a sighted user this is a curiosity to
 dismiss. For the user this system is built for it arrives in the same voice, at
 the same volume, with the same confidence as a real detection.
 
+\subsection{What real speech does to all of this}
+
+\begin{table}[t]
+\caption{Accuracy (\%) on the matched subset: the same 59 records, as written
+text and as 107 real transcripts from two speakers. The subset's category mix
+differs from the full set, so these columns compare with each other and not with
+Table~\ref{tab:t3}.}
+\label{tab:asr}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{keyword} & \multicolumn{2}{c}{two-tier} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & text & spoken & text & spoken \\
+\midrule
+canonical      & 100.0 & 84.2 & 100.0 & 84.2 \\
+paraphrase     & 0.0   & 0.0  & 16.7  & 13.0 \\
+multi-intent   & 0.0   & 0.0  & 8.3   & 8.7  \\
+out-of-scope   & 91.7  & 91.3 & 41.7  & 30.4 \\
+ambiguous      & 0.0   & 0.0  & 58.3  & 52.6 \\
+\midrule
+overall        & 37.3  & 34.6 & \textbf{44.1} & 35.5 \\
+over-trigger   & \textbf{8.3} & \textbf{8.7} & 58.3 & 69.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The spoken condition changes the conclusion, which is why the protocol specified
+it in advance (Table~\ref{tab:asr}). Three readings.
+
+\textbf{The deterministic tier barely notices.} Keyword accuracy falls
+37.3 to 34.6 and its over-trigger rate is flat (8.3 to 8.7). A grammar that
+matches on a handful of content words degrades gracefully when the recogniser
+drops a function word.
+
+\textbf{The agent layer's advantage mostly evaporates.} Two-tier beats the
+baseline by 6.8 points on written text (44.1 vs.\ 37.3) and by 0.9 points on the
+same utterances spoken (35.5 vs.\ 34.6). The paraphrase coverage the agent
+exists to provide is largely destroyed upstream of it: a paraphrase is long,
+contains unconstrained vocabulary, and is exactly what a 40\,MB open-dictation
+model transcribes worst. An evaluation on clean text substantially overstates
+what this layer delivers to a user who speaks to it.
+
+\textbf{Recognition noise degrades abstention selectively.} Under ASR the
+keyword configuration's out-of-scope abstention holds (91.7 to 91.3) while
+two-tier's falls (41.7 to 30.4), pushing over-triggering from 58.3\% to 69.6\%.
+A garbled out-of-scope utterance is not a signal to the model that it should
+decline; it is additional room for interpretation. The layer that abstains by
+construction keeps abstaining, and the layer that abstains by judgement abstains
+less exactly when the input got worse. That is the paper's thesis showing up as
+a measurement rather than an argument.
+
 \textbf{A capability added after the freeze.} The \tool{check} capability was
 implemented after the set was committed. Two records are affected and neither
 was re-labelled: one paraphrase whose gold we consider superseded, and one
@@ -635,17 +586,18 @@ one that could falsify the premise: users may prefer a guessed answer to an
 abstention, and the over-trigger rate we optimise against may not be the
 quantity that matters to them.
 
-\textbf{Over-triggering is measured, not solved.} 55\% is the largest open
-problem this evaluation exposes. Rejection examples in the prompt, a second-pass
-scope classifier, and a model-confidence gate \cite{hendrycks2017baseline} are
-all available; none is evaluated, because each would be tuning against a frozen
-set. A held-out set comes first.
+\textbf{Over-triggering is measured, not solved.} 55\% on text and 69.6\% on
+speech is the largest open problem this evaluation exposes. Rejection examples
+in the prompt, a second-pass scope classifier, and a model-confidence
+gate \cite{hendrycks2017baseline} are all available; none is evaluated, because
+each would be tuning against a frozen set. A held-out set comes first.
 
-\textbf{Clean text, not speech.} Routing is evaluated on written utterances, so
-recognition errors are outside the loop. The protocol specifies a
-spoken-transcript condition with speakers who did not author the set; it is not
-reported here, and paraphrase and out-of-scope numbers in particular should be
-read as upper bounds on what the deployed pipeline achieves.
+\textbf{The spoken condition is small and gated.} Two speakers, 59 records, 107
+transcripts, one recogniser, one room. The alignment gate that recovers
+utterance boundaries drops the worst-recognised utterances, so the degradation
+reported above is a floor on the true degradation rather than an estimate of it.
+A larger panel, more rooms, and the Whisper path as a second recogniser arm
+would all sharpen it; none is likely to move the direction of the effect.
 
 \textbf{One model, one machine.} A second arm with a reasoning model
 (\tool{qwen3:4b}) returned no parseable tool call on 102 of 140 tier-1 calls at
@@ -701,7 +653,11 @@ and would need transport security before any deployment.
 Source code, the capability registry manifest, the frozen evaluation protocol,
 the 200-record labelled set and every run report are available at
 \url{https://github.com/Aditya17-bot/object_detection_blind}. Results in this
-paper carry the eval-set SHA-256 prefix \texttt{e4eeca83070e2d66}; any number
+paper carry the eval-set SHA-256 prefix \texttt{e4eeca83070e2d66} for the clean
+condition; appending the spoken transcripts changes it to
+\texttt{f9e775b6a65279a4}, and only the transcripts differ between the two. The
+two speakers read a fixed list of system commands, contributed voluntarily, and
+are identified only as A and B. Any number
 quoted from a set with a different hash is not comparable.
 
 %% ======================================================================

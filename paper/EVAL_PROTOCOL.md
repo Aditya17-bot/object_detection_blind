@@ -242,3 +242,41 @@ Recorded in advance, so the results section cannot quietly move the goalposts:
   rule now requires a positional lead-in for that ambiguous pair. All headline
   numbers use the fixed parser; the pre-fix figure is quoted in §6.4 because it
   is evidence for the paper's own argument about keyword grammars.
+- **2026-08-01 (night) — the ASR condition ran; the collection method deviates
+  from §4 and the deviation is recorded here.** §4 assumed one recording per
+  utterance captured on the laptop by `asr_collect.py record`. What the two
+  volunteer speakers produced was **one continuous phone recording each**, read
+  straight through in sheet order. Three consequences, none of which changes a
+  metric definition:
+  1. **Decoding.** The files were AAC in an MP4 container and this machine has
+     no ffmpeg. `tools/aac_to_wav.ps1` transcodes them with the Windows Media
+     Foundation decoder that ships with the OS, so nothing was downloaded.
+  2. **Segmentation.** Silence splitting (`asr_collect.py import`) was tried
+     first and REJECTED: it found 34 and 60 segments against a 60-line script,
+     and no parameter setting gave 60 for both speakers. A correct count is
+     also not evidence of a correct mapping — one merge plus one over-split
+     cancels in the count and shifts every label between them, silently. The
+     condition now uses `asr_collect.py align`: transcribe the whole session
+     with word timings, then Levenshtein-align the recognised word stream to
+     the known script, so boundaries come from the script rather than from
+     silence. The transcript for each record is still exactly what the
+     recogniser produced; only the boundaries are inferred.
+  3. **A trust gate, and the bias it introduces.** Where fewer than a third of
+     an utterance's script words aligned, the record is DROPPED rather than
+     paired with a transcript we cannot trust (11 records for speaker A, 2 for
+     B). This is §4.3's absence-vs-negative rule applied to our own
+     measurement. It biases one way and the paper says so: it removes the
+     utterances the recogniser handled worst, so the reported degradation is a
+     **floor**, not an estimate.
+  Achieved coverage: **107 transcripts over 59 of the 60 records**, two
+  speakers, engine `vosk-small-en-us` with the grammar removed (the handset's
+  own open-dictation configuration, as §4.3 requires). Writing them changed the
+  set hash from `e4eeca83070e2d66` to **`f9e775b6a65279a4`**; only the `asr`
+  arrays differ, so clean-condition numbers are unaffected and remain quoted
+  under the old hash.
+- **2026-08-01 (night) — `--asr-subset` added to the harness.** The ASR subset
+  is stratified 12-per-category while the full set is not, so its overall
+  accuracy is not comparable to the full clean run. The flag re-runs the clean
+  condition over exactly the records that carry transcripts, giving the matched
+  baseline the paper reports. Without it the headline comparison would be
+  between two different populations.

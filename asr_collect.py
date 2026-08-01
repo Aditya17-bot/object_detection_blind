@@ -361,6 +361,194 @@ def _vosk_transcriber():
     return ("vosk-small-en-us", run)
 
 
+# --------------------------------------------------------------------------
+# align: one continuous recording -> per-record transcripts, without trusting
+# silence detection to find the utterance boundaries
+# --------------------------------------------------------------------------
+
+def _vosk_word_stream(path):
+    """Every recognised word in a whole session, with timings.
+
+    Grammar removed, i.e. the open language model — the same configuration the
+    handset uses for dictation, so this is the condition under test rather than
+    a degraded stand-in."""
+    from vosk import KaldiRecognizer, Model, SetLogLevel
+    model_dir = ROOT / "vosk-model-small-en-us-0.15"
+    if not model_dir.is_dir():
+        sys.exit(f"vosk model not found at {model_dir}")
+    SetLogLevel(-1)
+    model = Model(str(model_dir))
+    # MUST go through _read_wav_mono16k: a session recorded on a phone arrives
+    # as 48 kHz stereo, and handing interleaved stereo frames to Vosk as if
+    # they were mono produces fluent-looking nonsense ("shoo shoo whoosh")
+    # rather than an obvious failure.
+    audio = _read_wav_mono16k(path)
+    raw = audio.tobytes()
+    rec = KaldiRecognizer(model, SAMPLERATE)
+    rec.SetWords(True)
+    words = []
+    step = 8000                                  # 4000 samples
+    for start in range(0, len(raw), step):
+        if rec.AcceptWaveform(raw[start:start + step]):
+            words += json.loads(rec.Result()).get("result", [])
+    words += json.loads(rec.FinalResult()).get("result", [])
+    return words
+
+
+def _word_cost(a, b):
+    """Substitution cost. A near-miss ("chair"/"chairs", "beeps"/"beep") must
+    not cost as much as an unrelated word, or the alignment walks off the
+    script exactly where the recogniser struggled — which is where the data
+    matters most."""
+    if a == b:
+        return 0.0
+    if a[:4] == b[:4] and min(len(a), len(b)) >= 4:
+        return 0.35
+    if a[:3] == b[:3] and min(len(a), len(b)) >= 3:
+        return 0.6
+    return 1.0
+
+
+def _align_words(hyp, ref):
+    """Levenshtein alignment of the recognised word sequence onto the script.
+
+    Returns, for each reference word index, the list of hypothesis indices that
+    landed on it. Insertions attach to the preceding reference word, so a
+    hallucinated word stays inside the utterance it was spoken during."""
+    n, m = len(hyp), len(ref)
+    INS, DEL = 1.0, 1.0
+    cost = [[0.0] * (m + 1) for _ in range(n + 1)]
+    back = [[0] * (m + 1) for _ in range(n + 1)]     # 0 diag, 1 up(ins), 2 left(del)
+    for i in range(1, n + 1):
+        cost[i][0] = i * INS
+        back[i][0] = 1
+    for j in range(1, m + 1):
+        cost[0][j] = j * DEL
+        back[0][j] = 2
+    for i in range(1, n + 1):
+        hi = hyp[i - 1]
+        row, prev = cost[i], cost[i - 1]
+        brow = back[i]
+        for j in range(1, m + 1):
+            d = prev[j - 1] + _word_cost(hi, ref[j - 1])
+            u = prev[j] + INS
+            l = row[j - 1] + DEL
+            best = d
+            move = 0
+            if u < best:
+                best, move = u, 1
+            if l < best:
+                best, move = l, 2
+            row[j] = best
+            brow[j] = move
+
+    assigned = [[] for _ in range(m)]
+    matched = [False] * m
+    i, j = n, m
+    while i > 0 or j > 0:
+        move = back[i][j]
+        if move == 0 and i > 0 and j > 0:
+            assigned[j - 1].append(i - 1)
+            matched[j - 1] = _word_cost(hyp[i - 1], ref[j - 1]) < 0.5
+            i, j = i - 1, j - 1
+        elif move == 1 and i > 0:
+            # insertion: attach to the reference word to its left (j-1), or the
+            # first one if we are still before the script started
+            assigned[max(0, j - 1)].append(i - 1)
+            i -= 1
+        else:
+            j -= 1
+    for slot in assigned:
+        slot.reverse()
+    return assigned, matched
+
+
+def cmd_align(args):
+    records = subset(load_records())
+    all_records = load_records()
+    by_id = {r["id"]: r for r in all_records}
+
+    print(f"transcribing {args.audio} (open language model, no grammar)...")
+    stream = _vosk_word_stream(args.audio)
+    hyp = [w["word"].lower() for w in stream]
+    print(f"  {len(hyp)} words recognised")
+
+    ref, owner = [], []
+    for index, record in enumerate(records):
+        for word in record["utterance"].lower().split():
+            ref.append(word)
+            owner.append(index)
+    print(f"  script is {len(ref)} words across {len(records)} utterances")
+
+    assigned, matched = _align_words(hyp, ref)
+
+    per_utterance = [[] for _ in records]
+    hits = [0] * len(records)
+    totals = [0] * len(records)
+    for ref_index, hyp_indices in enumerate(assigned):
+        who = owner[ref_index]
+        totals[who] += 1
+        if matched[ref_index]:
+            hits[who] += 1
+        per_utterance[who].extend(hyp_indices)
+
+    out_dir = AUDIO_DIR / args.speaker
+    audio = _read_wav_mono16k(args.audio) if args.clips else None
+    if args.clips:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    written, weak, empty = 0, 0, 0
+    print()
+    for index, record in enumerate(records):
+        indices = sorted(per_utterance[index])
+        text = " ".join(hyp[i] for i in indices).strip()
+        score = hits[index] / totals[index] if totals[index] else 0.0
+        exact = text == record["utterance"].lower()
+
+        if not text:
+            empty += 1
+            print(f"  {record['id']}  NO AUDIO ALIGNED  (skipped)")
+            continue
+        if score < args.min_match:
+            weak += 1
+            print(f"  {record['id']}  match {score:.0%} < {args.min_match:.0%} "
+                  f"-> {text!r}  (skipped, alignment not trustworthy)")
+            continue
+
+        mark = "exact" if exact else f"match {score:.0%}"
+        print(f"  {record['id']}  [{mark}]  {text!r}")
+
+        target = by_id[record["id"]]
+        entry = {"speaker": args.speaker, "engine": "vosk-small-en-us",
+                 "text": text}
+        existing = target.setdefault("asr", [])
+        existing[:] = [e for e in existing
+                       if not (isinstance(e, dict)
+                               and e.get("speaker") == args.speaker
+                               and e.get("engine") == entry["engine"])]
+        existing.append(entry)
+        written += 1
+
+        if args.clips and indices:
+            start = int(stream[indices[0]]["start"] * SAMPLERATE)
+            end = int(stream[indices[-1]]["end"] * SAMPLERATE)
+            pad = int(0.12 * SAMPLERATE)
+            _save_wav(out_dir / f"{record['id']}.wav",
+                      audio[max(0, start - pad):min(len(audio), end + pad)])
+
+    print(f"\n{written} aligned, {weak} below --min-match, {empty} with no audio")
+    if args.dry_run:
+        print("dry run: nothing written")
+        return
+    with SET_PATH.open("w", encoding="utf-8") as fh:
+        for record in all_records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    covered = sum(1 for r in all_records if r.get("asr"))
+    print(f"wrote {SET_PATH}: {covered}/{len(all_records)} records carry ASR")
+    print("NOTE: the eval-set hash changes - quote the new one with any ASR "
+          "number, and keep clean-condition numbers under the old hash.")
+
+
 def cmd_transcribe(args):
     engine = None
     if not args.vosk:
@@ -453,6 +641,22 @@ def main():
                      help="dB above the recording's own noise floor that counts "
                           "as speech")
 
+    al = sub.add_parser(
+        "align",
+        help="one continuous recording -> per-record transcripts, by aligning "
+             "the recognised word stream to the reading sheet")
+    al.add_argument("--speaker", required=True, help="short label, e.g. A")
+    al.add_argument("--audio", required=True,
+                    help="one WAV of the whole session, read in sheet order")
+    al.add_argument("--min-match", type=float, default=0.34,
+                    help="fraction of an utterance's script words that must "
+                         "align before its transcript is trusted; below this "
+                         "the record is skipped rather than guessed at")
+    al.add_argument("--clips", action="store_true",
+                    help="also cut a per-record WAV, so the alignment can be "
+                         "checked by ear")
+    al.add_argument("--dry-run", action="store_true")
+
     tr = sub.add_parser("transcribe", help="transcribe and write into the set")
     tr.add_argument("--vosk", action="store_true",
                     help="force the Vosk fallback even if Whisper is present")
@@ -460,7 +664,7 @@ def main():
 
     args = ap.parse_args()
     {"sheet": cmd_sheet, "record": cmd_record, "import": cmd_import,
-     "transcribe": cmd_transcribe}[args.cmd](args)
+     "align": cmd_align, "transcribe": cmd_transcribe}[args.cmd](args)
 
 
 if __name__ == "__main__":

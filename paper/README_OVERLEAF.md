@@ -1,23 +1,62 @@
-# Getting this into Overleaf
+# Two builds of the same paper
 
-`main.tex` needs exactly one companion file, `references.bib`. Every figure is
-TikZ/pgfplots, so there are no images to upload, nothing to re-export when a
-number changes, and every diagram stays editable inside Overleaf.
+| | file | needs |
+|---|---|---|
+| **Word** | `BlindAssist_paper.docx` | nothing — open it |
+| **PDF** | `BlindAssist_paper.pdf` | nothing — 6 pages, already exported |
+| **LaTeX** | `main.tex` + `references.bib` + `figures/` | Overleaf or a local TeX |
 
-## The five-minute version
+Both are ACM `sigconf` two-column layout, 6 pages including references, and they
+share the same figure PNGs so a number cannot differ between them.
 
-1. overleaf.com → **New Project** → **Upload Project** → upload `main.tex` and
-   `references.bib` (or drag the whole `paper/` folder; LaTeX ignores the rest).
-2. Menu → **Compiler: pdfLaTeX**. The `acmart` class ships with Overleaf.
-3. Compile **twice** — the first pass writes the `.aux` BibTeX reads. Overleaf
-   usually does this for you; if citations render as `[?]`, hit Recompile again.
+## If you just want the paper
 
-You should get a two-column ACM paper with two TikZ diagrams (system, router),
-two pgfplots charts (accuracy, fabrication), three tables, and a reference list.
+Open `paper/BlindAssist_paper.docx` in Word or upload it to Google Docs: title
+block across the top, two columns, four figures, four tables, 53 numbered
+references. `BlindAssist_paper.pdf` is the same document already exported.
+
+**To change the text, edit `paper/build_docx.py` and re-run it** — do not
+edit the .docx by hand, the next build overwrites it:
+
+```bash
+venv/Scripts/python.exe paper/build_figures.py    # only if a number changed
+venv/Scripts/python.exe paper/build_docx.py
+powershell -ExecutionPolicy Bypass -File tools/docx_to_pdf.ps1 \
+    -DocxPath paper/BlindAssist_paper.docx -PdfPath paper/BlindAssist_paper.pdf
+```
+
+## About the Overleaf paywall
+
+The free tier stopping and asking for money was a **compile timeout**, not a
+feature limit. The original `main.tex` drew both diagrams in TikZ and both
+charts in pgfplots; rendering four vector figures on top of `acmart` ran past
+the free tier's time budget, and Overleaf presents that as an upgrade prompt.
+
+Fixed by pre-rendering: `paper/build_figures.py` writes four PNGs into
+`paper/figures/` and `main.tex` now uses `\includegraphics`. No TikZ or pgfplots
+remains in the document, so it compiles in seconds and stays inside the free
+tier. The figure *sources* did not disappear — they are Python now, and easier
+to edit than TikZ was.
+
+## Getting it into Overleaf
+
+1. overleaf.com → **New Project** → **Upload Project**.
+2. Upload `main.tex`, `references.bib`, **and the `figures/` folder** (all four
+   PNGs). The folder matters: `\graphicspath{{figures/}}` expects it.
+3. Menu → **Compiler: pdfLaTeX**. The `acmart` class ships with Overleaf.
+4. Compile **twice** — the first pass writes the `.aux` BibTeX reads. If
+   citations render as `[?]`, hit Recompile again.
 
 If you would rather not upload by hand: `Menu → GitHub`, point Overleaf at
 `github.com/Aditya17-bot/object_detection_blind`, and set the main document to
 `paper/main.tex`.
+
+## Keeping the builds in sync
+
+Chart numbers live in one place (`build_figures.py`). **The prose is duplicated**
+between `main.tex` and `build_docx.py`, so a wording change must be made in
+both, and `PAPER.md` is the long-form master carrying reasoning too long for six
+pages. Three files, one paper.
 
 ## Before you submit — in priority order
 
@@ -63,17 +102,20 @@ If you would rather not upload by hand: `Menu → GitHub`, point Overleaf at
 | Table 1 accuracy, Fig. 3 | `test_output/agent_eval_{keyword,llm_only,two_tier}.md` |
 | Table 2 over-trigger + latency | same three files |
 | Fig. 4 fabrication | `test_output/agent_eval_llm_freetext.md` |
+| Table 3 spoken condition | `test_output/agent_eval_{keyword,two_tier}_asr.md` |
+| Table 3 matched text baseline | `test_output/agent_eval_{keyword,two_tier}_asrsubset.md` |
 | qwen3 sensitivity note | `test_output/agent_eval_two_tier_qwen3.md` |
 | detector timings | `test_output/gpu_bench.md`, server logs |
 
-Eval set sha256 `e4eeca83070e2d66`, model `llama3.2:3b` under Ollama, all four
-configurations re-run 2026-08-01 against the current harness.
-**Quote the hash with any number you move into the paper** — it changes the
-moment ASR transcripts are written into the set, and numbers under two different
-hashes are not comparable.
+Model `llama3.2:3b` under Ollama; all configurations run 2026-08-01 against the
+current harness. **Two set hashes, and they are not interchangeable:**
 
-`PAPER.md` is the long-form master and carries reasoning that does not fit in
-six pages. When a number changes, change it in **both** files.
+- `e4eeca83070e2d66` — clean condition, before the spoken transcripts existed.
+- `f9e775b6a65279a4` — after `asr_collect.py align` wrote them in. Only the
+  `asr` arrays differ, so clean numbers are unaffected, but **the matched
+  baseline in Table 3 was run under the new hash** and must be quoted with it.
+
+Quote the hash with any number you move into the paper.
 
 ## Regenerating a number
 
@@ -88,20 +130,25 @@ section, not the summary tables — that is where the failures are legible.
 
 ## Editing the figures
 
-The diagrams are TikZ in the body of `main.tex`, right where they are used.
+All four live in `paper/build_figures.py`; re-run it and both builds pick the
+new PNGs up.
 
 - **Fig. 1 (system)** — two lanes at fixed coordinates, separated by a dashed
-  vertical line at `x=2.35`. The left lane may only select; the right lane
-  authors all speech. The two teal dashed arrows crossing that line are the
-  paper's central claim drawn. Move a node by editing its `at (x,y)`.
+  vertical line. The left lane may only select; the right lane authors all
+  speech. The two teal dashed arrows crossing that line are the paper's central
+  claim, drawn. Move a node by editing its `(x, y)`.
 - **Fig. 2 (router)** — same fixed-coordinate style. The rose arrow is the
   reject path into abstention, the amber one is the conversational reply
-  channel. Both end at `speak`, and neither passes through `execute`; that
-  separation is the point of the figure, so keep it if you rearrange.
-- **Figs. 3 and 4 (charts)** — `pgfplots` `\addplot coordinates {...}`. Swap the
-  numbers in place; no external data file.
+  channel. Both end at `speak`, and **neither passes through `execute`**; that
+  separation is the point of the figure, so preserve it if you rearrange.
+- **Figs. 3 and 4 (charts)** — the numbers are constants at the top of the file
+  (`KEYWORD`, `LLM_ONLY`, `TWO_TIER`, `FABRICATION`). Change them there.
 
-Colours are defined once at the top (`amber`, `teal`, `rose`, `moss`, `slate`)
+Edge labels are drawn on an opaque white patch (`_label`). Without that they sit
+on top of the arrows they annotate and both become unreadable at column width —
+which is what the first draft of Fig. 2 did.
+
+Colours are defined once at the top (`AMBER`, `TEAL`, `ROSE`, `MOSS`, `SLATE`)
 and match the running app's UI, which is deliberate — screenshots and figures
 should look like the same system.
 
