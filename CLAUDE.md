@@ -732,3 +732,44 @@ validation was discarding (`_say_shaped_action` accepts the shape).
 
 Test counts: **219 Python / 157 Dart**, all passing. `flutter analyze` clean
 apart from the 3 pre-existing `avoid_print` infos in detector.dart.
+
+## Paper: all evaluation arms measured (2026-08-01)
+
+`paper/PAPER.md` is no longer a draft with reserved results — **T3-T6 are
+filled**, the abstract is written, and §6.4/§8 carry the honest caveats. Runs
+live in `test_output/agent_eval_{keyword,llm_only,two_tier,llm_freetext}.md`,
+eval set sha256 `e4eeca83070e2d66`, model `llama3.2:3b` via Ollama.
+
+Headline numbers (n=200):
+- keyword 39.5 % overall · canonical 100 % · paraphrase 0 % · over-trigger 5.0 %
+- llm_only 45.5 % · **canonical drops to 45 %** · over-trigger 52.5 %
+- **two_tier 53.0 %** · canonical 100 % · paraphrase 47.1 % · over-trigger 55.0 %
+- free-text ablation: **85/200 (42.5 %) fabricated** perceptual content
+- tier 1 latency p50 1141 ms / p95 2141 ms (two-tier); tier 0 stays 5 µs
+- 0 guidance-string boundary leaks in every routed configuration
+
+Two findings to carry into any write-up: tiering **beats** LLM-only outright
+(the model mis-routes canonical commands the parser gets right), and the
+abstention collapse (5 %→55 % over-trigger) is a genuine negative result that is
+NOT tuned away — the protocol was frozen before the router existed.
+
+Fixes the eval run itself produced (both now regression tests):
+- `voice.py` treated any "left"/"right" as a direction, so "how much battery is
+  left" became `check(left)`. Ambiguous pair now needs a positional lead-in
+  ("on **my** left", "check left"); ahead/front/forward need none.
+- Ollama's JSON mode closes the string when `num_predict` runs out, so a
+  half-word arrived as valid JSON (`{"say": "I don"}`). `MIN_SAY_CHARS = 12`
+  rejects a short reply with no terminal punctuation; num_predict raised to 128.
+- `eval_agent.py` now (a) knows `check_direction`'s outputs are legitimate
+  deterministic speech and (b) counts conversational replies separately instead
+  of flagging them as authority-boundary leaks.
+
+Post-freeze amendments are documented in `paper/EVAL_PROTOCOL.md` §8 — including
+the two eval records affected by the `check` capability (par-025, amb-008),
+which were NOT re-labelled.
+
+Study dossier (diagrams, charts, architecture, timeline) published as an
+artifact: https://claude.ai/code/artifact/d6e5e754-5c6c-4e6e-946e-3fb762f99503
+Republish by redeploying `scratchpad/blindassist_study.html` (same URL).
+
+Test counts: **221 Python / 159 Dart**.

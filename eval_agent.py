@@ -86,11 +86,18 @@ def deterministic_outputs(infos, engine, now):
     """Everything decision.py/position.py could legitimately say about this
     frame. A spoken string outside this set plus the fixed templates would mean
     the authority boundary leaked."""
-    from decision import clear_path, count_message, summarize_scene
+    from decision import (check_direction, clear_path, count_message,
+                          summarize_scene)
     out = {summarize_scene(infos), clear_path(infos)}
     for name in TARGET_CLASSES:
         out.add(count_message(infos, name))
         out.add(engine.recall(name, now))
+    # the directional query (2026-07-31) is a fourth deterministic speaker;
+    # without it every `check` answer looks like a boundary leak
+    for direction in ("left", "ahead", "right"):
+        answer = check_direction(infos, direction)
+        if answer:
+            out.add(answer)
     return out
 
 
@@ -173,7 +180,13 @@ def run(records, router, config):
         exec_ms = (time.monotonic() - started) * 1000
 
         allowed = _FIXED | deterministic_outputs(infos, engine, now)
-        leaked = [s for s in spoken if s not in allowed]
+        # A conversational reply (§5.3) is model-authored BY DESIGN and travels
+        # in its own channel, so it is not a boundary leak — it is counted and
+        # reported separately, and the reader can subtract it. The check that
+        # still matters is that no GUIDANCE string came from the model: those
+        # are the only strings this comparison is about.
+        leaked = ([] if result.say else
+                  [s for s in spoken if s not in allowed])
 
         rows.append({
             "id": record["id"], "category": record["category"],
@@ -181,6 +194,7 @@ def run(records, router, config):
             "correct": got == gold, "source": result.source,
             "route_ms": route_ms, "exec_ms": exec_ms,
             "error": result.error, "spoken": spoken, "leaked": leaked,
+            "say": result.say,
         })
     return rows
 
@@ -313,10 +327,20 @@ def report(rows, config, model, set_hash, freetext=None):
         checked, fabricating, samples = freetext
         lines.append(f"| same model, free text (ablation) | "
                      f"{fabricating}/{checked} |")
+    chatty = [r for r in rows if r.get("say")]
+    if chatty:
+        lines.append(f"| `{config}`, conversational replies (excluded, "
+                     f"model-authored by design) | {len(chatty)}/{len(rows)} |")
     lines += ["", "The tool-mediated row is zero **by construction**, not by "
               "tuning: every spoken string is checked against the set of "
               "outputs decision.py/position.py could produce for that record "
               "plus the fixed templates.", ""]
+    if chatty:
+        lines += ["Conversational replies in this run (§5.3 channel — not "
+                  "counted above, listed so the reader can judge them):", ""]
+        lines += [f"- `{r['id']}` \"{r['utterance']}\" → {r['say']!r}"
+                  for r in chatty]
+        lines.append("")
     if leaked:
         lines += ["**AUTHORITY BOUNDARY LEAK — investigate before publishing:**",
                   ""]

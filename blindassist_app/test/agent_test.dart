@@ -244,6 +244,13 @@ void main() {
       expect(r.actions.single.tool, 'describe');
     });
 
+    test('a truncated reply is rejected', () {
+      // from the 2026-08-01 eval run: the server's JSON mode closes the string
+      // when its token budget runs out, so "I don" arrives as valid JSON
+      expect(parseRouteResponse({'source': 'chat', 'say': 'I don'}).say, isNull);
+      expect(parseRouteResponse({'source': 'chat', 'say': 'Yes.'}).say, 'Yes.');
+    });
+
     test('junk say values are never spoken', () {
       for (final junk in <Object?>[
         '', '   ', 42, null, {'nested': 1}, '{"tool": "walk"}'

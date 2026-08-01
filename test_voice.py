@@ -97,6 +97,14 @@ class TestParseCommand(unittest.TestCase):
         # a bare direction with no question word is not a query either
         self.assertIsNone(parse_command("left"))
 
+    def test_left_and_right_need_a_positional_lead_in(self):
+        # found by the 2026-08-01 eval run, not by hand: "left" is an ordinary
+        # English word and was turning an out-of-scope utterance into a query
+        self.assertIsNone(parse_command("how much battery is left"))
+        self.assertIsNone(parse_command("turn left at the corner"))
+        # ...while "ahead"/"front"/"forward" have no non-spatial reading here
+        self.assertEqual(parse_command("is anything ahead"), ("check", "ahead"))
+
     def test_unknown_utterances_ignored(self):
         self.assertIsNone(parse_command("hello there"))
         self.assertIsNone(parse_command("find unicorn"))

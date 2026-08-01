@@ -157,6 +157,12 @@ class AgentRouteResult {
 /// usability property, not formatting. Mirror of agent.MAX_SAY_CHARS.
 const int maxSayChars = 240;
 
+/// Shorter than this WITHOUT terminal punctuation reads as a truncation, not a
+/// reply: the server's JSON mode closes the string when its token budget runs
+/// out, so a half-word ("I don") arrives as perfectly valid JSON. Mirror of
+/// agent.MIN_SAY_CHARS.
+const int minSayChars = 12;
+
 /// Server free text -> a speakable reply, or null if it is not usable.
 /// Untrusted input like any other: non-strings, empties and leaked JSON are
 /// rejected rather than read aloud. Mirror of agent.clean_say.
@@ -174,7 +180,11 @@ String? cleanSay(Object? raw) {
             : cut.lastIndexOf(' '));
   }
   text = text.trim();
-  return text.isEmpty ? null : text;
+  if (text.isEmpty) return null;
+  if (text.length < minSayChars && !'.!?'.contains(text[text.length - 1])) {
+    return null; // a half-sentence is worse than an abstention
+  }
+  return text;
 }
 
 /// One raw action map -> AgentAction, or null if it must be rejected.

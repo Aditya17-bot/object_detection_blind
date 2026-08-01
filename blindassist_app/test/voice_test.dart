@@ -127,6 +127,15 @@ void main() {
       expect(parseCommand('which way is clear'), (action: 'path', target: null));
       expect(parseCommand('left'), isNull);
     });
+    test('left and right need a positional lead-in', () {
+      // found by the 2026-08-01 eval run, not by hand: "left" is an ordinary
+      // English word and was turning an out-of-scope utterance into a query
+      expect(parseCommand('how much battery is left'), isNull);
+      expect(parseCommand('turn left at the corner'), isNull);
+      // ...while ahead/front/forward have no non-spatial reading here
+      expect(parseCommand('is anything ahead'),
+          (action: 'check', target: 'ahead'));
+    });
     test('plurals parse to the singular class', () {
       expect(parseCommand('how many chairs'), (action: 'count', target: 'chair'));
       expect(parseCommand('how many people'), (action: 'count', target: 'person'));

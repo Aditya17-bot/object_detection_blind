@@ -412,6 +412,17 @@ class ChatModeTest(unittest.TestCase):
         self.assertLessEqual(len(result.say), agent.MAX_SAY_CHARS)
         self.assertTrue(result.say.endswith("."))
 
+    def test_truncated_reply_is_rejected(self):
+        """From the 2026-08-01 eval run: Ollama's JSON mode closes the string
+        when the token budget runs out, so a half-word arrives as perfectly
+        valid JSON. Speaking "I don" is worse than abstaining."""
+        result = AgentRouter(llm=FakeLLM({"say": "I don"})).route("can you")
+        self.assertEqual(result.source, "abstain")
+        # short replies that ARE complete stay allowed
+        self.assertEqual(
+            AgentRouter(llm=FakeLLM({"say": "Yes."})).route("can you").say,
+            "Yes.")
+
     def test_junk_say_values_are_rejected(self):
         for junk in ("", "   ", 42, None, {"nested": 1},
                      '{"actions": [{"tool": "walk"}]}'):

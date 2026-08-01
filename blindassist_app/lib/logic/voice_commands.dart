@@ -97,6 +97,27 @@ const List<String> _checkWords = [
   'see', 'is'
 ];
 
+/// "left" and "right" are ordinary English words; "how much battery is LEFT"
+/// routed to check(left) in the 2026-08-01 evaluation run. They only count as
+/// a direction when a positional word introduces them. "ahead"/"front"/
+/// "forward" need no such guard. Mirror of voice._DIRECTION_LEAD.
+const Set<String> _unambiguousDirections = {'ahead', 'front', 'forward'};
+const Set<String> _directionLead = {
+  'my', 'the', 'on', 'to', 'your', 'check', 'toward', 'towards'
+};
+
+String? _findDirection(List<String> words) {
+  for (var i = 0; i < words.length; i++) {
+    final word = words[i];
+    if (!_directionWords.containsKey(word)) continue;
+    if (_unambiguousDirections.contains(word) ||
+        (i > 0 && _directionLead.contains(words[i - 1]))) {
+      return _directionWords[word];
+    }
+  }
+  return null;
+}
+
 /// Recognized utterance -> command, or null if not understood. Actions:
 /// walk / find / describe / clock / zones / recall. Tolerant of filler words:
 /// "please find the bottle" works.
@@ -152,13 +173,7 @@ VoiceCommand? parseCommand(String text) {
   // Directional query, AFTER find so "find the door on my left" still finds.
   // Deliberately on-device: "is there anything in front of me" is the question
   // this system exists to answer, and it must work with no server and no LLM.
-  String? direction;
-  for (final w in words) {
-    if (_directionWords.containsKey(w)) {
-      direction = _directionWords[w];
-      break;
-    }
-  }
+  final direction = _findDirection(words);
   if (direction != null && words.any(_checkWords.contains)) {
     return (action: 'check', target: direction);
   }

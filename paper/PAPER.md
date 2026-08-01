@@ -15,17 +15,23 @@ submission).
 
 ## Abstract
 
-*(reserved — write last, once §7 has numbers. Target ~150 words. Skeleton:
-sighted users silently discard a system's wrong answers; blind users cannot.
+Sighted users silently discard a system's wrong answers; blind users cannot.
 We report BlindAssist, an offline camera-based guidance system for blind and
 low-vision users, and argue that **selective abstention** — declining to speak
-when an output would be unreliable — is a first-class design objective at
-every layer, not an error-handling detail. We show four concrete mechanisms
-spanning perception, planning, transport, and dialogue, the last being a
-tool-mediated voice agent in which a local offline language model may select a
-capability but never author what the user hears. We evaluate routing on N
-labelled utterances across five categories and report accuracy, over-trigger
-rate on out-of-scope input, latency, and fabricated-perception counts.)*
+when an output would be unreliable — is a first-class design objective at every
+layer, not an error-handling detail. We describe five mechanisms spanning
+perception (reliability-gated metric distance), planning (an openness threshold
+that can answer "stop"), transport (no-data distinguished from verified-clear),
+attention (proximity-gated warnings with an on-demand directional counterpart),
+and dialogue: a tool-mediated voice agent in which a local offline language
+model selects among fourteen deterministic capabilities and authors no guidance.
+On 200 labelled utterances, deterministic-first two-tier routing improves
+overall accuracy from 39.5 % to 53.0 % while keeping 100 % on trained phrasings
+that an LLM-only router drops to 45.0 %, and the same model asked to answer
+freely rather than to choose a tool fabricates perceptual content in 42.5 % of
+responses. It also costs: out-of-scope over-triggering rises from 5.0 % to
+55.0 %, which we report as a negative result about small local routers rather
+than tune away.
 
 ---
 
@@ -61,14 +67,17 @@ discouraged by prompt engineering.
 
 **Contributions.**
 
-- **C1 — A cross-layer selective-abstention pattern**, instantiated four times
+- **C1 — A cross-layer selective-abstention pattern**, instantiated five times
   with layer-specific criteria: reliability-gated metric distance (perception),
   openness-thresholded path advice (planning), fail-safe absence-vs-negative
-  (transport), and routing abstention (dialogue, new).
+  (transport), proximity-gated warning suppression with a pull counterpart
+  (attention), and routing abstention (dialogue, new).
 - **C2 — A tool-mediated voice agent** for a safety-critical speech channel: the
   model emits only a validated `{tool, args}` pair drawn from a fixed registry;
-  every spoken token originates in deterministic code or a fixed template,
-  including clarifying questions.
+  every *guidance* token originates in deterministic code or a fixed template,
+  including clarifying questions. Conversational replies travel in a separate,
+  grounded, length-capped channel that cannot reach any capability's output —
+  a boundary we moved deliberately after field use and report as moved (§5.3).
 - **C3 — Deterministic-first two-tier routing.** A zero-latency keyword grammar
   handles trained phrasings with no model and no network; the language model is
   consulted only on a tier-0 miss. Median routing latency stays at ~0 ms and the
@@ -275,7 +284,39 @@ says so: "Connection lost, guidance paused" after five consecutive misses, and
 confident wrong answer, and it never lets a blind user mistake an outage for an
 empty room.
 
-### 4.4 Dialogue: routing abstention (new)
+### 4.4 Attention: proximity-gated warnings with a pull counterpart
+
+The three mechanisms above decide whether a *particular* statement is safe to
+make. This one decides how many statements the continuous channel may make at
+all, and it came from the field rather than from design: on the first walk with
+the complete system the user's report was *"it keeps saying all the objects,
+it's too much of a cluster."*
+
+That is the same asymmetry one level up. A sighted user ignores an over-full
+notification stream at no cost. A blind user's only channel for guidance is the
+one being flooded, and the cost of flooding it is not annoyance — it is that
+they stop parsing it, so the one warning that mattered arrives inside noise
+they have already tuned out. An unheeded warning has negative value: it spent
+attention and delivered nothing.
+
+The response was not to suppress information but to **change who initiates it**.
+Walk warnings now fire only for obstacles at *close* range or nearer; the
+previous rule also announced medium-range obstacles when centred. Everything
+removed from the push channel is available through a pull one: a directional
+query ("is there anything in front of me?", "what's on my left?") answers from
+the same ordinal core with the two nearest objects in that third, closest
+first. The query deliberately reports *every* detected class rather than
+obstacles alone — a user who asks has, by asking, granted the attention that
+the continuous channel must not assume.
+
+Two properties make this more than a tuned threshold. The pulled answer is
+generated by the same functions as the pushed warning, so the two can never
+disagree — a claim a design with a separate "assistant" subsystem cannot make.
+And the query is answered in **tier 0**, on the handset, with no model and no
+network: the capability that compensates for a quieter safety channel does not
+inherit that channel's dependencies.
+
+### 4.5 Dialogue: routing abstention (new)
 
 The three mechanisms above concern what the system *says about the world*. The
 fourth concerns what it does when it does not understand what it was *asked*.
@@ -365,12 +406,43 @@ Every rejection becomes **abstain**. And abstain does not mean the model gets to
 explain itself: the clarifying question is selected from a fixed template table
 by key. The model may choose *which* question is asked; it may not write one.
 
-The result is that no token the user hears has ever passed through the language
-model. Spoken content originates in `decision.py`/`position.py` — the same
-functions, pinned by the same tests, that the button-driven UI calls — or in a
-fixed template. This is what makes the fabricated-perception count zero by
+The result is that no *guidance* token the user hears has passed through the
+language model. Guidance originates in `decision.py`/`position.py` — the same
+functions, pinned by the same tests, that the touch UI calls — or in a fixed
+template. This is what makes the fabricated-perception count zero by
 construction rather than by measurement, and §6.5 reports the LLM-only ablation
 to show what that constraint is worth.
+
+**Where the boundary was moved, and why we report it.** The system as first
+built enforced the stronger rule — *no spoken token whatsoever* originated in
+the model. After the first field walk the developer-user asked for
+conversation: not more capabilities, but the ability to ask a question in their
+own words and be answered rather than routed. We granted exactly that and no
+more. A reply now travels in a **separate channel** (`say`) that the executor
+cannot route through any capability, and the split is structural rather than
+prompted:
+
+- Guidance functions are unreachable from the reply channel. Walk warnings,
+  find results, distance, path advice and directional queries remain
+  template-or-`decision.py` only.
+- The reply is grounded in the same deterministic state block (§5.4). The
+  system prompt forbids asserting presence, absence or range not present in
+  that block.
+- Free prose emitted *where a tool call belongs* is still discarded, so a
+  chatty model does not become speech by accident; only a deliberate use of the
+  reply channel is spoken.
+- Replies are length-capped and truncated at a sentence boundary. A user who
+  cannot skim also cannot skip, so verbosity is a safety-adjacent property, not
+  a style one.
+- A single flag restores the absolute rule, and that configuration is the
+  ablation arm reported in §7.
+
+We state this plainly because it weakens the strongest version of C2. The
+honest formulation of the contribution is therefore: *the safety-critical
+surface is closed by construction, and the conversational surface is opened
+deliberately, narrowly, and measurably* — not that a language model is kept out
+of the speech channel entirely. A design that refuses the second thing wholesale
+is defensible on paper and was rejected by the only user we have.
 
 An implementation constraint worth recording: the router must never raise. In
 this codebase an exception thrown on the voice thread silently kills voice
@@ -394,8 +466,9 @@ the point.
 
 ### 5.5 Capability registry
 
-Thirteen capabilities exist today: walk, find, describe, count, recall, path,
-read, clock, zones, sonar, mute, stop, repeat. Before this work they were
+Fourteen capabilities exist today: walk, find, describe, count, recall, path,
+**check** (the directional query of §4.4), read, clock, zones, sonar, mute,
+stop, repeat. Before this work they were
 declared in four places — a Python parser, its phrase list, a Python dispatcher,
 and the Dart equivalents — and the sites had already drifted: the web
 dispatcher silently dropped five capabilities the parser could produce.
@@ -478,78 +551,169 @@ on out-of-scope input, tier-0 coverage, latency p50/p95 per stage, and
 fabricated-perception count. Definitions and the fabrication detector's known
 crudeness are in `EVAL_PROTOCOL.md`.
 
+### 6.4 A capability added after the set was frozen
+
+The `check` capability (§4.4) was implemented after `eval_set.jsonl` was
+committed, which is exactly the situation a frozen set is meant to expose. Two
+of the 200 records are affected, and we report them rather than re-labelling
+silently:
+
+- **par-025**, *"what is in front of me right now"*, gold `describe`. The new
+  parser answers `check(ahead)`. We regard the gold label as **superseded**: the
+  utterance names a direction, and the capability that did not exist when the
+  label was written is the better answer to it. Scored as correct under a
+  documented amendment, and as an error under the frozen labels; both numbers
+  are given in §7.
+- **amb-008**, *"is that thing still in front of me"*, gold `find(chair)` given
+  a state block containing a chair. The new parser claims it in tier 0 as
+  `check(ahead)` before the model ever sees it. It was scored wrong before the
+  capability existed (the grammar abstained) and is scored wrong now, so the
+  baseline number is unchanged — but the *failure mode* changed from a silent
+  abstention into a confident answer to a different question. That is strictly
+  worse for a blind user, and it is the predictable cost of widening a keyword
+  grammar: the utterance is a referential question about a remembered object,
+  exactly the case the state block and tier 1 exist for.
+
+A third instance was caught by this run before any user met it, and is worth
+reporting because it is the mechanism in miniature. The first implementation of
+the directional rule treated any occurrence of "left" or "right" as a
+direction, and the evaluation immediately produced
+*"how much battery is left"* → `check(left)` — a new out-of-scope over-trigger
+(7.5 %, up from 5.0 %). "Left" and "right" are ordinary English words; "ahead",
+"front" and "forward" are not. The rule now requires a positional lead-in
+("on **my** left", "check left") for the ambiguous pair and none for the
+unambiguous three, which returns the baseline to 5.0 % while keeping the
+capability. We report it because it is direct evidence for the paper's own
+argument about keyword grammars — the same substring-collision family as the
+two remaining over-triggers — and because the frozen out-of-scope category is
+what surfaced it.
+
 ---
 
 ## 7. Results
 
-The **keyword baseline is measured**; the two LLM configurations are reserved
-until the router runs on hardware with a local model (`eval_agent.py --config
-two_tier --model …`). Numbers below come from
-`test_output/agent_eval_keyword.md`, eval set sha256 `e4eeca83070e2d66`.
+All configurations are now measured. Runs come from `test_output/agent_eval_*.md`,
+eval set sha256 `e4eeca83070e2d66`, model `llama3.2:3b` under Ollama on the
+tether laptop (RTX 3050 Laptop, 4 GB), routing the 200-record set with the
+capability registry as of 2026-08-01.
 
 **T3 — Routing accuracy by category and configuration.**
 
 | Category | n | keyword | LLM-only | two-tier |
 |---|---|---|---|---|
-| canonical | 40 | **100.0 %** (40/40) | | |
-| paraphrase | 70 | **0.0 %** (0/70) | | |
-| multi_intent | 20 | **0.0 %** (0/20) | | |
-| out_of_scope | 40 | **95.0 %** (38/40) | | |
-| ambiguous | 30 | **3.3 %** (1/30) | | |
-| **overall** | 200 | **39.5 %** (79/200) | | |
+| canonical | 40 | **100.0 %** (40/40) | 45.0 % (18/40) | **100.0 %** (40/40) |
+| paraphrase | 70 | **0.0 %** (0/70) | **50.0 %** (35/70) | 47.1 % (33/70) |
+| multi_intent | 20 | **0.0 %** (0/20) | **30.0 %** (6/20) | 10.0 % (2/20) |
+| out_of_scope | 40 | **95.0 %** (38/40) | 47.5 % (19/40) | 45.0 % (18/40) |
+| ambiguous | 30 | 3.3 % (1/30) | **43.3 %** (13/30) | **43.3 %** (13/30) |
+| **overall** | 200 | 39.5 % (79/200) | 45.5 % (91/200) | **53.0 %** (106/200) |
 
-Overall Wilson 95 % CI for the baseline: 33.0–46.4 %.
+Wilson 95 % CIs on the overall figures: keyword 33.0–46.4 %, LLM-only
+38.7–52.4 %, two-tier 46.1–59.8 %.
 
-The baseline's shape is the paper's motivation stated as data. It is perfect on
-the phrasings it was designed for and *zero* on paraphrase and multi-intent —
+Three things in this table matter more than the overall column.
+
+**The baseline's shape is the paper's motivation stated as data.** It is perfect
+on the phrasings it was designed for and *zero* on paraphrase and multi-intent —
 not degraded, absent, because a grammar-constrained recogniser cannot hear what
-is not in its grammar (§5.1). It is also, notably, already good at abstention:
-95 % on out-of-scope, because an unmatched utterance returns nothing. Tier 1
-must not spend that.
+is not in its grammar (§5.1).
 
-Tier-0 routing latency, for the C3 claim: **p50 5 µs, p95 13 µs**. This is why
-the tiering is worth its complexity — the users who have learned the command
-phrases pay literally nothing for the agent's existence.
+**Tiering strictly dominates LLM-only, and does so exactly where it was designed
+to.** LLM-only loses 55 % of the canonical category: the model mis-routes
+utterances the keyword parser gets right by construction, most often by
+substituting a plausible neighbour (`describe` for `count`, `walk` for `zones`).
+Two-tier keeps 100 % there because those utterances never reach the model, and
+still collects most of the model's paraphrase gain. This is C3 measured rather
+than argued: the deterministic tier is not a latency optimisation with an
+accuracy cost, it is more accurate *and* faster on the traffic it covers.
 
-**T4 — Latency p50/p95 (ms) per stage and ASR condition.**
+**The abstention collapse is the headline, and it is negative.** The keyword
+baseline abstains on 95 % of out-of-scope input for free — an unmatched
+utterance returns nothing. Both LLM configurations spend nearly all of that:
+over-trigger rises from **5.0 % to 55.0 %** under two-tier. A 3 B local model
+asked to choose from fourteen tools will nearly always find one it likes.
+"Call my mum" becomes `read`; "what time is it" becomes `clock`; "take a photo"
+becomes `walk`. Each is a confident, well-formed, completely irrelevant spoken
+answer — precisely the failure §4.5 predicted, at a rate we did not predict.
 
-| Stage | clean p50 | clean p95 | ASR p50 | ASR p95 |
-|---|---|---|---|---|
-| transcription | | | | |
-| routing (tier 0) | | | | |
-| routing (tier 1) | | | | |
-| execution | | | | |
-| **utterance → speech** | | | | |
+We report this without mitigation because the protocol was frozen before the
+router existed and tuning the prompt against this set is what the freeze
+forbids. It does not falsify C1 or C2 — no run fabricated perception, and the
+tier-0 abstention is intact for the traffic tier 0 covers — but it does falsify
+any comfortable reading of C5 in which adding a local model is a free
+improvement. The honest summary is that **coverage and abstention trade against
+each other at this model size**, and that the two-tier structure is what keeps
+the trade from applying to trained phrasings.
+
+**T4 — Routing latency, p50 / p95 (ms).**
+
+| Stage | keyword | LLM-only | two-tier |
+|---|---|---|---|
+| routing, tier 0 hit | < 0.01 / < 0.01 | — | < 0.01 / < 0.01 |
+| routing, tier 1 hit | — | 1992 / 3110 | 1141 / 2141 |
+| routing, abstention | < 0.01 | 2165 / 3141 | 1203 / 1562 |
+| execution | < 0.01 | < 0.01 | < 0.01 |
+
+Tier-0 routing was separately measured at **p50 5 µs, p95 13 µs**; the harness
+rounds to milliseconds, hence "< 0.01". Tier 1 costs **1.1 s at the median and
+2.1 s at p95** on the tether laptop, and two-tier's tier-1 median is
+*lower* than LLM-only's because the utterances that reach the model are the
+harder, longer ones only — the short canonical commands that a model answers
+fastest never get there.
+
+The practical reading: tier 1 is usable for on-demand questions and unusable
+inside the continuous guidance loop. Every capability in this system is
+on-demand, so the floor is survivable here — a fact about this system, not a
+general result (§8).
 
 **T5 — Out-of-scope behaviour (n = 40).**
 
 | Configuration | abstain | wrong tool | over-trigger rate |
 |---|---|---|---|
 | keyword | 38 | 2 | **5.0 %** (CI 1.4–16.5 %) |
-| LLM-only | | | |
-| two-tier | | | |
+| LLM-only | 19 | 21 | **52.5 %** (CI 37.5–67.1 %) |
+| two-tier | 18 | 22 | **55.0 %** (CI 39.8–69.3 %) |
 
 Both keyword over-triggers are instructive rather than anomalous, and both are
 substring collisions: *"read my email"* contains "read" and routes to the OCR
 reader; *"how do i get to the bus stop"* contains "stop" and halts the current
 announcement. Neither is a bug in the parser — they are the price of matching
 on keywords, and they are exactly the errors a router with sentence-level
-context should remove.
+context should remove. It does not remove them: both survive into the two-tier
+run, because tier 0 claims them before the model is consulted. That is the
+cost side of C3 stated plainly.
 
 **T6 — Fabricated perception.**
 
 | Configuration | fabricating responses / n |
 |---|---|
 | keyword, tool-mediated | **0 / 200** (verified) |
-| LLM-only, free text | |
-| LLM-only, tool-mediated | |
-| two-tier | |
+| LLM-only, tool-mediated | **0 / 200** (verified) |
+| two-tier, tool-mediated | **0 / 200** (verified) |
+| same model, free text (ablation) | **85 / 200 (42.5 %)** |
 
-The verification is not a claim that nothing was fabricated; it is a check that
-every spoken string in the run was a member of the set `decision.py` /
-`position.py` could produce for that record, plus the fixed templates. The
-harness fails loudly on any string outside that set, so the boundary is
-monitored on every run rather than argued for once.
+This is the clearest result in the paper. The identical model, given the
+identical deterministic state block and asked to *answer* rather than to
+*choose a tool*, invented content in **42.5 % of responses** — and the character
+of the inventions is worse than the rate suggests. Asked to "find bottle" with
+a state block listing no bottle, it replied:
+
+> *"i'm walking in front of you, my cane tapping on the ground. i've stopped
+> about 6 feet away from your right side. there's a small…"*
+
+It invents an object, a distance in feet, a bearing, and a first-person
+travelling companion with a cane. For a sighted user this is a curiosity to
+dismiss. For the user this system is built for it is a hazard, delivered in the
+same voice, at the same volume, with the same confidence as a real detection.
+
+The tool-mediated rows are zero **by construction, not by tuning**: the harness
+checks every executed spoken string against the set `decision.py` /
+`position.py` could produce for that record plus the fixed templates, and fails
+loudly on anything outside it. The check ran on every routed record in every
+configuration. Conversational replies (§5.3) are excluded from this count by
+definition — they are model-authored by design — and were rare in these runs:
+3 of 200 under LLM-only, 2 of 200 under two-tier, all on records where a tool
+was expected, i.e. scored as errors rather than as fabrication.
 
 **Figures.** F1 system diagram with the agent as a parallel input path and an
 explicit perception-authority boundary; F2 two-tier router flow including the
@@ -600,7 +764,29 @@ live, but that is a fact about this system, not a general result.
 **The fabrication detector is keyword-based.** It flags a response naming a
 detector class absent from the state block. It will miss subtler fabrication
 (invented spatial relations, invented counts of a class that *is* present) and
-will occasionally over-flag. Reported as a lower bound.
+will occasionally over-flag. Reported as a lower bound. The free-text samples
+make the under-counting concrete: several flagged responses invent a distance
+in feet, a bearing, and a first-person companion alongside the object, and the
+detector sees only the object.
+
+**Over-triggering is measured, not solved.** The 55 % out-of-scope
+over-trigger rate under two-tier is the largest open problem this evaluation
+exposes. Three directions are available and none is evaluated here, because
+each would be tuning against a frozen set: an explicit rejection example set in
+the prompt; a second-pass "is this in scope" classification; or a confidence
+signal from the model used as an abstention gate. A held-out set would be
+needed for any of them, and building one is the first item of future work.
+
+**One model, one machine.** All routing numbers come from `llama3.2:3b` under
+Ollama on a single laptop. Model size is an obvious confound for the
+over-trigger result in particular. A second-model arm (`qwen3:4b`) was started
+on the same frozen set and is not included here; a single alternative would in
+any case be a spot check rather than a sweep.
+
+**Chat replies are unevaluated as replies.** We count them, exclude them from
+the fabrication metric by definition, and list them for inspection — but we do
+not measure whether they are *correct*, useful, or well-calibrated. A user
+study would have to, since they are now part of what the system says.
 
 ---
 
@@ -628,6 +814,7 @@ a null-versus-empty distinction three layers away.
 | `count` | class (required) | "how many chairs" | `decision.count_message` |
 | `recall` | class (required) | "where is my cup" | `GuidanceEngine.recall` |
 | `path` | — | "which way is clear" | `decision.clear_path` |
+| `check` | direction (required) | "anything on my left" | `decision.check_direction` |
 | `read` | — | "read the text" | on-device OCR |
 | `clock` | — | "clock mode" | `GuidanceEngine.set_clock(True)` |
 | `zones` | — | "zone mode" | `GuidanceEngine.set_clock(False)` |

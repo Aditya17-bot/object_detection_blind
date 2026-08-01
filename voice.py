@@ -94,6 +94,24 @@ _DIRECTION_WORDS = {"left": "left", "right": "right", "ahead": "ahead",
                     "front": "ahead", "forward": "ahead"}
 _CHECK_WORDS = ("anything", "something", "what", "whats", "what's", "check",
                 "there", "see", "is")
+# "left" and "right" are ordinary English words; "how much battery is LEFT"
+# routed to check(left) in the 2026-08-01 evaluation run. They only count as a
+# direction when a positional word introduces them. "ahead"/"front"/"forward"
+# need no such guard — they have no non-spatial reading here.
+_UNAMBIGUOUS_DIRECTIONS = {"ahead", "front", "forward"}
+_DIRECTION_LEAD = {"my", "the", "on", "to", "your", "check", "toward",
+                   "towards"}
+
+
+def _find_direction(words):
+    """The direction this utterance asks about, or None."""
+    for i, word in enumerate(words):
+        if word not in _DIRECTION_WORDS:
+            continue
+        if (word in _UNAMBIGUOUS_DIRECTIONS
+                or (i > 0 and words[i - 1] in _DIRECTION_LEAD)):
+            return _DIRECTION_WORDS[word]
+    return None
 
 
 def parse_command(text):
@@ -142,8 +160,7 @@ def parse_command(text):
     # Directional query, AFTER find so "find the door on my left" still finds.
     # Deliberately tier 0: "is there anything in front of me" is the question
     # this system exists to answer, and it must work with no server and no LLM.
-    direction = next((_DIRECTION_WORDS[w] for w in words
-                      if w in _DIRECTION_WORDS), None)
+    direction = _find_direction(words)
     if direction and any(w in words for w in _CHECK_WORDS):
         return ("check", direction)
     # LAST, deliberately: every existing command keeps its exact precedence, so

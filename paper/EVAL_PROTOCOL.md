@@ -196,4 +196,34 @@ Recorded in advance, so the results section cannot quietly move the goalposts:
 
 ## 8. Amendments after freeze
 
-*(none yet — append dated entries with reasons)*
+- **2026-08-01 — a fourteenth capability (`check`) exists.** The directional
+  query was implemented after this protocol and the eval set were frozen. The
+  set was NOT re-labelled to suit it. Two records are affected and both are
+  reported in the paper (§6.4) rather than silently adjusted:
+  - `par-025` "what is in front of me right now", gold `describe`. The frozen
+    label is scored as-is (an error for every configuration that answers
+    `check(ahead)`), and the paper additionally states why we consider the gold
+    superseded. No number in T3–T6 uses the amended label.
+  - `amb-008` "is that thing still in front of me", gold `find(chair)`. Wrong
+    before and after; what changed is the failure mode (silent abstention →
+    confident answer to a different question), which the paper reports.
+- **2026-08-01 — the fabricated-perception allow-set was extended** to include
+  `decision.check_direction`'s outputs. This is a bug fix to the harness, not a
+  loosening: without it every legitimate `check` answer counted as a boundary
+  leak. The check remains "every spoken string must be producible by
+  `decision.py`/`position.py` for that record, or be a fixed template".
+- **2026-08-01 — configurations now run with conversational replies enabled**
+  (`AgentRouter(allow_chat=True)`, the shipped default since the user requested
+  conversation). A reply carries no action, so under §3.1 it scores as an
+  abstention and under §3.2 it is NOT an over-trigger. This is the intended
+  reading: declining to act and saying something instead is abstention, and the
+  fabrication check in §3.5 does not apply to the reply channel, whose content
+  is model-authored by design. Reply counts are reported separately so the
+  reader can subtract them.
+- **2026-08-01 — one parser fix landed between runs and both numbers are
+  reported.** The first `check` implementation treated any "left"/"right" as a
+  direction, which the frozen out-of-scope category immediately caught
+  ("how much battery is left" → `check(left)`; over-trigger 5.0 % → 7.5 %). The
+  rule now requires a positional lead-in for that ambiguous pair. All headline
+  numbers use the fixed parser; the pre-fix figure is quoted in §6.4 because it
+  is evidence for the paper's own argument about keyword grammars.

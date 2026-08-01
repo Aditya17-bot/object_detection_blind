@@ -384,6 +384,9 @@ def render_state(state):
 # skip ahead, and cannot see that a monologue is coming — length is a usability
 # property here, not a formatting preference. Overruns are cut at a sentence.
 MAX_SAY_CHARS = 240
+# Shorter than this WITHOUT terminal punctuation reads as a truncation, not a
+# reply. "Yes." and "No." are fine; "I don" is not.
+MIN_SAY_CHARS = 12
 
 
 def clean_say(raw):
@@ -403,7 +406,16 @@ def clean_say(raw):
         cut = text[:MAX_SAY_CHARS]
         stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
         text = cut[:stop + 1] if stop > 40 else cut.rsplit(" ", 1)[0]
-    return text.strip() or None
+    text = text.strip()
+    if not text:
+        return None
+    # A reply cut off mid-sentence by the token budget: Ollama's JSON mode
+    # closes the string when num_predict runs out, so the router receives a
+    # syntactically perfect `{"say": "I don"}`. Speaking half a word is worse
+    # than abstaining, and the 2026-08-01 eval run produced exactly that twice.
+    if len(text) < MIN_SAY_CHARS and text[-1] not in ".!?":
+        return None
+    return text
 
 
 # Tool names a model reaches for when it means "just answer". None of them is a
@@ -675,7 +687,7 @@ class OllamaRouter:
 
     def __init__(self, model="llama3.2:3b",
                  host="http://127.0.0.1:11434", timeout=8.0,
-                 keep_alive="30m", num_predict=96):
+                 keep_alive="30m", num_predict=128):
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout
