@@ -280,3 +280,38 @@ Recorded in advance, so the results section cannot quietly move the goalposts:
   condition over exactly the records that carry transcripts, giving the matched
   baseline the paper reports. Without it the headline comparison would be
   between two different populations.
+- **2026-08-01 (late) — the ablation §5.3 promised now exists, and a model
+  sweep.** Two additions, both on the frozen set, both with `boundary leaks 0`.
+  1. **`--no-chat`** runs `AgentRouter(allow_chat=False)`, restoring the
+     original absolute rule that no spoken token whatsoever originates in the
+     model. The paper described this arm before it was runnable, which was a
+     defect. Result on `llama3.2:3b`: 53.0 % overall, 55.0 % over-trigger,
+     identical to the shipped configuration. A conversational reply carries no
+     action and therefore already scored as an abstention under §3.1.
+  2. **A sweep over every local model on the machine**, same configuration,
+     same set. This is NOT a controlled scaling study — four different families
+     are involved — and the paper says so. Reports:
+     `test_output/agent_eval_two_tier_{llama1b,qwen3_nothink,coder7b,gemma9b}.md`.
+
+     | model | params | overall | over-trigger | tier-1 p50 |
+     |---|---|---|---|---|
+     | keyword only | — | 39.5 % | 5.0 % | 5 µs |
+     | llama3.2:1b | 1.2B | 49.5 % | 55.0 % | 891 ms |
+     | llama3.2:3b | 3.2B | 53.0 % | 55.0 % | 1188 ms |
+     | qwen3:4b | 4.0B | 40.5 % | 5.0 % | 2344 ms |
+     | qwen2.5-coder:7b | 7.6B | 65.0 % | 10.0 % | 3407 ms |
+     | gemma2 | 9.2B | 69.5 % | 10.0 % | 6015 ms |
+
+  **This changes a headline claim and the change is recorded rather than
+  quietly absorbed.** The 55 % over-trigger rate reported for `llama3.2:3b` is
+  a property of the small models, not of tiering: at 7.6B and 9.2B it falls to
+  10 % while accuracy rises to 69.5 %. An earlier draft, written after only the
+  1.2B run, said the size explanation "does not survive its first test"; that
+  sentence was wrong and has been replaced. What the scale buys is paid for in
+  latency (6015 ms p50, 10125 ms p95 for the 9.2B model, which does not fit in
+  4 GB of VRAM), so the trade moved rather than disappeared.
+  **`qwen3:4b` must not be read as a safety result.** Its 5.0 % over-trigger is
+  the best in the table and reflects only that 2 of 200 utterances produced a
+  usable tool call; 138 abstained. Turning `think` off did not fix it, which
+  supersedes the earlier note that the comparison would be uninformative until
+  thinking was disabled.

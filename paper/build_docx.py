@@ -232,11 +232,14 @@ def build():
         "to 45.0%, and the same model asked to answer in prose instead of "
         "choosing a tool invents perceptual content in 42.5% of its replies. "
         "The cost is that out-of-scope over-triggering rises from 5.0% to "
-        "55.0%. We then recorded two speakers reading the same utterances "
-        "aloud, and most of what the agent layer gained disappears: its margin "
-        "over the keyword baseline falls from 6.8 points to 0.9, while the "
-        "deterministic layer's abstention barely moves. Both of those are "
-        "negative results and we report them as they came out.", first=True)
+        "55.0%, though a sweep over five local models shows that collapse "
+        "belongs to the small ones: at 9.2B parameters accuracy reaches 69.5% "
+        "with over-triggering back down to 10.0%, at 6 s per query. We also "
+        "recorded two speakers reading the same utterances aloud, and most of "
+        "what the agent layer gained disappears, with its margin over the "
+        "keyword baseline falling from 6.8 points to 0.9 while the "
+        "deterministic layer's abstention barely moves. We report the negative "
+        "results as they came out.", first=True)
 
     doc.para([("CCS Concepts: ", BF),
               ("• Human-centered computing → Accessibility "
@@ -512,7 +515,7 @@ def build():
         "executed, since running the half that happened to parse would itself "
         "be an unverified action.")
     doc.body(
-        "Fourteen capabilities (Table 4) used to be declared in four places, a "
+        "Fourteen capabilities (Table 5) used to be declared in four places, a "
         "parser, its phrase list, a dispatcher and the Dart equivalents, and "
         "those places had already drifted apart: the web dispatcher had "
         "silently stopped handling five capabilities that the parser could "
@@ -769,31 +772,80 @@ def build():
         "input got harder to judge. We had argued for building abstention "
         "structurally and this is the first measurement we have that says so.")
 
-    doc.subheading("7.2  Model size, and putting the absolute rule back")
+    doc.subheading("7.2  Putting the absolute rule back, and model size")
     doc.body([
-        "Two follow-up runs on the same frozen set, both with the same model "
-        "family and harness. The first was the ablation the design promised, "
-        "where ", ("allow_chat", MONO), " is turned off so that no spoken "
-        "token at all can come from the model, which is the rule the system "
-        "started with. It scored 53.0% overall with a 55.0% over-trigger rate, "
-        "identical to the shipped configuration on both. Conversational "
-        "replies happened 6 times in 200 and a reply carries no action, so it "
-        "already scored as an abstention; opening that channel bought the user "
-        "something without costing the routing metrics anything, and it also "
-        "did not fix anything.",
+        "The numbers above raised two questions and both are answerable with "
+        "models that were already sitting on the laptop. The first is the "
+        "ablation the design promised, where ", ("allow_chat", MONO), " is "
+        "turned off so that no spoken token at all can come from the model, "
+        "which is the rule the system started with. It scored 53.0% overall "
+        "with a 55.0% over-trigger rate, identical to the shipped "
+        "configuration on both counts. Conversational replies happened 6 times "
+        "in 200 and a reply carries no action, so it already scored as an "
+        "abstention. Opening that channel gave the user something and cost the "
+        "routing metrics nothing, and it also fixed nothing.",
     ], first=True)
     doc.body([
-        "The second asks whether over-triggering is about model size, which is "
-        "the first thing a reader would want to rule out. Running the same "
-        "two-tier configuration on ", ("llama3.2:1b", MONO), " gives 49.5% "
-        "overall, lower than 3B as expected, and an over-trigger rate of "
-        "55.0%, which is exactly the 3B figure. Going smaller by a factor of "
-        "nearly three changed how often the model routed correctly and did not "
-        "change how often it refused to decline at all. We are not going to "
-        "over-read two points on one axis, but the easy explanation, that a "
-        "bigger model would be more willing to abstain, does not survive its "
-        "first test.",
+        "The second is whether the over-triggering is about model size, and "
+        "here we got it wrong the first time. We ran ", ("llama3.2:1b", MONO),
+        " and it over-triggered at 55.0% against 3B's 55.0%, so we wrote that "
+        "the obvious explanation had failed its first test. Then we ran the "
+        "rest of what was on the machine, and Table 4 is what came back.",
     ])
+
+    doc.table(
+        [("model", "params", "overall", "paraphr.", "over-trig.", "p50"),
+         ("keyword only", "—", "39.5", "0.0", "5.0", "5 µs"),
+         ("llama3.2:1b", "1.2B", "49.5", "44.3", "55.0", "891 ms"),
+         ("llama3.2:3b", "3.2B", "53.0", "47.1", "55.0", "1188 ms"),
+         ("qwen3:4b", "4.0B", "40.5", "0.0", "5.0", "2344 ms"),
+         ("qwen2.5-coder:7b", "7.6B", "65.0", "50.0", "10.0", "3407 ms"),
+         ("gemma2", "9.2B", "69.5", "62.9", "10.0", "6015 ms")],
+        [0.92, 0.38, 0.45, 0.45, 0.50, 0.45], size=7.4,
+        aligns=["left"] + ["right"] * 5)
+    doc.caption("Table 4.",
+                "The same two-tier configuration and the same frozen set, "
+                "across every local model on the laptop. Accuracy figures are "
+                "percentages and p50 is tier-1 routing latency. No run leaked "
+                "a guidance string in any configuration.")
+
+    doc.body(
+        "Over-triggering is flat at 55.0% across 1.2B and 3.2B and then falls "
+        "to 10.0% at 7.6B and 9.2B, while overall accuracy climbs to 69.5%. So "
+        "the abstention collapse we reported above is a property of the small "
+        "models we happened to start with rather than something tiering does, "
+        "and we would not have found that if we had stopped at the first "
+        "comparison. Against the keyword baseline, gemma2 buys 30 points of "
+        "accuracy for 5 points of abstention, which is a trade we did not "
+        "expect to be able to offer.", first=True)
+    doc.body(
+        "What it costs is time. That model does not fit in 4 GB of VRAM, so it "
+        "runs partly on the CPU and takes 6015 ms at the median and 10125 ms "
+        "at p95 to route one utterance. A blind user standing still for ten "
+        "seconds waiting for an answer is a different kind of failure from a "
+        "wrong answer, but it is still a failure, and it is the reason we "
+        "cannot simply recommend the biggest model and stop. The trade-off did "
+        "not go away when we scaled up, it moved from accuracy against "
+        "abstention to accuracy against latency.")
+    doc.body([
+        "One row in that table is a trap and we want to flag it rather than "
+        "let it be read straight. ", ("qwen3:4b", MONO), " has the best "
+        "over-trigger rate in the table at 5.0%, and it means nothing. Only 2 "
+        "utterances out of 200 produced a usable tool call at all, 138 "
+        "abstained, and its 40.5% overall is the keyword baseline plus one "
+        "record. What that column is showing is tier 0 seen through a model "
+        "that contributes almost nothing, and reading it as caution would be "
+        "exactly backwards. It is worth something as a safety observation "
+        "though, because the validation boundary held and the system degraded "
+        "to fewer capabilities rather than to wrong ones, which is what it is "
+        "built to do.",
+    ])
+    doc.body(
+        "The obvious confound is that these are four different model families "
+        "and not one family scaled up, so what the table really shows is that "
+        "the collapse is not universal rather than that it is a clean function "
+        "of parameter count. The two llama3.2 sizes are the only within-family "
+        "pair we have and they are identical on the safety metric.")
 
     # -- 8 discussion -----------------------------------------------------
     doc.heading("8", "Discussion and limitations")
@@ -807,12 +859,16 @@ def build():
         "abstention, and the over-trigger rate we have been optimising against "
         "may not be what matters to them. We do not know.", first=True)
     doc.body(
-        "Over-triggering, at 55% on text and 69.6% on speech, is the biggest "
-        "open problem here. Rejection examples in the prompt, a second pass "
-        "that classifies whether the request is in scope, and a confidence "
-        "gate on the model " + c("hendrycks2017baseline") + " are all "
-        "available and none of them is evaluated, because each would mean "
-        "tuning against a frozen set, so a held-out set has to come first.")
+        "Over-triggering is still the biggest open problem here, but §7.2 "
+        "narrows it. At 3B it is 55% on text and 69.6% on speech, and at 9.2B "
+        "it is 10% on text, so what we need is not necessarily a new mechanism "
+        "but a model we can afford to run, and at six seconds a query we "
+        "cannot afford that one yet. Rejection examples in the prompt, a "
+        "second pass that classifies whether the request is in scope, and a "
+        "confidence gate on the model " + c("hendrycks2017baseline") + " are "
+        "all still available and none of them is evaluated, because each would "
+        "mean tuning against a frozen set, so a held-out set has to come "
+        "first either way.")
     doc.body(
         "The spoken condition is two speakers, 59 records, 107 transcripts, "
         "one recogniser and one room. Neither speaker is a blind user and "
@@ -823,13 +879,19 @@ def build():
         "though none of them is likely to reverse the direction, because the "
         "mechanism does not depend on how many speakers there are.")
     doc.body([
-        "An earlier arm using a reasoning model, ", ("qwen3:4b", MONO),
-        ", returned nothing parseable on 102 of 140 tier-1 calls at 6–8 s "
-        "each, so tier 1 contributed nothing and the run scored exactly the "
-        "keyword baseline. The validation boundary held and degraded to fewer "
-        "capabilities rather than to wrong ones, which is what it is for, but "
-        "that run says nothing about model size until thinking output is "
-        "switched off.",
+        "The five models in §7.2 are four different families rather than one "
+        "family scaled up, so the table shows that the abstention collapse is "
+        "not universal and does not show it as a clean function of parameter "
+        "count. The only within-family pair we have is 1.2B against 3.2B and "
+        "they are identical on the safety metric. A proper sweep inside one "
+        "family is the obvious next run. The reasoning model, ",
+        ("qwen3:4b", MONO), ", is a separate problem: it returned nothing "
+        "parseable on almost every tier-1 call, first at 6–8 s each with its "
+        "thinking output on and then again after we switched that off, so it "
+        "sits in the table contributing 2 usable calls out of 200. Its "
+        "validation boundary held and degraded to fewer capabilities rather "
+        "than to wrong ones, which is what it is for, but nothing else in that "
+        "row should be read as a result.",
     ])
     doc.body(
         "The clock mapping is a camera-frame clock rather than an Orientation "
@@ -929,7 +991,7 @@ def build():
          ("stop / repeat", "—", "speech controller"),
          ("abstain", "template key", "fixed template table")],
         [0.90, 1.20, 1.23], aligns=["left", "left", "left"])
-    doc.caption("Table 4.",
+    doc.caption("Table 5.",
                 "The capability registry. One declarative table drives the "
                 "recogniser's phrase list, the model's tool schema, the "
                 "executor, and a manifest that both languages' test suites "
