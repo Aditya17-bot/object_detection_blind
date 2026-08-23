@@ -1,128 +1,126 @@
-# BlindAssist — quick reference
+# BlindAssist
 
-Camera-based assistive prototype: detects indoor objects, works out direction
-+ closeness, and decides short spoken guidance. Full design in `PIPELINE.md`
-and `CLAUDE.md`; evaluation results (strengths & limits) in `EVALUATION.md`.
+**A camera that says what matters.** Point a phone or webcam at a room; it detects obstacles, works out which way they are and how close, and decides — out loud — what is actually worth telling you.
 
-## Work here
+Everything runs on the machine. No cloud, no API keys, no account. Speech recognition, object detection and the language model that handles free-form questions are all local.
+
+---
+
+## What it does
+
+| | |
+|---|---|
+| **Detection** | Two YOLO models in parallel — a general one and a small fine-tune for doors, dustbins and stairs |
+| **Position** | Turns a box into "left / ahead / right, top / bottom" plus a proximity bucket that escalates as something fills the frame |
+| **Decision** | Persistence and cooldown rules so it speaks when a thing is real and stays quiet when it is not. Speech never blocks the camera loop |
+| **Voice, tier 0** | Grammar-constrained keyword commands. ~5 µs to route, works with nothing downloaded |
+| **Voice, tier 1** | A local LLM router for everything a closed grammar cannot hear — because a grammar genuinely cannot hear a paraphrase |
+| **Modes** | Walk (announce what is in the way), Find (`find bottle`), Describe (say what is in the room) |
+
+## Measured, not claimed
+
+From [`EVALUATION.md`](EVALUATION.md), on real recorded clips:
+
+| | |
+|---|---|
+| Direction accuracy | **100 %** of reviewed announcement keyframes — every left/ahead/right, top/bottom matched the image |
+| Proximity bucket | 100 % plausible, including escalating to "very close" exactly as a wardrobe fills the frame |
+| Inference | **21 ms/frame** for both models on an RTX 3050 (CUDA). 172 ms — 5.8 FPS — on the same laptop CPU-only |
+| Announcement latency | ~0.35–0.5 s from first sighting, then TTS |
+| **Object naming** | **The weak point.** Wrong names in ~6 announcements across 7 clips — though in every case the *warning* behaviour was still correct |
+
+That last row is the honest one, and `EVALUATION.md` has a whole section on where this lacks. A system that tells a blind user the wrong noun for a real obstacle is a different failure from one that misses the obstacle, and they are worth separating.
+
+**A hardware lesson worth stealing:** `pip install torch` gives you a CPU wheel by default and *nothing in the logs tells you the GPU is idle*. The ~750 ms/frame figure in early notes was that, not the model. Check `torch.cuda.is_available()` before you believe any benchmark.
+
+## Run it
 
 ```powershell
-cd C:\adi\object_detection_blind
-.\venv\Scripts\activate       # CPU torch — the known-good fallback env
-.\venv-gpu\Scripts\activate   # CUDA torch 2.6.0+cu124 — 12x faster inference
+python webapp.py          # web UI at http://127.0.0.1:5000
+python webapp.py --no-voice
 ```
 
-Both envs exist on purpose: `venv/` vanished once to OneDrive's free-up-space,
-so it stays as a working fallback. Only `venv-gpu` uses the RTX 3050.
+Video, mode controls, an announcement feed, sonar beeps and voice commands (`find bottle`, `walk mode`, `describe`).
 
-## Back up at the end of every session
-
-```powershell
-git push origin main
-```
-
-Google Drive sync is retired (Drive is full) — GitHub is the backup. Not
-covered: `test_output/` (gitignored, ~27 MB of eval clips and keyframes; the
-report + patent evidence lives only on this laptop — worth an occasional USB
-copy).
-
-## Run things
+**Phone as the camera and the speaker,** laptop as the compute:
 
 ```powershell
-# THE APP with web UI — video, mode controls, announcement feed, sonar
-# beeps, VOICE COMMANDS ("find bottle" / "walk mode" / "describe")
-# open http://127.0.0.1:5000 after it starts
-python webapp.py
-python webapp.py --no-voice          # without the microphone listener
-
-# PHONE TESTING (phone = camera AND screen/voice; laptop just computes):
-# 1. phone: start IP Webcam app, note its URL
+# 1. phone: start the IP Webcam app, note its URL
 # 2. laptop:
 python webapp.py --source http://<phone-ip>:8080/video --host 0.0.0.0
 # 3. phone browser: open the "On your phone -> http://..." URL it prints,
 #    turn ON "Speak on this device", turn OFF "Voice (laptop)", earphones in.
-#    (First run: click Allow on the Windows firewall prompt.)
+```
 
-# Console version (phase 4) — same pipeline, OpenCV window
-# keys: q quit, s snapshot, d describe scene aloud
+Console version, same pipeline, OpenCV window — `q` quit, `s` snapshot, `d` describe:
+
+```powershell
 python phase4_assist.py
-
-# Phone as camera (IP Webcam app; ask the app for the current URL)
 python phase4_assist.py --source http://<phone-ip>:8080/video
-
-# Find Mode, spoken
 python phase4_assist.py --mode find --target bottle
+python phase4_assist.py --rate 200      # quieter/faster voice
+python phase4_assist.py --mute          # print-only dry run
+```
 
-# Quieter / faster voice
-python phase4_assist.py --rate 200
-python phase4_assist.py --mute   # print-only dry run
+Reproducible recorded-clip tests, video-time clock, no speech:
 
-# Reproducible recorded-clip tests (video-time clock, no speech):
+```powershell
 python phase3_detect.py --source "test_output\clip.mp4" --headless
-# announcements land in test_output\*.log + one annotated jpg each
-
-# Earlier stage demos
-python phase1_detect.py          # raw detection boxes
-python phase2_detect.py          # + position grid / proximity colors
 ```
 
-## Natural speech (agent layer)
+Earlier stage demos: `phase1_detect.py` (raw boxes), `phase2_detect.py` (+ position grid and proximity colours).
 
-Without a local model the app behaves exactly as it always has: the
-grammar-constrained keyword commands, ~5 µs to route. The agent adds a second
-tier for everything the grammar cannot hear — and a grammar genuinely cannot
-hear a paraphrase, it is a closed list of phrases.
+## The two-tier voice router
 
-Try it with **no downloads at all** — the web UI's **Ask** box types straight
-into the router and shows which tier answered:
+Try tier 0 with **no downloads at all** — the web UI's **Ask** box types straight into the router and shows which tier answered:
 
 ```powershell
-python webapp.py                 # then type "describe the room" into Ask
-python eval_agent.py --config keyword    # the measured baseline, 200 utterances
+python webapp.py                       # then type "describe the room" into Ask
+python eval_agent.py --config keyword  # the measured baseline, 200 utterances
 ```
 
-To turn the second tier on you need two downloads. **Run these yourself** —
-nothing is fetched automatically:
+Tier 1 needs two downloads, and **nothing is fetched automatically**:
 
 ```powershell
-# 1. the local router model (offline, ~2 GB). Install Ollama first.
-#    3b, not 1.5b: ~3 GB VRAM is free alongside both YOLO models on the 3050.
+# local router model (~2 GB, offline). Install Ollama first.
+# 3b not 1.5b: ~3 GB VRAM is free alongside both YOLO models on a 3050.
 ollama pull qwen2.5:3b-instruct
-python bench_llm.py --model qwen2.5:3b-instruct   # IS IT FAST ENOUGH HERE?
+python bench_llm.py --model qwen2.5:3b-instruct   # prints a verdict — run it first
 
-# 2. free-speech transcription for the "assistant" trigger word
-pip install faster-whisper       # first run downloads ~75 MB of weights
+pip install faster-whisper   # ~75 MB of weights on first run
 
-# then:
 python webapp.py --agent-model qwen2.5:3b-instruct --whisper-model
 ```
 
-Say **“assistant”**, wait for “Yes?”, then ask in your own words.
+Say **"assistant"**, wait for "Yes?", then ask in your own words.
 
-Works on the phone too, with no download: the trigger word swaps the
-grammar-constrained recognizer for an open one over the same bundled Vosk
-model, catches one utterance, and swaps back (less accurate than Whisper — the
-trade for working with the laptop off). The transcript goes through the local
-parser first, then to the router over `POST /agent`. Everything the phone can
-parse itself is handled on-device, and if the server is unreachable it stays on
-its offline capabilities — it never invents an action.
+It works on the phone with no download too: the trigger word swaps the grammar-constrained recogniser for an open one over the same bundled Vosk model, catches one utterance, and swaps back. Less accurate than Whisper — the trade for working with the laptop off. The transcript hits the local parser first, then the router over `POST /agent`. Anything the phone can parse itself is handled on-device, and **if the server is unreachable it falls back to its offline capabilities rather than inventing an action.**
 
-Run `bench_llm.py` before trusting tier 1 in the field — it prints a verdict.
+## Layout
 
-Note on hardware: detection runs at **21 ms/frame for both models** on the
-tether laptop's RTX 3050 once CUDA is actually in use (`venv-gpu/`, torch
-2.6.0+cu124). The older ~750 ms figure came from a CPU-only torch build on the
-same machine. If you are setting this up fresh, check
-`torch.cuda.is_available()` first — `pip install torch` gives you a CPU wheel by
-default, and nothing in the logs tells you the GPU is idle.
+```
+webapp.py            the app: Flask UI, video, voice, announcement feed
+phase1..4_detect.py  the pipeline, one stage at a time
+decision.py          persistence, cooldown, what is worth saying
+position.py          box -> direction + proximity
+speech.py            TTS, off the camera thread
+speech_policy.py     when to speak, and when to shut up
+voice.py             Vosk recognition, grammar-constrained
+agent.py             tier-1 router
+name_index.py        object naming
+paper/               the write-up, figures and eval protocol
+test_*.py            12 test modules
+```
 
-## Tests
+Design notes in `PIPELINE.md`, full engineering log in `CLAUDE.md`, results and limits in `EVALUATION.md`, hardware plan in `ANDROID_PLAN.md`.
+
+## Development
 
 ```powershell
-python -m unittest       # 199 tests: position, decision, speech, voice,
-                         # webapp, infer_server, agent, agent_server
-python agent.py --write-manifest   # after changing agent.TOOLS — then run the
-                                   # Flutter suite, which asserts the Dart
-                                   # registry against capabilities.json
-cd blindassist_app; flutter test   # 133 tests: the mirrored Dart logic
+.\venv\Scripts\activate       # CPU torch — known-good fallback
+.\venv-gpu\Scripts\activate   # CUDA torch 2.6.0+cu124 — 12x faster
 ```
+
+Both environments exist deliberately: `venv/` vanished once to OneDrive's free-up-space, so it stays as the fallback. Only `venv-gpu` uses the GPU.
+
+`test_output/` is gitignored — around 27 MB of eval clips and keyframes.
