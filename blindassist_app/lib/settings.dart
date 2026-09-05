@@ -16,6 +16,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 const String kDefaultUserName = 'Aditya';
 
 const String _kNameKey = 'user_name';
+const String _kLocaleKey = 'tts_locale';
+
+/// Spoken-accent choices, as BCP-47 locales the Android TTS engine understands.
+///
+/// This is a LOCALE list rather than a list of specific voice names on purpose:
+/// which voices are installed differs per phone and per Google TTS version, so
+/// a hardcoded voice name would silently fall back to the default on any device
+/// that lacks it. The app asks the engine for the locale and lets it choose its
+/// best matching voice, then offers whatever concrete voices it does have.
+const Map<String, String> kAccents = {
+  'en-IN': 'Indian English',
+  'en-GB': 'British English',
+  'en-US': 'American English',
+  'en-AU': 'Australian English',
+  'en-IE': 'Irish English',
+  'en-ZA': 'South African English',
+};
+
+const String kDefaultLocale = 'en-IN';
 
 /// "Good morning" / "Good afternoon" / "Good evening" for [now].
 /// Boundaries: <12 morning, <17 afternoon, else evening.
@@ -39,6 +58,9 @@ String greetingFor(DateTime now, String? name) {
 class AppSettings {
   static String userName = kDefaultUserName;
 
+  /// BCP-47 locale for the spoken voice. See [kAccents].
+  static String ttsLocale = kDefaultLocale;
+
   static Future<void> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -46,9 +68,21 @@ class AppSettings {
       if (stored != null && stored.trim().isNotEmpty) {
         userName = stored.trim();
       }
+      final loc = prefs.getString(_kLocaleKey);
+      if (loc != null && loc.trim().isNotEmpty) {
+        ttsLocale = loc.trim();
+      }
     } catch (_) {
       // keep the default; startup is not worth failing over a preference
     }
+  }
+
+  static Future<void> setTtsLocale(String locale) async {
+    ttsLocale = locale;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kLocaleKey, locale);
+    } catch (_) {}
   }
 
   static Future<void> setUserName(String name) async {

@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 
 import 'logic/agent_actions.dart';
 import 'logic/voice_commands.dart';
+import 'speaker.dart';
 import 'settings.dart';
 
 /// One line of plain English per capability. Kept here rather than in
@@ -48,6 +49,7 @@ class FeaturesPage extends StatefulWidget {
     super.key,
     required this.onCommand,
     required this.onNameChanged,
+    required this.speaker,
     this.voiceActive = false,
     this.agentReady = false,
     this.muted = false,
@@ -57,6 +59,12 @@ class FeaturesPage extends StatefulWidget {
   /// tiers use — a tap here is not a second code path.
   final void Function(VoiceCommand command) onCommand;
   final void Function(String name) onNameChanged;
+
+  /// Needed to APPLY and DEMONSTRATE an accent choice on the spot: the point
+  /// of the setting is how it sounds, and a user who cannot see the list has
+  /// no other way to judge it.
+  final Speaker speaker;
+
   final bool voiceActive;
   final bool agentReady;
   final bool muted;
@@ -124,6 +132,8 @@ class _FeaturesPageState extends State<FeaturesPage> {
               SliverToBoxAdapter(child: _quickFindWrap()),
               SliverToBoxAdapter(child: _sectionTitle('Touch the screen')),
               SliverToBoxAdapter(child: _gestureCard()),
+              SliverToBoxAdapter(child: _sectionTitle('Voice')),
+              SliverToBoxAdapter(child: _voiceCard()),
               SliverToBoxAdapter(child: _sectionTitle('Your name')),
               SliverToBoxAdapter(child: _nameCard()),
               const SliverToBoxAdapter(child: SizedBox(height: 40)),
@@ -132,6 +142,59 @@ class _FeaturesPageState extends State<FeaturesPage> {
         ),
       ),
     );
+  }
+
+
+  /// Spoken accent. Every option is applied AND demonstrated on the spot —
+  /// the whole point is how it sounds, and a user who cannot see the list has
+  /// no other way to judge it.
+  Widget _voiceCard() => _card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('The accent everything is spoken in.',
+                style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in kAccents.entries)
+                  Semantics(
+                    button: true,
+                    selected: AppSettings.ttsLocale == entry.key,
+                    label: '${entry.value} accent',
+                    child: ChoiceChip(
+                      label: Text(entry.value),
+                      selected: AppSettings.ttsLocale == entry.key,
+                      onSelected: (_) => _pickAccent(entry.key, entry.value),
+                      backgroundColor: Colors.white.withValues(alpha: 0.06),
+                      selectedColor: _accent.withValues(alpha: 0.85),
+                      labelStyle: TextStyle(
+                          color: AppSettings.ttsLocale == entry.key
+                              ? Colors.black
+                              : Colors.white,
+                          fontSize: 16),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+                'If one sounds the same as another, that accent is not '
+                'installed. Add it in Android Settings, Text-to-speech, '
+                'Google, Install voice data.',
+                style: TextStyle(color: Colors.white38, fontSize: 13)),
+          ],
+        ),
+      );
+
+  Future<void> _pickAccent(String locale, String label) async {
+    await AppSettings.setTtsLocale(locale);
+    await widget.speaker.applyVoice(locale);
+    if (mounted) setState(() {});
+    // Speak the sample AFTER applying, so the user hears the choice itself.
+    await widget.speaker.say('$label. Door ahead, close.', onDemand: true);
   }
 
   Widget _sectionTitle(String text) => Padding(

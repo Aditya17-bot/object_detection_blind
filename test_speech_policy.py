@@ -21,11 +21,48 @@ class FocusTest(unittest.TestCase):
             self.assertTrue(self.p.allow_speech(pri, "anything", 0.0))
 
     def test_the_reported_bug_an_unrequested_readout_during_a_find(self):
-        """user: 'find the bottle' -> app: 'Nothing on your right'."""
+        """user: 'find the bottle' -> app: 'Nothing on your right'.
+
+        UNREQUESTED is the whole point: this is the dialogue layer guessing at
+        audio nobody addressed to the app. The same command asked for out loud
+        must still run -- see the test below.
+        """
         self.p.begin("find:bottle", 0.0)
-        self.assertFalse(self.p.allow_command("check", 1.0))
+        self.assertFalse(self.p.allow_command("check", 1.0, solicited=False))
         self.assertFalse(self.p.allow_speech(RESPONSE, "check", 1.0,
                                              solicited=False))
+
+    def test_a_command_the_user_actually_said_is_never_dropped(self):
+        """The 2026-09-05 field bug, in both directions.
+
+        Focus exists to stop routine guidance and the dialogue layer's guesses
+        from treading on a task in progress. It was never meant to stop the
+        user, and when it did, the app silently ignored them:
+
+            policy: dropped "describe" (focus=photo, solicited=True)
+            policy: dropped "check"    (focus=describe, solicited=True)
+
+        To someone who cannot see the screen that is indistinguishable from
+        not being heard at all.
+        """
+        for holder in ("photo", "describe", "read", "find:bottle"):
+            p = SpeechPolicy()
+            p.begin(holder, 0.0)
+            for asked in ("describe", "check", "count", "recall", "read",
+                          "photo", "path", "walk", "stop", "find"):
+                self.assertTrue(
+                    p.allow_command(asked, 1.0),
+                    "%r must run while %r holds focus" % (asked, holder))
+
+    def test_and_its_answer_may_be_spoken(self):
+        """Letting the capability run but refusing to speak its result would
+        leave the user with silence and no way to tell why."""
+        p = SpeechPolicy()
+        p.begin("photo", 0.0)
+        self.assertTrue(p.allow_speech(RESPONSE, "describe", 1.0))
+        self.assertTrue(p.allow_speech(CONFIRM, "walk", 1.0))
+        # ...but routine chatter is still gated, which is what focus is FOR
+        self.assertFalse(p.allow_speech(ROUTINE, "walk", 1.0))
 
     def test_routine_walk_chatter_waits_for_the_task_the_user_asked_for(self):
         self.p.begin("describe", 0.0, seconds=6.0)

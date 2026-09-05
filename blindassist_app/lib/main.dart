@@ -145,7 +145,13 @@ class _AssistantScreenState extends State<AssistantScreen>
       final back = cameras.firstWhere(
           (c) => c.lensDirection == CameraLensDirection.back,
           orElse: () => cameras.first);
-      final controller = CameraController(back, ResolutionPreset.medium,
+      // ResolutionPreset drives BOTH the streamed frames and takePicture(),
+      // and it was `medium` — 480p. Detection never cared (the server letter-
+      // boxes to 640 regardless), but OCR did: `read` was capturing text at
+      // 480p and ML Kit returned nothing, which the user heard as "no text
+      // found" every time. `high` is 720p: 2.25x the pixels for text, and the
+      // extra streaming cost is small now that frames go up as JPEG.
+      final controller = CameraController(back, ResolutionPreset.high,
           enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
       await controller.initialize();
       // assign before starting the stream: frames can fire immediately and
@@ -261,7 +267,13 @@ class _AssistantScreenState extends State<AssistantScreen>
       final back = cameras.firstWhere(
           (c) => c.lensDirection == CameraLensDirection.back,
           orElse: () => cameras.first);
-      final controller = CameraController(back, ResolutionPreset.medium,
+      // ResolutionPreset drives BOTH the streamed frames and takePicture(),
+      // and it was `medium` — 480p. Detection never cared (the server letter-
+      // boxes to 640 regardless), but OCR did: `read` was capturing text at
+      // 480p and ML Kit returned nothing, which the user heard as "no text
+      // found" every time. `high` is 720p: 2.25x the pixels for text, and the
+      // extra streaming cost is small now that frames go up as JPEG.
+      final controller = CameraController(back, ResolutionPreset.high,
           enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
       await controller.initialize();
       _camera = controller;
@@ -693,8 +705,22 @@ class _AssistantScreenState extends State<AssistantScreen>
       // the stream is paused but the last obstacle's beeps would keep
       // implying "something approaching" while the user holds still reading
       _sonar.update(0, 0);
+      // Let autofocus settle. takePicture() fired immediately after
+      // stopImageStream() captures whatever focus the streaming path happened
+      // to leave behind, and text is exactly the subject that needs focus —
+      // a blurred page yields no blocks at all, which is indistinguishable
+      // from an empty one.
+      try {
+        await _camera!.setFocusMode(FocusMode.auto);
+      } catch (_) {
+        // not every device exposes focus control; the delay still helps
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
       final shot = await _camera!.takePicture();
       final text = await _ocr.readFile(shot.path);
+      // ignore: avoid_print
+      print('BlindAssist OCR: ${_camera!.value.previewSize} '
+          '-> ${text.length} chars');
       final msg = text.isEmpty ? 'No text found' : text;
       // Through _say, NOT _speaker.say: this is what extends the 'read' focus
       // to cover the time the text takes to SPEAK. _dispatch opened the hold
@@ -827,6 +853,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => FeaturesPage(
         onCommand: _dispatch,
+        speaker: _speaker,
         onNameChanged: (name) async {
           await AppSettings.setUserName(name);
           if (mounted) setState(() {});

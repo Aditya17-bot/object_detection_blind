@@ -29,6 +29,7 @@ from flask import Flask, jsonify, request
 from ultralytics import YOLO
 
 from agent_server import register_agent_routes
+from detect_merge import merge_detections, merge_report
 from name_index import TRUSTED_KEY, Namer
 from position import TARGET_CLASSES
 
@@ -37,7 +38,18 @@ from position import TARGET_CLASSES
 # values (door/dustbin 0.4 — a partial/far doorway lives in the 0.4-0.5 band).
 COCO_CONF = 0.6
 CUSTOM_CONF = 0.4
-_CUSTOM_FLOOR = {"door": 0.4, "dustbin": 0.4}
+# Per-class floors for the custom model. The 0.4 was chosen for DOORS, where a
+# partial or far doorway genuinely lives in the 0.4-0.5 band, and dustbin
+# inherited it without ever being justified for that class. Raised to 0.6 on
+# 2026-09-05: the dustbin head is the weak one (see CLAUDE.md, and the stairs
+# class was disabled outright for the same reason), and the field log for one
+# frame was
+#     suitcase@0.91 backpack@0.70 dustbin@0.81 dustbin@0.70 dustbin@0.46
+# -- three dustbin boxes, two of them barely over the old floor, on an object
+# the user knows is a suitcase. The confident false positive at 0.81 survives
+# this and is a NAMING problem, not a threshold one; only labelled crops of
+# this room fix that.
+_CUSTOM_FLOOR = {"door": 0.4, "dustbin": 0.6}
 
 # Android sensorOrientation -> cv2 rotation. Derived to MATCH detector.dart's
 # _fillInput mapping so left/right (and therefore every direction announced)
@@ -224,12 +236,21 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
                 # class filter is applied here instead — after the namer has
                 # had its say, on the name the user will actually hear.
                 dets = [d for d in dets if d["name"] in TARGET_CLASSES]
+        # Both models NMS only their OWN output, so one object could be
+        # returned twice under two names ("my suitcase is shown as both
+        # dustbin and suitcase"). Merged AFTER naming, so the naming head's
+        # verdict is available as a tie-break and it still sees every box.
+        before = dets
+        dets = merge_detections(
+            dets, floors=dict(_CUSTOM_FLOOR), default_floor=COCO_CONF)
+        merged = merge_report(before, dets)
         ms = (time.monotonic() - t0) * 1000
         renamed = sum(1 for d in dets if "yolo_name" in d)
         kind = "jpeg" if "jpeg" in request.files else "raw"
         print(f"/infer {w}x{h} rot{rotation} {kind} -> {len(dets)} dets "
               f"in {ms:.0f}ms"
-              + (f" ({renamed} renamed)" if renamed else ""))
+              + (f" ({renamed} renamed)" if renamed else "")
+              + (f" [{merged}]" if merged else ""))
         return jsonify({"detections": dets})
 
     @app.get("/health")

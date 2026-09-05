@@ -1102,3 +1102,45 @@ idle and **6766-8016 ms while frames stream**; detector compute rises from
 architecture must state whether the dialogue and perception layers were
 contending for the same accelerator.
 
+### 2026-09-05 (night) — An arbitration layer that overrode the user, and a dedup rule that had to reject the obvious metric
+
+Two entries worth the disclosure, both refinements of existing claims rather
+than new ones.
+
+1. **§4.10's focus arbitration was blocking the principal.** The mechanism was
+   built to stop routine guidance and the dialogue layer's guesses from treading
+   on a task the user asked for. As implemented it refused any non-steering
+   capability while another held focus, including one the user had just spoken
+   aloud, and the field log records it doing so: `dropped "describe"
+   (focus=photo, solicited=true)`. The `solicited` flag already carried exactly
+   the distinction needed and was consulted only for the steering subset. Fixed
+   so that provenance, not category, decides: a guess is gated, an utterance is
+   never gated. *This is the third time the same shape has appeared (see the
+   2026-09-05 morning entry): a system holding the evidence it needed and not
+   consulting it at the decision point. It is worth stating in the paper as a
+   design failure mode of layered abstention — each layer's guard must be
+   indexed by provenance, or it will eventually silence the very user it
+   arbitrates for.*
+
+2. **Cross-detector merging, and why the intuitive overlap metric is unsafe.**
+   Two detectors over one frame with no shared NMS returned one object under two
+   names. The obvious test for "a small box inside a big one" is containment
+   (intersection over the smaller area), and it must be REJECTED: measured on
+   real room footage, the pairs containment flags include a person standing in
+   front of a bed, where the person's box is fully contained. Suppressing a
+   person is a safety regression, and legitimate nesting (bottle on table,
+   person in doorway) has the same signature. Mutual IoU is the correct test
+   because it asserts the two boxes describe the same REGION, not merely that
+   one lies within the other. The tie-break is also non-obvious: raw confidence
+   is not comparable across detectors thresholded differently (0.6 vs 0.4), so
+   the rule ranks by margin above each detector's own floor, with a committed
+   embedding rename outranking both. *Supports §4.9: once a calibrated namer
+   exists, it should win arbitration against uncalibrated ones, which is a
+   different claim from simply using it to relabel.*
+
+**Measured deployment limitation, restated with numbers.** The naming head
+abstained on 100% of detections in a room it had not been labelled for, while
+the same index scores 104/105 correct on the rooms it has seen. §4.9's benefit
+is room-specific until labelled, and any claim about naming accuracy must say
+which rooms are in the index.
+

@@ -1605,3 +1605,94 @@ inputs. Two reasons that is acceptable here, and one reason to keep watching it:
 This does NOT change the paper's evaluation tables, which were run on 3b and
 are reported as such. Any re-run must state the model.
 
+## Third walk: the policy was eating commands, and OCR never had the pixels (2026-09-05, night)
+
+User: "not hearing me properly when I say read, find"; "my suitcase is shown as
+both dustbin and suitcase"; "again no memory of laundry basket"; "read keeps
+saying no text found"; "change the voice to a different accent".
+
+Four of the five were misattributed. None of them was a hearing problem.
+
+### 1. The speech policy was silently dropping commands the user SAID
+
+`speech_policy` line "if kSteering.contains(action) return solicited; return
+false" meant any non-steering capability was refused while another held focus —
+**including one the user had just spoken**. The field log says it plainly:
+
+    policy: dropped "describe" (focus=photo, solicited=true)
+    policy: dropped "check"    (focus=describe, solicited=true)
+
+Heard correctly, parsed correctly, thrown away. To someone who cannot see the
+screen that is indistinguishable from not being heard, and it is exactly the
+failure the module's own class comment warns about ("being unable to interrupt
+is how an assistive device becomes frightening").
+
+`allow_command` now returns `solicited`: a guess from the dialogue layer is
+still gated, a command the user spoke never is. `allow_speech` matched it —
+lowered from RESPONSE to CONFIRM, because letting the capability run and then
+refusing to speak its result leaves silence with no explanation. Mirrored,
+and pinned by a test that walks every capability against every focus holder.
+
+### 2. There was no cross-model deduplication ANYWHERE
+
+`infer_server` concatenated yolov8s's detections and the custom model's. Each
+NMSes only its own output, so one object came back twice under two names — the
+suitcase. Device log, one frame:
+
+    suitcase@0.91 backpack@0.70 dustbin@0.81 dustbin@0.70 dustbin@0.46
+
+New `detect_merge.py` (pure, 15 tests). Two decisions worth keeping:
+
+- **Overlap is IoU, never containment.** Containment is the obvious test for "a
+  dustbin box inside the suitcase box" and it is dangerous: measured on the
+  user's own room clip, the pairs it flags include **person inside bed**. A
+  person standing in front of a bed is contained by it, and nesting is also how
+  a bottle on a table looks. `person` is additionally hard-protected.
+- **Confidence compared as margin above each model's OWN floor.** COCO is
+  thresholded at 0.6 and the custom model at 0.4, so raw values are not
+  comparable; `(conf - floor) / (1 - floor)` is. A committed rename from the
+  naming head outranks both, being the only calibrated namer in the pipeline.
+
+Also `_CUSTOM_FLOOR` dustbin 0.4 -> **0.6**. The 0.4 was justified for DOORS
+("a partial doorway lives in the 0.4-0.5 band") and dustbin inherited it. The
+0.81 false positive survives and is a NAMING problem, not a threshold one.
+
+### 3. OCR was reading 480p
+
+`ResolutionPreset.medium` drives BOTH the streamed frames and `takePicture()`.
+Detection never cared — the server letterboxes to 640 regardless — but `read`
+was OCR-ing text at 480p and ML Kit returned nothing every time. Now `high`
+(720p, 2.25x the pixels), which costs little since frames go up as JPEG. Also
+added autofocus + a 700 ms settle before the capture: firing `takePicture()`
+straight after `stopImageStream()` inherits whatever focus the streaming path
+left, and a blurred page yields no blocks at all — indistinguishable from an
+empty one. The capture now logs `previewSize -> N chars`, so if it still fails
+the log says whether it is resolution or focus.
+
+### 4. Accent picker
+
+`kAccents` in settings.dart (en-IN default, plus GB/US/AU/IE/ZA) + a chip row in
+the features page that applies AND speaks a sample immediately — the point of
+the setting is how it sounds, and the user cannot read the list. Deliberately
+LOCALES, not voice names: which voices exist differs per phone, so a hardcoded
+name would silently fall back. `Speaker.applyVoice` checks
+`isLanguageAvailable` first and keeps the current voice if absent.
+
+### 5. Laundry basket — not a memory bug
+
+It is never DETECTED, so nothing ever reaches the object memory. YOLO calls it
+"handbag", which is not in TARGET_CLASSES, and the naming index abstains in this
+room. `recall` was answering correctly.
+
+**Room crops are now harvested and waiting**: `test_output/crops_room/`, 196
+crops in 24 guess-folders from `room_walk_20260905.mp4` — including **4 in
+`handbag/`, almost certainly the laundry basket**, plus 12 `dustbin` and 12
+`suitcase` (the confusion pair) and hallucinated `cat`/`dog`/`stairs` for
+`_ignore`. Labelling those into `test_output/crops/<label>/` and re-running
+`build_name_index.py` is what fixes the laundry basket, the suitcase-as-dustbin
+name, and the remaining generic "obstacle" warnings. It is the user's 20-40 min
+and it is now the single highest-value action left.
+
+Test counts: **342 Python / 217 Dart**, analyze clean apart from the 3
+pre-existing `avoid_print` infos.
+

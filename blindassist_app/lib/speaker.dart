@@ -11,6 +11,7 @@
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'logic/speech_policy.dart';
+import 'settings.dart';
 
 class Speaker {
   final FlutterTts _tts = FlutterTts();
@@ -63,8 +64,24 @@ class Speaker {
     _quietUntil = DateTime.now().add(_echoTail);
   }
 
+  /// Apply the configured accent. Separate from [init] so the features page
+  /// can change it live and hear the result immediately.
+  ///
+  /// Falls back silently: an engine without the requested locale keeps the one
+  /// it has, which is strictly better than throwing and leaving the app mute.
+  Future<void> applyVoice([String? locale]) async {
+    final want = locale ?? AppSettings.ttsLocale;
+    try {
+      final available = await _tts.isLanguageAvailable(want);
+      if (available == true) await _tts.setLanguage(want);
+    } catch (_) {
+      // keep whatever the engine defaulted to
+    }
+  }
+
   Future<void> init() async {
     await _tts.setLanguage('en-US');
+    await applyVoice();
     await _tts.setSpeechRate(0.55); // plugin scale ~0..1; ≈175 wpm feel
     await _tts.setVolume(1.0);
     await _tts.awaitSpeakCompletion(false); // say() must never block

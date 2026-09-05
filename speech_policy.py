@@ -130,33 +130,47 @@ class SpeechPolicy:
 
     # -- the two decisions ---------------------------------------------------
     def allow_command(self, action, now, solicited=True):
-        """May this capability RUN?
-
-        Gating at the command, not just at its speech, matters: `read` pauses
-        the camera stream and `find` changes mode, so a spurious trigger costs
-        more than a spurious sentence.
+        """May this capability RUN? Gating the command and not just its speech
+        matters: `read` pauses the camera stream and `find` changes mode, so a
+        spurious trigger costs more than a spurious sentence.
 
         `solicited` is False for anything the deterministic parser could not
-        resolve and the dialogue layer guessed at. Such a guess never gets to
-        interrupt a task the user actually asked for.
+        resolve and the dialogue layer guessed at. A guess never interrupts a
+        task the user actually asked for.
+
+        A command the user DID say is never blocked. Focus exists to stop
+        routine guidance and the dialogue layer's guesses from treading on a
+        task in progress -- it was never meant to stop the user, and when it
+        did the app simply ignored them. Field log, 2026-09-05:
+
+            policy: dropped "describe" (focus=photo, solicited=True)
+            policy: dropped "check"    (focus=describe, solicited=True)
+
+        Those were heard correctly, parsed correctly and thrown away. To a user
+        who cannot see the screen that is indistinguishable from not being
+        heard at all.
         """
         if not self.focused(now):
             return True
         if action == self.focus_tag or action == _tag_action(self.focus_tag):
-            return True                      # the focused task talking to itself
-        if action in STEERING:
-            return solicited
-        return False
+            return True
+        return solicited
 
     def allow_speech(self, priority, tag, now, solicited=True):
-        """May this MESSAGE be spoken?"""
+        """May this MESSAGE be spoken?
+
+        Anything above routine chatter that the user actually asked for goes
+        through: if allow_command let the capability run, refusing to speak its
+        result would leave the user with silence and no way to tell why. Only
+        ROUTINE guidance, and anything the dialogue layer guessed at, is gated.
+        """
         if priority >= SAFETY:
             return True                      # never gated, never delayed
         if not self.focused(now):
             return True
         if tag == self.focus_tag:
             return True
-        if priority >= RESPONSE and solicited:
+        if priority >= CONFIRM and solicited:
             return True                      # a deliberate request takes over
         return False
 

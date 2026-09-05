@@ -43,3 +43,8 @@ dart_port/
 blindassist_app/android/build/
 blindassist_app/build/
 blindassist_app/android/.kotlin/
+
+# Room-specific crop harvest staging (photos of the user's home) and the
+# working copy of the clip they were cut from — regenerate with harvest_crops.py
+test_output/crops_room/
+test_output/room_clips/

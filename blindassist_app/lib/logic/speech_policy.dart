@@ -102,20 +102,37 @@ class SpeechPolicy {
   /// [solicited] is false for anything the deterministic parser could not
   /// resolve and the dialogue layer guessed at. A guess never interrupts a
   /// task the user actually asked for.
+  ///
+  /// A command the user DID say is never blocked. Focus exists to stop routine
+  /// guidance and the dialogue layer's guesses from treading on a task in
+  /// progress -- it was never meant to stop the user, and when it did the app
+  /// simply ignored them. Field log, 2026-09-05:
+  ///
+  ///     policy: dropped "describe" (focus=photo, solicited=true)
+  ///     policy: dropped "check"    (focus=describe, solicited=true)
+  ///
+  /// Those were heard correctly, parsed correctly, and thrown away. To a user
+  /// who cannot see the screen that is indistinguishable from not being heard
+  /// at all, and it is the same failure the class comment warns about: being
+  /// unable to interrupt is how an assistive device becomes frightening.
   bool allowCommand(String action, double now, {bool solicited = true}) {
     if (!focused(now)) return true;
     if (action == focusTag || action == _tagAction(focusTag)) return true;
-    if (kSteering.contains(action)) return solicited;
-    return false;
+    return solicited;
   }
 
   /// May this MESSAGE be spoken?
+  ///
+  /// Anything above routine chatter that the user actually asked for goes
+  /// through: if [allowCommand] let the capability run, refusing to speak its
+  /// result would leave the user with silence and no way to tell why. Only
+  /// ROUTINE guidance, and anything the dialogue layer guessed at, is gated.
   bool allowSpeech(int priority, String tag, double now,
       {bool solicited = true}) {
     if (priority >= kSafety) return true; // never gated, never delayed
     if (!focused(now)) return true;
     if (tag == focusTag) return true;
-    if (priority >= kResponse && solicited) return true;
+    if (priority >= kConfirm && solicited) return true;
     return false;
   }
 }

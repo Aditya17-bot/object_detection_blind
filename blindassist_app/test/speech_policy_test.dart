@@ -20,9 +20,48 @@ void main() {
 
     test('the reported bug: an unrequested read-out during a find', () {
       // user: "find the bottle" -> app: "Nothing on your right"
+      //
+      // UNREQUESTED is the whole point: this is the dialogue layer guessing at
+      // audio nobody addressed to the app. The same command asked for out loud
+      // must still run -- see the test below.
       p.begin('find:bottle', 0);
-      expect(p.allowCommand('check', 1), isFalse);
+      expect(p.allowCommand('check', 1, solicited: false), isFalse);
       expect(p.allowSpeech(kResponse, 'check', 1, solicited: false), isFalse);
+    });
+
+    test('a command the user actually said is never dropped', () {
+      // The 2026-09-05 field bug. Focus exists to stop routine guidance and
+      // the dialogue layer's guesses from treading on a task in progress. It
+      // was never meant to stop the user, and when it did the app silently
+      // ignored them:
+      //
+      //   policy: dropped "describe" (focus=photo, solicited=true)
+      //   policy: dropped "check"    (focus=describe, solicited=true)
+      //
+      // To someone who cannot see the screen that is indistinguishable from
+      // not being heard at all.
+      for (final holder in ['photo', 'describe', 'read', 'find:bottle']) {
+        final q = SpeechPolicy();
+        q.begin(holder, 0);
+        for (final asked in [
+          'describe', 'check', 'count', 'recall', 'read',
+          'photo', 'path', 'walk', 'stop', 'find'
+        ]) {
+          expect(q.allowCommand(asked, 1), isTrue,
+              reason: '"$asked" must run while "$holder" holds focus');
+        }
+      }
+    });
+
+    test('and its answer may be spoken', () {
+      // Letting the capability run but refusing to speak its result would
+      // leave the user with silence and no way to tell why.
+      final q = SpeechPolicy();
+      q.begin('photo', 0);
+      expect(q.allowSpeech(kResponse, 'describe', 1), isTrue);
+      expect(q.allowSpeech(kConfirm, 'walk', 1), isTrue);
+      // ...but routine chatter is still gated, which is what focus is FOR
+      expect(q.allowSpeech(kRoutine, 'walk', 1), isFalse);
     });
 
     test('routine walk chatter waits for the task the user asked for', () {
