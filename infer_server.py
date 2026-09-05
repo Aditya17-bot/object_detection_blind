@@ -262,10 +262,17 @@ if __name__ == "__main__":
     ap.add_argument("--imgsz", type=int, default=640,
                     help="inference resolution; 480 is ~1.6x faster at a "
                          "small accuracy cost")
-    ap.add_argument("--agent-model", nargs="?", const="llama3.2:3b",
-                    help="local Ollama model for tier-1 routing and chat, "
-                         "e.g. llama3.2:3b (the bare flag's default). Omit "
-                         "the flag entirely for keyword routing only.")
+    ap.add_argument("--agent-model", nargs="?", const="llama3.2:1b",
+                    help="local Ollama model for tier-1 routing and chat. The "
+                         "bare flag gives llama3.2:1b, chosen 2026-09-05 for "
+                         "LATENCY: it shares one 4 GB GPU with both YOLO "
+                         "models, and measured under a live frame stream it "
+                         "routes in ~281 ms median where llama3.2:3b took "
+                         "6766-8016 ms and timed out on the handset. The 3b "
+                         "model abstains better on noise (see CLAUDE.md) and "
+                         "is still worth passing explicitly when the phone is "
+                         "not streaming. Omit the flag for keyword routing "
+                         "only.")
     ap.add_argument("--whisper-model", nargs="?", const="small.en",
                     help="local faster-whisper model for WAV uploads to "
                          "/agent (default small.en)")

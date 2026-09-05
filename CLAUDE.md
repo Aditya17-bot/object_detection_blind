@@ -1565,3 +1565,43 @@ remains the highest-value next step for perceived quality.
 Test counts: **325 Python / 215 Dart**, analyze clean apart from the 3
 pre-existing `avoid_print` infos.
 
+## Router model switched to llama3.2:1b (2026-09-05, user decision)
+
+The 3b model was not slow because it is 3b — it was slow because it shares one
+4 GB GPU with yolov8s and the door model. Measured with a live frame stream
+posting to `/infer`:
+
+| model | tier-1, GPU idle | tier-1, frames streaming |
+|---|---|---|
+| llama3.2:3b | 485-1140 ms | **6766-8016 ms** (timed out on the phone) |
+| **llama3.2:1b** | 266 ms median / 672 ms worst | **281 ms median / 484 ms worst** |
+
+`--agent-model` with no value now gives `llama3.2:1b`. Run the server as:
+
+    venv-gpu\Scripts\python.exe -u infer_server.py --agent-model llama3.2:1b
+
+**Quality, measured on 20 utterances (`router_check` pattern, regenerate from
+the scratchpad script) — the honest trade:**
+
+| category | 1b | note |
+|---|---|---|
+| canonical commands | 6/6 | tier 0, never reaches the model |
+| paraphrase | 5/6 | missed "what is around me right now" -> answered as chat instead of `describe` |
+| out-of-scope | 5/5 abstained | battery, capital of Japan, call my mother, play music, what time is it |
+| **grammar noise** | **0/3** | "the is my on", "many plant", "my left" all became `walk` |
+
+So 1b is WORSE at abstaining on word-soup, where 3b abstained on the same
+inputs. Two reasons that is acceptable here, and one reason to keep watching it:
+
+1. Noise now largely cannot reach the router at all. `kRouteUnmatchedSpeech` is
+   false, so the unsolicited path is closed, and `is_plausible_request` rejects
+   "the is my on" outright (no content word). Only the deliberate trigger-word
+   path remains, and only "many plant" / "my left" clear the floor there.
+2. The capability it invents is `walk`, which merely returns to walk mode. It
+   speaks no perceptual claim, so the authority boundary is intact.
+3. ⚠ Worth re-checking if the trigger word ever starts firing spuriously: with
+   1b the failure mode is a wrong capability rather than an abstention.
+
+This does NOT change the paper's evaluation tables, which were run on 3b and
+are reported as such. Any re-run must state the model.
+
