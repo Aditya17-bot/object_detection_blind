@@ -139,6 +139,10 @@ class ObjectInfo:
     center_x: float      # 0..1, for sonar panning later
     phrase: str          # human-friendly location, e.g. "top right"
     distance_m: float = None  # rough meters (pinhole), None if not estimable
+    # With center_x, tells whether two objects are NEAR each other, which is
+    # what lets the object memory say "keys near a table" instead of the much
+    # weaker "keys, with a table also in view".
+    center_y: float = 0.5
     # True when the NAME is independently vouched for — a dedicated-model class
     # (door/dustbin) or a committed rename from the embedding naming head. Such
     # a name bypasses decision.NAME_CONFIDENCE, whose premise (that detector
@@ -233,6 +237,7 @@ def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h,
         proximity=proximity_bucket(name, area),
         area=area,
         center_x=cx,
+        center_y=cy,
         phrase=direction_phrase(h_zone, v_zone),
         distance_m=distance_meters(name, (y2 - y1) / frame_h, clipped),
         trusted_name=trusted_name,

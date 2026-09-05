@@ -17,6 +17,7 @@ const String kDefaultUserName = 'Aditya';
 
 const String _kNameKey = 'user_name';
 const String _kLocaleKey = 'tts_locale';
+const String _kMemoryKey = 'object_memory';
 
 /// Spoken-accent choices, as BCP-47 locales the Android TTS engine understands.
 ///
@@ -78,6 +79,30 @@ class AppSettings {
     } catch (_) {
       // keep the default; startup is not worth failing over a preference
     }
+  }
+
+  /// The object memory, as the JSON string `ObjectMemory.toJson` produces.
+  ///
+  /// SharedPreferences rather than a file: the store is capped at a couple of
+  /// hundred small records, so it is tens of kilobytes at worst, and this keeps
+  /// it in the same place as every other persisted setting with no new
+  /// dependency. A failed read returns null and the app starts with an empty
+  /// memory, which is the correct degradation — an unreadable memory must
+  /// never stop the camera coming up.
+  static Future<String?> loadMemoryJson() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_kMemoryKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> saveMemoryJson(String json) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kMemoryKey, json);
+    } catch (_) {}
   }
 
   static Future<void> setTtsLocale(String locale) async {

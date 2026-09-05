@@ -130,6 +130,11 @@ class ObjectInfo {
   /// predicts whether the WORD is right) is measurably false.
   final bool trustedName;
 
+  /// With [centerX], tells whether two objects are NEAR each other, which is
+  /// what lets the object memory say "keys near a table" instead of the much
+  /// weaker "keys, with a table also in view".
+  final double centerY;
+
   const ObjectInfo({
     required this.name,
     required this.confidence,
@@ -141,6 +146,7 @@ class ObjectInfo {
     required this.phrase,
     this.distanceM,
     this.trustedName = false,
+    this.centerY = 0.5,
   });
 }
 
@@ -221,5 +227,6 @@ ObjectInfo analyzeBox(String name, double confidence, double x1, double y1,
     phrase: directionPhrase(hZone, vZone),
     distanceM: distanceMeters(name, (y2 - y1) / frameH, clipped: clipped),
     trustedName: trustedName,
+    centerY: cy,
   );
 }

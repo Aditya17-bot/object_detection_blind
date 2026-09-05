@@ -8,6 +8,7 @@
 //   long press  = repeat last announcement
 // Voice: "walk mode", "find <object>", "describe".
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
@@ -28,6 +29,7 @@ import 'remote_detector.dart';
 import 'logic/agent_actions.dart';
 import 'logic/colour_naming.dart';
 import 'logic/decision.dart';
+import 'logic/object_memory.dart';
 import 'logic/position.dart';
 import 'logic/speech_policy.dart';
 import 'logic/voice_commands.dart';
@@ -140,6 +142,14 @@ class _AssistantScreenState extends State<AssistantScreen>
       // a field walk outlasts the 30-60 s screen timeout; a paused activity
       // stops the camera stream and the app goes silently dead mid-walk
       unawaited(WakelockPlus.enable());
+      // Restore what the app remembers from previous sessions. Failures are
+      // silent by design: an unreadable memory must not stop the camera.
+      final storedMemory = await AppSettings.loadMemoryJson();
+      if (storedMemory != null) {
+        try {
+          _memory.loadJson(jsonDecode(storedMemory), at: _wallClock());
+        } catch (_) {}
+      }
       await _loadDetectorWithRetry();
 
       final cameras = await availableCameras();
@@ -252,6 +262,9 @@ class _AssistantScreenState extends State<AssistantScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      // Backgrounding is the likeliest moment to lose the session's sightings,
+      // so flush unconditionally rather than waiting for the save interval.
+      unawaited(_persistMemory(force: true));
       final cam = _camera;
       if (cam == null) return;
       _camera = null; // _onFrame checks _camera — frames stop immediately
@@ -297,6 +310,30 @@ class _AssistantScreenState extends State<AssistantScreen>
   int _failStreak = 0;
   double _lastFailReminder = 0;
   static const int _failStreakToAnnounce = 5;
+
+  /// Where things were last seen, across sessions. Separate from the engine's
+  /// own 30-second memory, which answers "it just left the frame, which way do
+  /// I turn"; this one answers "where did I leave my keys", which means hours
+  /// and has to survive a restart. See logic/object_memory.dart.
+  final ObjectMemory _memory = ObjectMemory();
+
+  /// Wall-clock seconds. The engine runs on a monotonic clock, but a memory
+  /// that outlives the process cannot.
+  double _wallClock() =>
+      DateTime.now().millisecondsSinceEpoch / 1000.0;
+
+  double _memorySavedAt = 0;
+  static const double _memorySaveInterval = 30.0;
+
+  /// Persist the memory, at most every [_memorySaveInterval] seconds. Writing
+  /// on every frame would be pointless churn; never writing would lose the
+  /// session to a crash.
+  Future<void> _persistMemory({bool force = false}) async {
+    final now = _wallClock();
+    if (!force && now - _memorySavedAt < _memorySaveInterval) return;
+    _memorySavedAt = now;
+    await AppSettings.saveMemoryJson(jsonEncode(_memory.toJson()));
+  }
 
   /// Mean colour of the centre of the last frame, and the whole frame's mean
   /// brightness. Sampled every frame so "what colour is this" answers from
@@ -404,6 +441,8 @@ class _AssistantScreenState extends State<AssistantScreen>
           analyzeBox(d.name, d.confidence, d.x1, d.y1, d.x2, d.y2, 1, 1,
               trustedName: d.trustedName)
       ];
+      _memory.remember(infos, _wallClock());
+      unawaited(_persistMemory());
       final wasFinding = _engine.mode == 'find';
       final findTag = wasFinding ? 'find:${_engine.target}' : null;
       final msg = _engine.update(infos, _now());
@@ -887,9 +926,12 @@ class _AssistantScreenState extends State<AssistantScreen>
   }
 
   // Object memory: speak where a class was last seen, on demand.
+  //
+  // Reads the LONG-TERM store, not the engine's 30-second one: "where are my
+  // keys" means hours ago, and the engine's memory is deliberately short
+  // because it serves find mode's "it just left the frame" hint.
   void _recall(String target) {
-    final msg = _engine.recall(target, _now());
-    _say(msg, kResponse, 'recall');
+    _say(_memory.recall(target, _wallClock()), kResponse, 'recall');
   }
 
   void _describe() {
