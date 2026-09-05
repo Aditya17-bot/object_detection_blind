@@ -59,8 +59,8 @@ STEERING = frozenset({"walk", "find", "stop", "mute", "sonar", "clock",
 # Commands that produce a spoken read-out and nothing else. These are the
 # "cluster" the user reported: individually correct, collectively noise. They
 # wait while another task holds focus.
-INFORMATIONAL = frozenset({"describe", "check", "path", "count", "recall",
-                           "read", "photo"})
+INFORMATIONAL = frozenset({"colour", "light", "describe", "check", "path",
+                           "count", "recall", "read", "photo"})
 
 # A hold that is never released would silence the app forever, so every hold
 # expires. Long enough that a real search is not cut short, short enough that a

@@ -166,6 +166,16 @@ VoiceCommand? parseCommand(String text) {
   if (words.contains('read')) {
     return (action: 'read', target: null); // OCR: read printed text aloud
   }
+  // Colour and brightness, both BEFORE the object queries so "what colour is
+  // the chair" is not dragged into find by the trailing class word.
+  if (words.contains('colour') || words.contains('color')) {
+    return (action: 'colour', target: null);
+  }
+  if (words.contains('bright') ||
+      words.contains('dark') ||
+      words.contains('light')) {
+    return (action: 'light', target: null);
+  }
   // Photo. Checked BEFORE the object queries so "take a picture" never gets
   // dragged into find/count by a stray class word later in the utterance.
   if (words.contains('picture') || words.contains('photo')) {

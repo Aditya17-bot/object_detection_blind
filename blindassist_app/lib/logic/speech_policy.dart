@@ -37,6 +37,7 @@ const Set<String> kSteering = {
 /// Commands that produce a spoken read-out and nothing else — the "cluster"
 /// the user reported: individually correct, collectively noise.
 const Set<String> kInformational = {
+  'colour', 'light',
   'describe', 'check', 'path', 'count', 'recall', 'read', 'photo',
 };
 

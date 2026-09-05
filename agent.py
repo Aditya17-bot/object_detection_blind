@@ -113,6 +113,15 @@ TOOLS = (
     # person, so it must land in the phone's gallery, not app-private storage.
     ToolSpec("photo", "take a photo and save it to the phone's gallery",
              examples=("take a picture", "take a photo", "photo")),
+    # No model, no network: both are computed from the camera's own pixels on
+    # the phone, so they answer with the laptop off. Matching clothes and
+    # knowing whether a room is lit are ordinary daily problems that object
+    # detection does not touch.
+    ToolSpec("colour", "name the colour of whatever the camera is pointed at",
+             examples=("what colour is this", "what color is this", "colour")),
+    ToolSpec("light", "how bright it is here, e.g. whether a room is lit",
+             examples=("is the light on", "how bright is it",
+                       "is it dark here")),
     ToolSpec("clock", "speak directions as clock bearings, e.g. 2 o'clock",
              examples=("clock mode",)),
     ToolSpec("zones", "speak directions as left, ahead and right",

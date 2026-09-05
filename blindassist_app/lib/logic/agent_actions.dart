@@ -70,6 +70,14 @@ const List<ToolSpec> kTools = [
   // A photo is for someone ELSE to look at — the user cannot review it — so it
   // must land in the phone's gallery, not app-private storage.
   ToolSpec('photo', examples: ['take a picture', 'take a photo', 'photo']),
+  // No model, no network: both are computed from the camera's own pixels on
+  // the phone, so they answer with the laptop off. Matching clothes and
+  // knowing whether a room is lit are ordinary daily problems that object
+  // detection does not touch.
+  ToolSpec('colour',
+      examples: ['what colour is this', 'what color is this', 'colour']),
+  ToolSpec('light',
+      examples: ['is the light on', 'how bright is it', 'is it dark here']),
   ToolSpec('clock', examples: ['clock mode']),
   ToolSpec('zones', examples: ['zone mode']),
   ToolSpec('sonar', arg: 'onoff', examples: ['sonar', 'sonar on', 'sonar off']),

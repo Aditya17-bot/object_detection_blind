@@ -26,6 +26,7 @@ import 'features_page.dart';
 import 'settings.dart';
 import 'remote_detector.dart';
 import 'logic/agent_actions.dart';
+import 'logic/colour_naming.dart';
 import 'logic/decision.dart';
 import 'logic/position.dart';
 import 'logic/speech_policy.dart';
@@ -297,10 +298,77 @@ class _AssistantScreenState extends State<AssistantScreen>
   double _lastFailReminder = 0;
   static const int _failStreakToAnnounce = 5;
 
+  /// Mean colour of the centre of the last frame, and the whole frame's mean
+  /// brightness. Sampled every frame so "what colour is this" answers from
+  /// what the camera is pointed at RIGHT NOW, with no capture and no wait.
+  ({int r, int g, int b})? _centreColour;
+  double _frameLuma = 0;
+
+  /// Read the centre patch and the overall brightness straight out of the
+  /// YUV420 planes.
+  ///
+  /// Deliberately a coarse subsample (every 4th pixel of the middle fifth):
+  /// this runs on the UI isolate for every frame, and a mean does not need
+  /// every pixel. Y is luma directly, so brightness costs almost nothing; the
+  /// colour needs U and V, which are half-resolution and indexed accordingly.
+  void _sampleColour(CameraImage image) {
+    try {
+      final y = image.planes[0], u = image.planes[1], v = image.planes[2];
+      final w = image.width, h = image.height;
+      final uvRow = u.bytesPerRow;
+      final uvPix = u.bytesPerPixel ?? 1;
+
+      // whole-frame brightness: a wide stride is plenty for a mean
+      int lumaSum = 0, lumaN = 0;
+      for (int row = 0; row < h; row += 8) {
+        final base = row * y.bytesPerRow;
+        for (int col = 0; col < w; col += 8) {
+          final i = base + col;
+          if (i >= y.bytes.length) break;
+          lumaSum += y.bytes[i];
+          lumaN++;
+        }
+      }
+      _frameLuma = lumaN == 0 ? 0 : (lumaSum / lumaN) / 255.0;
+
+      // centre patch: the middle fifth, which is what the user is aiming at
+      final x0 = (w * 2) ~/ 5, x1 = (w * 3) ~/ 5;
+      final y0 = (h * 2) ~/ 5, y1 = (h * 3) ~/ 5;
+      int rs = 0, gs = 0, bs = 0, n = 0;
+      for (int row = y0; row < y1; row += 4) {
+        final yBase = row * y.bytesPerRow;
+        final uvBase = (row >> 1) * uvRow;
+        for (int col = x0; col < x1; col += 4) {
+          final yi = yBase + col;
+          final uvi = uvBase + (col >> 1) * uvPix;
+          if (yi >= y.bytes.length ||
+              uvi >= u.bytes.length ||
+              uvi >= v.bytes.length) {
+            continue;
+          }
+          final yy = y.bytes[yi].toDouble();
+          final uu = u.bytes[uvi] - 128.0;
+          final vv = v.bytes[uvi] - 128.0;
+          rs += (yy + 1.402 * vv).clamp(0, 255).toInt();
+          gs += (yy - 0.344136 * uu - 0.714136 * vv).clamp(0, 255).toInt();
+          bs += (yy + 1.772 * uu).clamp(0, 255).toInt();
+          n++;
+        }
+      }
+      _centreColour =
+          n == 0 ? null : (r: rs ~/ n, g: gs ~/ n, b: bs ~/ n);
+    } catch (_) {
+      // a malformed frame must never take the camera loop down
+    }
+  }
+
   Future<void> _onFrame(CameraImage image) async {
     final detector = _detector;
     if (_busy || !mounted || _camera == null || detector == null) return;
     _busy = true;
+    // Before the await: these are pure pixel reads, and they must reflect the
+    // frame in hand even when detection is skipped or the server is down.
+    _sampleColour(image);
     try {
       final rotation = _camera!.description.sensorOrientation;
       final detections = await detector.detect(image, rotation);
@@ -601,6 +669,10 @@ class _AssistantScreenState extends State<AssistantScreen>
         _clearPath();
       case 'check':
         _checkDirection(command.target!);
+      case 'colour':
+        _sayColour();
+      case 'light':
+        _sayLight();
       case 'read':
         _readText();
       case 'photo':
@@ -689,6 +761,22 @@ class _AssistantScreenState extends State<AssistantScreen>
     final msg = _engine.count(_infos, target, _now());
     _say(msg, kResponse, 'count');
   }
+
+  // "What colour is this" — answered from the centre of the live frame, with
+  // no capture and no server. Abstains rather than guessing: see
+  // logic/colour_naming.dart for why a wrong colour is worse than none.
+  void _sayColour() {
+    final c = _centreColour;
+    if (c == null) {
+      _say("I can't see anything to check", kResponse, 'colour');
+      return;
+    }
+    _say(colourMessage(c.r, c.g, c.b), kResponse, 'colour');
+  }
+
+  // "Is the light on" — whole-frame brightness. Phrased as how bright it IS,
+  // never as whether a switch is on: a window and a bulb look the same here.
+  void _sayLight() => _say(lightMessage(_frameLuma), kResponse, 'light');
 
   // OCR: capture a still and read any printed text aloud. Pauses the detection
   // stream for the one-shot capture, then resumes it.

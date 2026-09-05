@@ -147,6 +147,28 @@
     {
       "arg": null,
       "examples": [
+        "what colour is this",
+        "what color is this",
+        "colour"
+      ],
+      "internal": false,
+      "name": "colour",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "is the light on",
+        "how bright is it",
+        "is it dark here"
+      ],
+      "internal": false,
+      "name": "light",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
         "clock mode"
       ],
       "internal": false,

@@ -151,6 +151,12 @@ def parse_command(text):
         return ("path", None)  # clear-path finder: "which way is clear"
     if "read" in words:
         return ("read", None)  # OCR: read printed text aloud
+    # Colour and brightness, both BEFORE the object queries so "what colour is
+    # the chair" is not dragged into find by the trailing class word.
+    if "colour" in words or "color" in words:
+        return ("colour", None)
+    if "bright" in words or "dark" in words or "light" in words:
+        return ("light", None)
     # Photo. Checked BEFORE the object queries so "take a picture" never gets
     # dragged into find/count by a stray class word later in the utterance.
     if "picture" in words or "photo" in words:
