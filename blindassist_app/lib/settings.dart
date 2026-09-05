@@ -34,7 +34,10 @@ const Map<String, String> kAccents = {
   'en-ZA': 'South African English',
 };
 
-const String kDefaultLocale = 'en-IN';
+/// British English by default (user choice, 2026-09-05, after hearing them all
+/// side by side on the device). Overridden by whatever the user last picked in
+/// the features page; this only decides what a fresh install speaks with.
+const String kDefaultLocale = 'en-GB';
 
 /// "Good morning" / "Good afternoon" / "Good evening" for [now].
 /// Boundaries: <12 morning, <17 afternoon, else evening.
