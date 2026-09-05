@@ -792,12 +792,20 @@ class OllamaRouter:
 
     def __init__(self, model="llama3.2:3b",
                  host="http://127.0.0.1:11434", timeout=8.0,
-                 keep_alive="30m", num_predict=128):
+                 keep_alive="30m", num_predict=128, cpu_only=False):
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.keep_alive = keep_alive
         self.num_predict = num_predict
+        # Keep this model off the GPU. The card holds both detectors and the
+        # routing model, and a SECOND resident model makes ollama evict one on
+        # every alternation: measured, that took routing from 281 ms to 5.9 s
+        # and summarising to 8.7 s, because each request reloaded whatever the
+        # last one displaced. On CPU a summary costs ~2 s warm and cannot
+        # disturb anything, which is the right trade for a capability the user
+        # invokes deliberately while standing still.
+        self.cpu_only = cpu_only
         self.error = None
 
     def _post(self, path, payload, timeout=None):
@@ -839,6 +847,9 @@ class OllamaRouter:
         sentence to fall back to, so an unavailable model must degrade rather
         than raise.
         """
+        options = {"temperature": temperature, "num_predict": num_predict}
+        if self.cpu_only:
+            options["num_gpu"] = 0
         try:
             body = self._post("/api/generate", {
                 "model": self.model,
@@ -846,8 +857,7 @@ class OllamaRouter:
                 "stream": False,
                 "think": False,
                 "keep_alive": self.keep_alive,
-                "options": {"temperature": temperature,
-                            "num_predict": num_predict},
+                "options": options,
             })
         except Exception:                # noqa: BLE001 - never break the caller
             return None

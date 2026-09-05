@@ -27,13 +27,25 @@ from text_summary import summarise
 
 
 def register_agent_routes(app, router, transcriber=None, execute=None,
-                          get_state=None):
-    """Attach POST /agent to `app`.
+                          get_state=None, summary_llm=None):
+    """Attach POST /agent, /phrase and /summarise to `app`.
 
     router       — an agent.AgentRouter
     transcriber  — a transcribe.Transcriber, or None for text-only
     execute      — optional (RouteResult) -> list[str] of spoken messages
     get_state    — optional () -> the deterministic state dict for the router
+    summary_llm  — optional SEPARATE model for /summarise; falls back to the
+                   router's own.
+
+    The separate summariser is not premature generality, it is a measured
+    trade. Routing runs while frames stream and wants the smallest model that
+    can classify: llama3.2:1b routes in 281 ms under load where 3b takes
+    6-8 s, because they share one 4 GB GPU with both detectors. Summarising
+    runs with the camera PAUSED, so latency barely matters — and 1b is not
+    safe at it. Asked to summarise a real overdraft letter it reported that
+    the account "has been closed", a material fabrication that the figure
+    check cannot catch because it contains no figure. 3b was vaguer and never
+    wrong.
     """
 
     @app.post("/agent")
@@ -146,7 +158,7 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
         text = payload.get("text")
         if not isinstance(text, str):
             return jsonify(error="text is required"), 400
-        llm = getattr(router, "llm", None)
+        llm = summary_llm or getattr(router, "llm", None)
         caller = (lambda p: llm.complete(p, num_predict=160)) \
             if llm is not None else None
         message, how = summarise(text, llm=caller)

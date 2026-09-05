@@ -140,7 +140,12 @@ class AgentClient {
           .post(_summariseUri,
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode({'text': text}))
-          .timeout(const Duration(seconds: 15));
+          // Generous: the summarising model is not held in VRAM (it shares a
+          // 4 GB card with both detectors and the router), so the first
+          // summary of a session pays ~10 s for the model load. The app says
+          // "Summarising" before this, so the wait is announced rather than
+          // silent.
+          .timeout(const Duration(seconds: 40));
       if (r.statusCode != 200) return null;
       final body = jsonDecode(r.body);
       if (body is! Map) return null;

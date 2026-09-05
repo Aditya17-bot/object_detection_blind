@@ -1144,3 +1144,65 @@ the same index scores 104/105 correct on the rooms it has seen. §4.9's benefit
 is room-specific until labelled, and any claim about naming accuracy must say
 which rooms are in the index.
 
+### 2026-09-05 (late) — Verified generation: the model may choose words, never facts
+
+Two capabilities added that let a language model produce user-facing prose for
+the first time, under a mechanism that makes doing so compatible with the §9
+thesis rather than a retreat from it.
+
+**The mechanism.** Where §4.7 kept the model out of the speech channel and the
+2026-08-03 work narrowed that to "no *guidance* token", this narrows it again
+and more usefully: the model may write the SENTENCE, but every FACT in the
+sentence is checked against the structured record it was given, and a reply
+failing the check is discarded in favour of a deterministic template the caller
+already holds. The asymmetry is the claim: the model can only improve the
+phrasing, never change what is asserted, and a weak model, a timeout, an absent
+server and a hallucination all produce the same output as having no model at
+all. This is `argument_is_grounded` generalised from tool arguments to prose.
+
+Instantiated twice, with different checkable invariants:
+
+  * **Memory phrasing** — object names must be ones the object was actually
+    beside; numbers must appear in the record. The vocabulary is closed, so
+    this is decidable.
+  * **Document summarising** — every number in the summary must appear in the
+    source text. The vocabulary is NOT closed (the source is arbitrary), so
+    nouns cannot be validated, and the limitation is stated in the module and
+    mitigated by always offering the full text.
+
+**Three findings that only appeared against real models, and that a reviewer
+would ask about.** Each is now a regression test.
+
+1. *The first verifier checked nouns, not relationships.* For a record whose
+   "beside" list was empty and whose room context held a bed, both llama3.2:1b
+   and 3b wrote "beside the bed", and the check passed it because `bed`
+   appeared somewhere in the record. Fixed by withholding room context from the
+   model entirely: a spoken sentence cannot reliably carry the beside/in-the-
+   room distinction, so the model is never given the chance to blur it.
+2. *Comparing numbers by spelling produced false rejections.* "about two hours
+   ago" against a record of "about 2 hours ago" is the same fact in the form a
+   spoken interface should use, and it was three of four rejections in the
+   first run. Verification must normalise before comparing, or it punishes the
+   correct behaviour.
+3. *Length is not falsehood.* Rejecting long replies discarded a truthful
+   prescription summary containing no figures at all. Verbosity is trimmed;
+   only claims are rejected.
+
+**A measured negative result worth reporting.** Model size is not monotonic
+here. llama3.2:1b routes 20x faster than 3b under frame load (281 ms vs
+6-8 s) and is unsafe at summarising: asked to summarise a real overdraft letter
+it reported the account "has been closed" — a material fabrication containing no
+number, which the figure check cannot catch by construction. The same check that
+makes 3b's summaries safe is blind to 1b's characteristic error. Any claim of
+the form "verification makes small models safe" must therefore be qualified:
+verification bounds the class of error it can decide, and choosing that class
+is a design decision about which errors matter.
+
+**A deployment constraint for the latency claims.** The router and the
+summariser cannot both be GPU-resident on a 4 GB card alongside two detectors;
+two resident models thrash, taking routing from 281 ms to 5.9 s as each request
+reloads what the last displaced. The summariser therefore runs CPU-only
+(`num_gpu: 0`), which is affordable precisely because summarising is a
+deliberate, stationary act with the camera paused. Any published latency figure
+for a multi-model assistive pipeline should state the residency arrangement.
+

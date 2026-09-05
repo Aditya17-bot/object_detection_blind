@@ -1706,3 +1706,109 @@ and it is now the single highest-value action left.
 Test counts: **342 Python / 217 Dart**, analyze clean apart from the 3
 pre-existing `avoid_print` infos.
 
+## Colour, light, persistent memory, verified phrasing, summariser (2026-09-05, late)
+
+User asked what else the app could do and what blind people actually need.
+Four capabilities landed; "get help" (emergency contact) was scoped and
+deliberately NOT built yet.
+
+**Run the server with two models now:**
+
+    venv-gpu\Scripts\python.exe -u infer_server.py \
+        --agent-model llama3.2:1b --summary-model llama3.2:3b
+
+### colour + light — no model at all
+
+`colour_naming.py` / `lib/logic/colour_naming.dart`. Centre-patch mean RGB and
+whole-frame luma, subsampled on the UI isolate in `_sampleColour`, so both
+answer with the laptop off and work in ANY room — which matters because the
+naming index abstains everywhere it has not been labelled.
+
+Both ABSTAIN: white balance and lighting move measured colour a long way, and a
+user matching clothes cannot check the answer, so `nameColour` returns null for
+a patch too dark or blown out. `lightMessage` never claims a switch is on — a
+camera cannot tell a bulb from a window — and a test asserts no message ever
+says so. Brown is handled as dark orange, because "orange trousers" and "brown
+trousers" are different garments.
+
+### object memory that survives restarts
+
+`object_memory.py` / `lib/logic/object_memory.dart`, separate from the engine's
+30-second memory ON PURPOSE: that one is monotonic and short because it serves
+find mode's "it just left the frame". Keys mean hours, across restarts, so this
+one is wall-clock, day-long, and stores CONTEXT (what the object was beside, via
+centre distance — hence `ObjectInfo.center_y`) rather than a frame position,
+which is meaningless once the user has moved.
+
+**Age is spoken first**, and that is a safety decision: a remembered location is
+a claim about the past acted on in the present. Persisted via
+shared_preferences, saved every 30 s and flushed on backgrounding.
+
+### verified phrasing — the model may choose words, never facts
+
+`memory_phrasing.py` + `POST /phrase`. The phone ships the record and its own
+deterministic sentence; the server lets the model reword it and then CHECKS
+every object and number against the record. Failure returns the fallback, so
+the model can only improve the wording. Three fixes came from running it
+against the real models rather than trusting the unit tests:
+
+- The verifier validated NOUNS, not the RELATIONSHIP. Both 1b and 3b turned
+  "also in the room" into "beside the bed" for a record whose `near` was empty,
+  and it was accepted because `bed` appeared somewhere. `context` is now
+  withheld from the model entirely, and a record with nothing beside the object
+  never reaches it.
+- Numbers were compared by SPELLING. "about two hours ago" against an age
+  phrase of "about 2 hours ago" was rejected as invented — three of four
+  rejections in the first run. Now compared by value.
+- A reply may not drop the place ("Your bottle was beside you").
+
+After: 1b 3/4 at 188 ms, 3b 4/4 at 359 ms. The one 1b rejection was a real
+hallucination ("it's about 5 years old") the user never heard.
+
+### document summariser
+
+`text_summary.py` + `POST /summarise`. Capture, OCR on-device, post only the
+TEXT. **No RAG, deliberately** — a page is under a thousand tokens, so retrieval
+would buy latency for a problem that does not exist. Retrieval earns its place
+only for a later feature: questions across many previously scanned documents.
+
+Every number in the summary must appear in the source. What that canNOT check
+is stated in the module: the source is arbitrary text, so prose can still
+mischaracterise it — hence every answer ends "Say read for the full text".
+Corrections from live runs: length now TRIMS rather than rejects (a truthful
+prescription summary was refused for verbosity), model asides are stripped
+("(Note: I have followed the rules provided)"), and self-restatement is dropped
+by content overlap because small models merge their own earlier sentences.
+
+### ⚠ Two models, and why the summariser runs on CPU
+
+Routing and summarising want opposite things and cannot share the 4 GB card.
+
+| | routing | summarising |
+|---|---|---|
+| llama3.2:1b | **281 ms** under load | UNSAFE — reported a real overdraft letter as saying the account "has been closed", a material fabrication with no figure in it, so the number check cannot catch it |
+| llama3.2:3b | 6-8 s under load | correct, vaguer |
+
+Two GPU-resident models THRASH: measured, routing went 281 ms -> 5.9 s and
+summaries to 8.7 s because each request reloaded whatever the last displaced
+(nvidia-smi showed ollama evicting). So `OllamaRouter(cpu_only=True)` sends
+`num_gpu: 0` for the summariser only. Measured after: routing steady at
+438-500 ms, summaries 4.3 s cold / 2.5 s warm, VRAM flat at 1720 MiB.
+
+Test counts: **425 Python / 250 Dart**, analyze clean apart from the 3
+pre-existing `avoid_print` infos.
+
+### Considered and deliberately not built
+
+- **Phone calls.** CALL_PHONE is grantable and permission_handler is already a
+  dependency, but: Vosk cannot hear contact names (grammar-constrained), a
+  spurious call is the worst failure this app could have (the router turned
+  "the is my on" into `walk` two days ago), and Google Assistant already does
+  it better hands-free. The "get help" variant — one contact, spoken
+  confirmation, safety framing — is scoped and still worth building.
+- **RAG.** See above. Right tool, wrong problem, until there are many documents.
+- **Place recognition** ("in the bedroom"). GPS is useless indoors; the viable
+  route is embedding whole frames and letting the user name places once, which
+  is the naming-index pattern applied to scenes. Not built. The current answer
+  uses co-visible objects instead, which is grounded in what was actually seen.
+

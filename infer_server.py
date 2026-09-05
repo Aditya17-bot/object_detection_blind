@@ -122,7 +122,8 @@ _AUTO = object()  # sentinel: custom_model=None must mean "explicitly none"
 
 def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
               coco_model=None, custom_model=_AUTO, imgsz=640,
-              router=None, transcriber=None, name_index=None, namer=None):
+              router=None, transcriber=None, name_index=None, namer=None,
+              summary_llm=None):
     """coco_model/custom_model override the paths — lets tests inject fakes
     without loading real weights (same pattern as test_webapp.py).
     custom_model=None disables the custom model; leaving it unset loads
@@ -265,7 +266,8 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
     # has no GuidanceEngine and no frame state, and inventing one would put a
     # second source of truth behind the user's ear.
     if router is not None:
-        register_agent_routes(app, router, transcriber)
+        register_agent_routes(app, router, transcriber,
+                              summary_llm=summary_llm)
 
     return app
 
@@ -294,6 +296,14 @@ if __name__ == "__main__":
                          "is still worth passing explicitly when the phone is "
                          "not streaming. Omit the flag for keyword routing "
                          "only.")
+    ap.add_argument("--summary-model", nargs="?", const="llama3.2:3b",
+                    help="model for /summarise only. Defaults to llama3.2:3b "
+                         "when --agent-model is set to something smaller: "
+                         "summarising runs with the camera paused so latency "
+                         "barely matters, and llama3.2:1b is not safe at it "
+                         "(it reported a real overdraft letter as saying the "
+                         "account had been closed). Pass the same name as "
+                         "--agent-model to use one model for everything.")
     ap.add_argument("--whisper-model", nargs="?", const="small.en",
                     help="local faster-whisper model for WAV uploads to "
                          "/agent (default small.en)")
@@ -305,6 +315,25 @@ if __name__ == "__main__":
         print(f"Agent tier 1: warming up {llm.model}...")
         print("  ready" if llm.warmup()
               else f"  UNAVAILABLE — {llm.error} (keyword routing still works)")
+    # A SEPARATE, larger model for /summarise. Routing runs while frames stream
+    # and wants the smallest model that can classify; summarising runs with the
+    # camera paused, so it can afford a better one -- and needs it, because 1b
+    # reported a real overdraft letter as saying the account had been closed.
+    # Not warmed up: it is loaded on the first summary the user asks for, which
+    # costs a few seconds once rather than holding VRAM the detectors need.
+    summary_llm = None
+    if args.summary_model and args.summary_model != args.agent_model:
+        # A long timeout, because this model is NOT resident: 1b + 3b + both
+        # detectors exceed the 4 GB card, so ollama loads it on demand and the
+        # first summary of a session pays ~10 s for the load. The routing
+        # default of 8 s was killing exactly that request and reporting it to
+        # the user as a failure. Latency here is affordable -- the camera is
+        # paused and the user is holding the phone over a page -- and
+        # keep_alive means only the first one pays.
+        summary_llm = agent.OllamaRouter(model=args.summary_model,
+                                         timeout=90.0, cpu_only=True)
+        print(f"Summaries use {summary_llm.model} on CPU "
+              "(loaded on first use; keeps the GPU for routing and detection)")
     transcriber = None
     if args.whisper_model:
         from transcribe import Transcriber
@@ -315,7 +344,7 @@ if __name__ == "__main__":
 
     app = build_app(args.model, args.extra_model, imgsz=args.imgsz,
                     router=agent.AgentRouter(llm=llm), transcriber=transcriber,
-                    name_index=args.name_index)
+                    name_index=args.name_index, summary_llm=summary_llm)
     start_discovery_responder(args.port)
     print(f"BlindAssist inference server on http://{args.host}:{args.port} "
           f"(UDP discovery on {DISCOVERY_PORT})")
