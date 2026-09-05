@@ -58,13 +58,19 @@ String _cap(String text) => text[0].toUpperCase() + text.substring(1);
 // Walk Mode
 // ---------------------------------------------------------------------------
 
+/// Walk Mode speaks ONLY at this proximity or nearer. Field feedback
+/// 2026-07-31: continuous naming of everything in the room ("too much of a
+/// cluster") drowned the warnings that mattered — the user stops listening,
+/// and an ignored warning is worth less than silence. Medium obstacles are
+/// therefore silent even dead ahead; the full inventory moved to describe()
+/// and checkDirection(), which are on-demand and interrupt nothing.
+/// Mirror of decision.WALK_MIN_PROXIMITY.
+const String walkMinProximity = 'close';
+
 /// Is this detection worth warning about at all?
 bool _relevantObstacle(ObjectInfo info) {
   if (!obstacleClasses.contains(info.name)) return false;
-  if (info.proximity == 'far') return false;
-  // medium-distance obstacles only matter when they are in the walking path
-  if (info.proximity == 'medium' && info.hZone != 'center') return false;
-  return true;
+  return _proxRank[info.proximity]! >= _proxRank[walkMinProximity]!;
 }
 
 /// Sort key: closer wins, then more central, then bigger.
@@ -105,12 +111,28 @@ String _freerSide(ObjectInfo chosen, List<ObjectInfo> infos) {
 /// Spoken warning for the chosen obstacle. Short on purpose; vertical zone is
 /// irrelevant for walking, so only left/ahead/right (or the clock bearing when
 /// useClock) is spoken.
+/// Three ways a name earns the right to be spoken, in order of evidence:
+///
+/// 1. [ObjectInfo.trustedName] — the embedding naming head committed a rename,
+///    or the detection came from the dedicated door/dustbin model. The
+///    strongest signal and the only calibrated one: a rename had to beat every
+///    competing label by MIN_MARGIN and survive hysteresis.
+/// 2. [trustedNameClasses] — a class with no COCO lookalike to confuse.
+/// 3. confidence >= [nameConfidence] — the legacy gate, for un-renamed COCO
+///    detections only. Its stated basis is FALSIFIED (EVALUATION.md 6.2):
+///    misnames and correct names occupy overlapping confidence bands, so no
+///    threshold separates them. Kept as a weak prior against speaking a
+///    low-confidence guess by name, not because the number means what the
+///    original probe claimed.
+String _spokenName(ObjectInfo info) => (info.trustedName ||
+        trustedNameClasses.contains(info.name) ||
+        info.confidence >= nameConfidence)
+    ? info.name
+    : 'obstacle';
+
 String walkMessage(ObjectInfo info,
     [List<ObjectInfo> allInfos = const [], bool useClock = false]) {
-  final name = (trustedNameClasses.contains(info.name) ||
-          info.confidence >= nameConfidence)
-      ? info.name
-      : 'obstacle';
+  final name = _spokenName(info);
   final side = useClock ? clockPhrase(info.centerX) : _sideWord[info.hZone]!;
   if (info.proximity == 'very close') {
     final String dodge;
@@ -182,6 +204,49 @@ String clearPath(List<ObjectInfo> infos) {
   }
   if (ranks[best]! >= _proxRank['close']!) return 'Stop, no clear path';
   return _pathWord[best]!;
+}
+
+// ---------------------------------------------------------------------------
+// Directional query ("is there anything on my left?")
+// ---------------------------------------------------------------------------
+// The question a blind user actually asks, and the one the old command set
+// could not answer: walk mode volunteers ONE obstacle, describe() dumps the
+// whole room, neither answers "what is over there". Deterministic and on the
+// PHONE, so it works with the laptop switched off and its answer can never be
+// a language model's invention. Mirror of decision.check_direction.
+
+const Map<String, String> _dirZone = {
+  'left': 'left',
+  'ahead': 'center',
+  'right': 'right',
+};
+const Map<String, String> _dirWord = {
+  'left': 'on your left',
+  'ahead': 'ahead',
+  'right': 'on your right',
+};
+const int _checkLimit = 2; // two things is an answer; five is another cluster
+
+/// What is in one third of the frame, closest first. Returns null for a
+/// direction we do not have (the caller abstains rather than guessing).
+String? checkDirection(List<ObjectInfo> infos, String direction) {
+  final zone = _dirZone[direction];
+  if (zone == null) return null;
+  final here = infos.where((i) => i.hZone == zone).toList();
+  if (here.isEmpty) return _cap('nothing ${_dirWord[direction]}');
+  here.sort((a, b) {
+    final r = _proxRank[b.proximity]!.compareTo(_proxRank[a.proximity]!);
+    return r != 0 ? r : b.area.compareTo(a.area);
+  });
+  final first = _spokenName(here.first);
+  final parts = <String>[
+    '${_article(first)} $first ${here.first.proximity} ${_dirWord[direction]}'
+  ];
+  for (final extra in here.skip(1).take(_checkLimit - 1)) {
+    final name = _spokenName(extra);
+    parts.add('and ${_article(name)} $name ${extra.proximity}');
+  }
+  return _cap(parts.join(', '));
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +323,7 @@ String summarizeScene(List<ObjectInfo> infos) {
   final groups = <String, List<num>>{};
   final keyName = <String, String>{}, keyZone = <String, String>{};
   for (final i in infos) {
-    final key = '${i.name} ${i.hZone}';
+    final key = '${i.name}|${i.hZone}';
     keyName[key] = i.name;
     keyZone[key] = i.hZone;
     final entry = groups.putIfAbsent(key, () => [0, 0.0]);
@@ -295,18 +360,43 @@ class GuidanceEngine {
   final double repeatCooldown; // s before repeating same message
   final double minGap;         // s between any two messages
   final int persistence;       // frames a class must persist
+
+  /// Find mode is DELIBERATELY more eager than walk mode, because the errors
+  /// are not symmetric. The user ASKED for this object: announcing a
+  /// misdetection costs them one wasted look, while staying silent about an
+  /// object that is on screen reads as "the app is broken" - and a blind user
+  /// cannot glance at the screen to find out which it was. Measured on the
+  /// 2026-09-05 room walk: at the phone's real 2 FPS the person was detected
+  /// in runs of [1,1,1,1,2,2] frames, so requiring two CONSECUTIVE frames
+  /// missed four of six sightings and announced "not visible" with the person
+  /// in frame.
+  final int findPersistence;
+
+  /// ...and the reverse claim needs MORE evidence, not less. Saying "not
+  /// visible" about something visible is the expensive error, so absence is
+  /// measured in SECONDS of continuous non-detection rather than in frames,
+  /// which also stops the threshold meaning different things on a 2 FPS phone
+  /// and a 6 FPS laptop.
+  final double absenceGrace;
+
+  /// Evidence DECAYS, it is not erased. A single missed frame used to reset a
+  /// streak to zero, so an object detected on alternate frames never
+  /// accumulated anything. A lone misdetection still decays away without ever
+  /// reaching [persistence], so this does not make false positives likelier.
+  final double missDecay;
+
   final double reminderInterval; // s between "still looking" reminders
   final double memoryTtl;      // s before a sighting goes stale
 
   bool useClock;               // clock bearings vs left/center/right
 
-  Map<String, int> _streaks = {};
+  Map<String, double> _streaks = {};
   final Map<String, (ObjectInfo, double)> _memory = {}; // name -> (info, time)
   String? _lastMsg;
   double? _lastTime;
   String? _lastObstacleName; // of last walk warning
   int? _lastObstacleRank;
-  int _absent = 0;           // find mode: consecutive frames w/o target
+  double? _absentSince;      // find mode: when the target went missing
   bool _saidNotVisible = false;
   double? _notVisibleTime;   // when "not visible"/reminder last said
 
@@ -319,6 +409,9 @@ class GuidanceEngine {
     this.repeatCooldown = 3.0,
     this.minGap = 1.5,
     this.persistence = 2,
+    this.findPersistence = 1,
+    this.absenceGrace = 2.5,
+    this.missDecay = 0.5,
     this.reminderInterval = 10.0,
     this.memoryTtl = 30.0,
     this.useClock = true,
@@ -343,7 +436,7 @@ class GuidanceEngine {
     _lastMsg = null;
     _lastObstacleName = null;
     _lastObstacleRank = null;
-    _absent = 0;
+    _absentSince = null;
     _saidNotVisible = false;
     _notVisibleTime = null;
   }
@@ -391,9 +484,16 @@ class GuidanceEngine {
     // persistence is tracked per class name (not per zone) so an object keeps
     // its streak while the user walks and it drifts across zones; one-frame
     // misdetections never reach `persistence` and stay silent.
-    final next = <String, int>{};
-    for (final i in infos) {
-      next[i.name] = (_streaks[i.name] ?? 0) + 1;
+    final seen = infos.map((i) => i.name).toSet();
+    final cap = (persistence > findPersistence ? persistence : findPersistence)
+        .toDouble() + 1.0;
+    final next = <String, double>{};
+    for (final name in {..._streaks.keys, ...seen}) {
+      final prev = _streaks[name] ?? 0.0;
+      final score = seen.contains(name)
+          ? (prev + 1.0 < cap ? prev + 1.0 : cap)
+          : prev - missDecay;
+      if (score > 0) next[name] = score;
     }
     _streaks = next;
     _remember(infos, now);
@@ -424,8 +524,12 @@ class GuidanceEngine {
   String? _updateFind(List<ObjectInfo> infos, double now) {
     final match = findTarget(infos, target!);
     if (match == null) {
-      _absent += 1;
-      if (_absent < persistence) return null; // flicker, not really gone
+      _absentSince ??= now;
+      // Not "gone" until it has been continuously missing for a while. One
+      // dropped frame - or one flicker in the detector - is not evidence of
+      // absence, and calling it absence is what made the app announce
+      // "Person not visible" with the person on screen.
+      if (now - _absentSince! < absenceGrace) return null;
       if (_saidNotVisible) {
         // target still missing: remind periodically so long silence never
         // reads as "the app stopped working" (a blind user cannot glance
@@ -452,8 +556,8 @@ class GuidanceEngine {
       _notVisibleTime = now;
       return _speak(msg, now);
     }
-    _absent = 0;
-    if ((_streaks[target!] ?? 0) < persistence) return null;
+    _absentSince = null;
+    if ((_streaks[target!] ?? 0) < findPersistence) return null;
     _saidNotVisible = false;
     final msg = findMessage(match, target!, useClock);
     if (!_clearToSpeak(msg, now)) return null;
@@ -478,4 +582,56 @@ class GuidanceEngine {
   /// On-demand count of one class ("how many chairs"); stamps the clock.
   String count(List<ObjectInfo> infos, String target, double now) =>
       _speak(countMessage(infos, target), now);
+
+  /// Compact FACTS for the remote router, built from the detector's own
+  /// output and this engine's state — never from a description. Mirror of
+  /// agent.state_summary; the phone is the only party that knows what is on
+  /// screen, so it ships this with every /agent request. It is what lets the
+  /// laptop's LLM answer "is the door still there" from perception instead of
+  /// from imagination.
+  Map<String, dynamic> stateSummary(List<ObjectInfo> infos, double now) {
+    final grouped = <String, Map<String, dynamic>>{};
+    for (final i in infos) {
+      final e = grouped.putIfAbsent(
+          i.name,
+          () => {
+                'name': i.name,
+                'zone': i.hZone,
+                'proximity': i.proximity,
+                'count': 0,
+                '_area': -1.0,
+              });
+      e['count'] = (e['count'] as int) + 1;
+      if (i.area > (e['_area'] as double)) {
+        // describe the most visible instance
+        e['zone'] = i.hZone;
+        e['proximity'] = i.proximity;
+        e['_area'] = i.area;
+      }
+    }
+    final visible = grouped.values
+        .map((e) => {for (final k in e.keys.where((k) => k != '_area')) k: e[k]})
+        .toList();
+    final remembered = _memory.entries
+        .where((e) => now - e.value.$2 <= memoryTtl)
+        .map((e) => e.key)
+        .toList()
+      ..sort();
+    return {
+      'mode': mode,
+      'target': target,
+      'clock': useClock,
+      'visible': visible,
+      'last_said': _lastMsg,
+      'remembered': remembered,
+    };
+  }
+
+  /// On-demand directional query ("anything on my left?"); stamps the clock
+  /// like describe(). null (unknown direction) passes straight through so the
+  /// caller abstains instead of inventing an answer.
+  String? check(List<ObjectInfo> infos, String direction, double now) {
+    final msg = checkDirection(infos, direction);
+    return msg == null ? null : _speak(msg, now);
+  }
 }

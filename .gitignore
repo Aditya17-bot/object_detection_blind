@@ -1,14 +1,22 @@
 # environment
 venv/
+# CUDA env (torch 2.6.0+cu124, the cp39 ceiling). Kept SEPARATE from venv/ on
+# purpose: venv/ stays a known-good fallback. See CLAUDE.md "GPU enablement".
+venv-gpu/
 __pycache__/
 *.pyc
 .claude/
+
+# git bundles used to move branches between machines when a session can't push
+*.bundle
 
 # auto-downloaded weights (ultralytics fetches these on first run;
 # door_dustbin_stairs.pt is OUR trained model and IS committed)
 yolov8n.pt
 yolov8s.pt
 yolo11n.pt
+yolo11s.pt
+yolov8s-worldv2.pt
 
 # offline speech model — grab it once from
 # https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
@@ -35,3 +43,8 @@ dart_port/
 blindassist_app/android/build/
 blindassist_app/build/
 blindassist_app/android/.kotlin/
+
+# Room-specific crop harvest staging (photos of the user's home) and the
+# working copy of the clip they were cut from — regenerate with harvest_crops.py
+test_output/crops_room/
+test_output/room_clips/

@@ -20,12 +20,31 @@ OBSTACLE_CLASSES = {
     "toilet", "sink", "refrigerator", "tv", "potted plant",
     "suitcase", "backpack",
     "door", "dustbin",
+    # "wardrobe" is not a COCO class and no model detects it: it exists so the
+    # embedding naming head (name_index.py) has a correct word to replace the
+    # forced COCO choice with. YOLO calls the user's white wardrobe
+    # "refrigerator" at 0.84 — right box, wrong word, and confidence cannot
+    # tell the two apart (see EVALUATION.md).
+    "wardrobe",
+    # "laundry basket" is likewise namer-only. COCO's nearest words for one are
+    # "handbag" (dropped entirely — not a target class, so it is invisible
+    # today) or "suitcase" (warned, wrong word). It is an obstacle because it
+    # is a waist-high object that lives on the floor: exactly what walk mode
+    # exists to warn about. User-supplied dimensions 2026-08-02: 0.85 m tall,
+    # 0.3 m wide.
+    "laundry basket",
 }
 # Small items a user searches for → Find Mode only, never obstacle warnings.
 # "toothbrush" is COCO class 79 (already in the model) — added so it can be a
 # Find / favorites-beacon target; small + often edge-clipped, so detection is
 # best-effort.
-FIND_CLASSES = {"bottle", "cup", "laptop", "cell phone", "book", "toothbrush"}
+# "window" is likewise namer-only (YOLO calls one "tv"). It is deliberately a
+# FIND class, not an obstacle: a window is a landmark worth asking for — it is
+# where the light and the street noise are — but walking "into" one is not the
+# hazard the walk warnings exist for, and warning about every window would add
+# exactly the chatter WALK_MIN_PROXIMITY was raised to remove.
+FIND_CLASSES = {"bottle", "cup", "laptop", "cell phone", "book", "toothbrush",
+                "window"}
 
 TARGET_CLASSES = OBSTACLE_CLASSES | FIND_CLASSES
 
@@ -56,6 +75,11 @@ _AREA_THRESHOLDS = {
     # dustbin is suitcase-sized)
     "door":         (0.40, 0.20, 0.08),
     "dustbin":      (0.25, 0.10, 0.03),
+    # namer-only classes (no detector emits these; name_index.py assigns them)
+    "wardrobe":     (0.40, 0.20, 0.08),   # bulk of a refrigerator
+    "window":       (0.30, 0.12, 0.04),   # wall-mounted, tv-like footprint
+    # taller than a suitcase but narrower, so a similar box area
+    "laundry basket": (0.25, 0.10, 0.03),
     # small find-items
     "bottle":       (0.05, 0.015, 0.004),
     "cup":          (0.03, 0.010, 0.003),
@@ -84,7 +108,9 @@ _REAL_HEIGHTS = {
     "person": 1.7, "chair": 0.9, "couch": 0.8, "dining table": 0.75,
     "bench": 0.85, "toilet": 0.7, "sink": 0.85, "refrigerator": 1.7,
     "tv": 0.6, "potted plant": 0.6, "suitcase": 0.7, "backpack": 0.5,
-    "door": 2.0, "dustbin": 0.6, "bottle": 0.25, "cup": 0.1,
+    "door": 2.0, "dustbin": 0.6, "wardrobe": 2.0, "window": 1.2,
+    "laundry basket": 0.85,
+    "bottle": 0.25, "cup": 0.1,
     "laptop": 0.20, "book": 0.24, "cell phone": 0.14, "toothbrush": 0.19,
 }
 
@@ -113,6 +139,11 @@ class ObjectInfo:
     center_x: float      # 0..1, for sonar panning later
     phrase: str          # human-friendly location, e.g. "top right"
     distance_m: float = None  # rough meters (pinhole), None if not estimable
+    # True when the NAME is independently vouched for — a dedicated-model class
+    # (door/dustbin) or a committed rename from the embedding naming head. Such
+    # a name bypasses decision.NAME_CONFIDENCE, whose premise (that detector
+    # confidence predicts whether the WORD is right) is measurably false.
+    trusted_name: bool = False
 
 
 def _zone(value, zones):
@@ -135,17 +166,36 @@ def direction_phrase(h_zone, v_zone):
 
 # Clock-face bearing. Orientation & Mobility instructors teach blind travelers
 # to locate things by clock position ("your cup is at 2 o'clock"), so speaking
-# bearings this way matches training people already have. A forward phone camera
-# sees roughly a 60-70 degree cone, so the visible frame width maps to 10
-# through 2 o'clock, 12 straight ahead — finer than the 3 left/center/right
-# zones. Derived from center_x on demand; not stored on ObjectInfo.
-_CLOCK_HOURS = (10, 11, 12, 1, 2)
+# bearings this way matches training people already have.
+#
+# CORRECTED 2026-09-05. The old mapping spread the frame over 10-11-12-1-2,
+# which is FOUR hours = 120 degrees, across a camera that sees ~65. Every
+# bearing came out roughly DOUBLE the true angle: the right frame edge sits at
+# about +32 deg and was announced as "2 o'clock" (+60). Clock mode is the
+# default, so an O&M-trained traveller — precisely the user this feature is
+# for — was being systematically over-rotated.
+#
+# The hour is now DERIVED from the field of view rather than hard-coded, so the
+# mapping stays honest if the camera changes: one clock hour is 30 degrees, the
+# frame spans CAMERA_FOV_DEG, and 12 o'clock is dead ahead. At 65 deg that
+# yields 11-12-1 and nothing wider.
+#
+# Consequence worth stating plainly: at this FOV clock bearings CANNOT be finer
+# than left/center/right — three hours, three zones. The feature's value is the
+# VOCABULARY (a trained traveller hears "11 o'clock" natively), not extra
+# angular resolution. Claiming otherwise was part of the original error.
+CAMERA_FOV_DEG = 65.0
+_DEGREES_PER_HOUR = 30.0
 
 
 def clock_hour(center_x):
-    """Horizontal position (0..1) -> clock hour in {10, 11, 12, 1, 2}."""
-    idx = min(int(center_x * len(_CLOCK_HOURS)), len(_CLOCK_HOURS) - 1)
-    return _CLOCK_HOURS[idx]
+    """Horizontal position (0..1) -> clock hour, 12 = straight ahead.
+
+    center_x 0.5 is the optical axis; the offset from it is scaled by the real
+    field of view and rounded to the nearest hour on a 12-hour face."""
+    bearing = (min(max(center_x, 0.0), 1.0) - 0.5) * CAMERA_FOV_DEG
+    hour = round(bearing / _DEGREES_PER_HOUR)
+    return 12 if hour == 0 else (hour if hour > 0 else 12 + hour)
 
 
 def clock_phrase(center_x):
@@ -164,7 +214,8 @@ def proximity_bucket(name, area):
     return "far"
 
 
-def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h):
+def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h,
+                trusted_name=False):
     """Convert one detection box (pixel coords) into an ObjectInfo."""
     cx = (x1 + x2) / 2 / frame_w
     cy = (y1 + y2) / 2 / frame_h
@@ -184,4 +235,5 @@ def analyze_box(name, confidence, x1, y1, x2, y2, frame_w, frame_h):
         center_x=cx,
         phrase=direction_phrase(h_zone, v_zone),
         distance_m=distance_meters(name, (y2 - y1) / frame_h, clipped),
+        trusted_name=trusted_name,
     )

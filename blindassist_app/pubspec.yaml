@@ -48,6 +48,10 @@ dependencies:
   # keep the screen (and so the camera stream) alive for the whole walk —
   # Android's screen timeout would otherwise pause the activity mid-route
   wakelock_plus: ^1.2.8
+  # remembers the user's name for the launch greeting (and whatever else the
+  # settings page grows). Tiny key-value store; no server, no account.
+  shared_preferences: ^2.3.2
+  gal: ^2.3.3
 
 # vosk_flutter 0.3.48 pins permission_handler ^10.2.0, but 10.x references the
 # Flutter v1-embedding class PluginRegistry.Registrar which was removed in

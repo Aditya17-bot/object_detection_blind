@@ -20,6 +20,18 @@ const Map<String, String> synonyms = {
   'bag': 'backpack',
   'man': 'person',
   'woman': 'person',
+  // wardrobe/window are namer-only classes (see position.dart). 'almirah' is
+  // the everyday Indian-English word for a wardrobe.
+  'cupboard': 'wardrobe',
+  'almirah': 'wardrobe',
+  'closet': 'wardrobe',
+  // 'basket' alone is safe — no other class contains the word. Longer forms
+  // are listed too because matching takes the LONGEST phrase, so 'laundry bag'
+  // resolves to the basket and never to the generic 'bag' -> backpack.
+  'laundry': 'laundry basket',
+  'basket': 'laundry basket',
+  'hamper': 'laundry basket',
+  'laundry bag': 'laundry basket',
 };
 
 /// Naive English plural of the LAST word ('cell phone' -> 'cell phones').
@@ -62,6 +74,62 @@ String? _matchObject(String rest) {
   return null;
 }
 
+/// Spoken words -> COCO class name, or null. Handles synonyms and plurals
+/// ('sofas' -> 'couch'). Public so the agent layer can validate a tool
+/// argument against exactly the vocabulary this parser accepts — the remote
+/// tier must never be able to name an object the local tier would refuse.
+/// Mirror of voice.resolve_class.
+String? resolveClass(String? text) {
+  if (text == null) return null;
+  final t = text.trim().toLowerCase();
+  if (t.isEmpty) return null;
+  return _findable[t] ?? _matchObject(t);
+}
+
+/// Saying one of these opens the open-dictation window: the recognizer's
+/// grammar is a closed list, so free speech is not mis-heard, it is never
+/// heard at all. An explicit trigger keeps tier 0 instant and untouched —
+/// only an utterance the user deliberately marked as a question takes the
+/// slow open path. Mirror of voice.TRIGGER_WORDS.
+const List<String> triggerWords = ['assistant', 'question'];
+
+/// Directional query vocabulary ("what's on my left", "anything in front of
+/// me"). Both halves must appear — a direction AND a question word — so a bare
+/// "left" heard mid-sentence never fires a query. Mirror of
+/// voice._DIRECTION_WORDS / voice._CHECK_WORDS.
+const Map<String, String> _directionWords = {
+  'left': 'left',
+  'right': 'right',
+  'ahead': 'ahead',
+  'front': 'ahead',
+  'forward': 'ahead',
+};
+const List<String> _checkWords = [
+  'anything', 'something', 'what', 'whats', "what's", 'check', 'there',
+  'see', 'is'
+];
+
+/// "left" and "right" are ordinary English words; "how much battery is LEFT"
+/// routed to check(left) in the 2026-08-01 evaluation run. They only count as
+/// a direction when a positional word introduces them. "ahead"/"front"/
+/// "forward" need no such guard. Mirror of voice._DIRECTION_LEAD.
+const Set<String> _unambiguousDirections = {'ahead', 'front', 'forward'};
+const Set<String> _directionLead = {
+  'my', 'the', 'on', 'to', 'your', 'check', 'toward', 'towards'
+};
+
+String? _findDirection(List<String> words) {
+  for (var i = 0; i < words.length; i++) {
+    final word = words[i];
+    if (!_directionWords.containsKey(word)) continue;
+    if (_unambiguousDirections.contains(word) ||
+        (i > 0 && _directionLead.contains(words[i - 1]))) {
+      return _directionWords[word];
+    }
+  }
+  return null;
+}
+
 /// Recognized utterance -> command, or null if not understood. Actions:
 /// walk / find / describe / clock / zones / recall. Tolerant of filler words:
 /// "please find the bottle" works.
@@ -98,6 +166,11 @@ VoiceCommand? parseCommand(String text) {
   if (words.contains('read')) {
     return (action: 'read', target: null); // OCR: read printed text aloud
   }
+  // Photo. Checked BEFORE the object queries so "take a picture" never gets
+  // dragged into find/count by a stray class word later in the utterance.
+  if (words.contains('picture') || words.contains('photo')) {
+    return (action: 'photo', target: null);
+  }
   final manyIdx = words.indexOf('many'); // count query: "how many chairs"
   if (words.contains('how') && manyIdx >= 0) {
     final obj = _matchObject(words.sublist(manyIdx + 1).join(' '));
@@ -114,6 +187,16 @@ VoiceCommand? parseCommand(String text) {
     final obj = _matchObject(words.sublist(findIdx + 1).join(' '));
     if (obj != null) return (action: 'find', target: obj);
   }
+  // Directional query, AFTER find so "find the door on my left" still finds.
+  // Deliberately on-device: "is there anything in front of me" is the question
+  // this system exists to answer, and it must work with no server and no LLM.
+  final direction = _findDirection(words);
+  if (direction != null && words.any(_checkWords.contains)) {
+    return (action: 'check', target: direction);
+  }
+  // LAST, deliberately: every existing command keeps its exact precedence, so
+  // the trigger can only fire on an utterance nothing else claimed.
+  if (words.any(triggerWords.contains)) return (action: 'ask', target: null);
   return null;
 }
 
@@ -121,8 +204,17 @@ VoiceCommand? parseCommand(String text) {
 List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
     'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
+    'take a picture', 'take a photo', 'photo',
     'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
-    'mute', 'unmute'];
+    'mute', 'unmute', ...triggerWords];
+  for (final spoken in ['on my left', 'on my right', 'in front of me',
+    'ahead']) {
+    phrases.add('what is $spoken');
+    phrases.add('whats $spoken');
+    phrases.add('is there anything $spoken');
+    phrases.add('anything $spoken');
+  }
+  phrases.addAll(['check left', 'check right', 'check ahead']);
   final names = _findable.keys.toList()..sort();
   for (final name in names) {
     phrases.add('find $name');

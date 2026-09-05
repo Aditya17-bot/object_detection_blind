@@ -18,6 +18,7 @@
     <span class="pill" id="pill-model" title="detection model">model —</span>
     <span class="pill" id="pill-fps" title="frames per second">— FPS</span>
     <span class="pill" id="pill-voice" title="voice commands">🎤 —</span>
+    <span class="pill" id="pill-router" title="which tier answered">🧭 —</span>
   </div>
 </header>
 
@@ -53,7 +54,21 @@
       </div>
       <p class="mode-status" id="mode-status">Walk mode — warning about obstacles ahead.</p>
       <p class="hint" id="voice-hint">Voice commands: say
-      <em>“find bottle”</em>, <em>“walk mode”</em> or <em>“describe”</em>.</p>
+      <em>“find bottle”</em>, <em>“walk mode”</em> or <em>“describe”</em>.
+      Say <em>“assistant”</em> to ask something in your own words.</p>
+    </div>
+
+    <div class="card" aria-labelledby="ask-title">
+      <h2 id="ask-title">Ask</h2>
+      <p class="hint">Type what you would say. Routes through the same agent
+      the microphone uses — no mic needed.</p>
+      <form class="ask-row" id="ask-form">
+        <label class="sr-only" for="ask-input">Your request</label>
+        <input id="ask-input" type="text" autocomplete="off"
+               placeholder="is there anywhere I can sit">
+        <button class="action primary" type="submit">Send</button>
+      </form>
+      <p class="mode-status" id="ask-result"></p>
     </div>
 
     <div class="card" aria-labelledby="actions-title">

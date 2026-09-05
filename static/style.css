@@ -199,6 +199,21 @@ select {
 
 .hint { font-size: 13px; color: var(--text-dim); margin: 12px 0 0; }
 
+/* ---------- ask box (types straight into the agent router) ---------- */
+
+.ask-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; }
+.ask-row input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  padding: 12px;
+  min-width: 0;
+}
+.ask-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ask-row .action { width: auto; margin-bottom: 0; }
+
 /* ---------- announcement feed ---------- */
 
 .feed-card { max-height: 340px; display: flex; flex-direction: column; }

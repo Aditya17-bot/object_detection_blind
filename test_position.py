@@ -2,7 +2,7 @@
 
 import unittest
 
-from position import (analyze_box, clock_hour, clock_phrase,
+from position import (CAMERA_FOV_DEG, analyze_box, clock_hour, clock_phrase,
                       direction_phrase, distance_meters, proximity_bucket)
 
 W, H = 1280, 720  # pretend frame size; logic must not care about actual size
@@ -125,19 +125,47 @@ class TestDistanceMeters(unittest.TestCase):
 
 
 class TestClockHour(unittest.TestCase):
+    """The bearing must match the camera's real geometry.
+
+    Until 2026-09-05 the frame was spread over 10-11-12-1-2 — four hours, 120
+    degrees — across a camera that sees ~65. Every bearing came out about
+    DOUBLE the true angle, and clock mode is the default, so an O&M-trained
+    traveller was being systematically over-rotated. These tests pin the
+    corrected derivation so it cannot silently regress.
+    """
+
     def test_center_is_twelve(self):
         self.assertEqual(clock_hour(0.5), 12)
 
-    def test_far_left_and_right(self):
-        self.assertEqual(clock_hour(0.0), 10)
-        self.assertEqual(clock_hour(0.99), 2)
+    def test_frame_edges_stay_within_the_field_of_view(self):
+        # half the FOV is ~32.5 deg, i.e. one clock hour (30 deg), not two
+        self.assertEqual(clock_hour(0.0), 11)
+        self.assertEqual(clock_hour(1.0), 1)
 
     def test_bands_in_order(self):
-        hours = [clock_hour(x) for x in (0.1, 0.3, 0.5, 0.7, 0.9)]
-        self.assertEqual(hours, [10, 11, 12, 1, 2])
+        hours = [clock_hour(x) for x in (0.0, 0.3, 0.5, 0.7, 1.0)]
+        self.assertEqual(hours, [11, 12, 12, 12, 1])
+
+    def test_hour_matches_the_bearing_it_claims(self):
+        """The spoken hour must be the nearest one to the TRUE angle."""
+        for cx in (0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0):
+            bearing = (cx - 0.5) * CAMERA_FOV_DEG
+            hour = clock_hour(cx)
+            signed = hour - 12 if hour >= 10 else hour   # 11 -> -1, 1 -> +1
+            self.assertLessEqual(
+                abs(signed * 30.0 - bearing), 15.0,
+                f"center_x {cx}: spoke {hour} o'clock for {bearing:+.1f} deg")
+
+    def test_never_claims_an_angle_the_camera_cannot_see(self):
+        """No bearing may exceed half the field of view."""
+        for cx in (0.0, 0.25, 0.5, 0.75, 1.0):
+            hour = clock_hour(cx)
+            signed = hour - 12 if hour >= 10 else hour
+            self.assertLessEqual(abs(signed) * 30.0, CAMERA_FOV_DEG / 2 + 30.0)
 
     def test_phrase(self):
-        self.assertEqual(clock_phrase(0.85), "at 2 o'clock")
+        self.assertEqual(clock_phrase(0.95), "at 1 o'clock")
+        self.assertEqual(clock_phrase(0.05), "at 11 o'clock")
 
 
 if __name__ == "__main__":

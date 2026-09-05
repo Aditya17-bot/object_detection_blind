@@ -32,6 +32,17 @@ async function poll() {
     vp.title = s.voice.error || "voice commands disabled";
   }
 
+  // which tier answered the last request — the demo's most useful readout
+  const rp = $("pill-router");
+  if (!s.router || !s.router.enabled) {
+    rp.textContent = "🧭 keywords";
+    rp.title = (s.router && s.router.error) || "tier 0 only (no agent model)";
+  } else {
+    rp.textContent = "🧭 " + (s.router.source || "ready");
+    rp.title = s.router.transcript
+      ? `heard: “${s.router.transcript}”` : "agent model " + s.router.model;
+  }
+
   const err = $("error-line");
   err.hidden = !s.error;
   if (s.error) err.textContent = "⚠ " + s.error;
@@ -71,6 +82,12 @@ async function poll() {
   }
 
   sonar.update(s.sonar);
+  // a voice "sonar on/off" reaches the server, not the page — reconcile here.
+  // Note WebAudio needs a user gesture before it will make sound, so turning
+  // sonar on by voice only takes effect once the page has been interacted with.
+  if (typeof s.sonar_on === "boolean" && s.sonar_on !== sonar.enabled) {
+    sonar.toggle();
+  }
 }
 setInterval(poll, 500);
 poll();
@@ -104,6 +121,39 @@ $("btn-mute").onclick = async () => {
   const nowOn = $("btn-mute").getAttribute("aria-pressed") === "true";
   await post("/mute", { muted: nowOn }); // pressed==voice on -> mute it
   poll();
+};
+
+// ---------- ask box ----------
+// Types straight into the agent router — same two-tier path the microphone
+// uses, so paraphrases can be tried without a mic or a Whisper model.
+
+$("ask-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("ask-input").value.trim();
+  if (!text) return;
+  const out = $("ask-result");
+  out.textContent = "routing…";
+  try {
+    const r = await fetch("/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const b = await r.json();
+    if (b.error && !b.actions) {
+      out.textContent = "⚠ " + b.error;
+      return;
+    }
+    const how = `${b.source} · ${b.latency_ms} ms`;
+    const what = b.actions.length
+      ? b.actions.map((a) => a.arg ? `${a.tool}(${a.arg})` : a.tool).join(" → ")
+      : "abstained";
+    out.textContent = `${what} — ${how}`;
+    $("ask-input").value = "";
+    poll();
+  } catch (err) {
+    out.textContent = "⚠ could not reach the server";
+  }
 };
 
 // ---------- speak on this device (phone testing) ----------

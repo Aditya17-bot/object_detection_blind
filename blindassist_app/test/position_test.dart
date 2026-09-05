@@ -112,16 +112,34 @@ void main() {
     });
   });
 
+  // The bearing must match the camera's real geometry. Until 2026-09-05 the
+  // frame was spread over 10-11-12-1-2 — four hours, 120 degrees — across a
+  // camera that sees ~65, so every bearing came out about DOUBLE the true
+  // angle. Clock mode is the default, so an O&M-trained traveller was being
+  // systematically over-rotated. Mirror of test_position.TestClockHour.
   group('clock hour', () {
     test('center is twelve', () => expect(clockHour(0.5), 12));
-    test('far left and right', () {
-      expect(clockHour(0.0), 10);
-      expect(clockHour(0.99), 2);
+    test('frame edges stay within the field of view', () {
+      // half the FOV is ~32.5 deg: one clock hour (30 deg), not two
+      expect(clockHour(0.0), 11);
+      expect(clockHour(1.0), 1);
     });
     test('bands in order', () {
-      expect([0.1, 0.3, 0.5, 0.7, 0.9].map(clockHour).toList(),
-          [10, 11, 12, 1, 2]);
+      expect([0.0, 0.3, 0.5, 0.7, 1.0].map(clockHour).toList(),
+          [11, 12, 12, 12, 1]);
     });
-    test('phrase', () => expect(clockPhrase(0.85), "at 2 o'clock"));
+    test('hour matches the bearing it claims', () {
+      for (final cx in [0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0]) {
+        final bearing = (cx - 0.5) * cameraFovDeg;
+        final hour = clockHour(cx);
+        final signed = hour >= 10 ? hour - 12 : hour; // 11 -> -1, 1 -> +1
+        expect((signed * 30.0 - bearing).abs(), lessThanOrEqualTo(15.0),
+            reason: "centerX $cx: spoke $hour oclock for $bearing deg");
+      }
+    });
+    test('phrase', () {
+      expect(clockPhrase(0.95), "at 1 o'clock");
+      expect(clockPhrase(0.05), "at 11 o'clock");
+    });
   });
 }

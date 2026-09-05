@@ -7,6 +7,7 @@ import unittest
 
 import numpy as np
 
+from agent import AgentRouter
 from infer_server import (DISCOVER_MSG, REPLY_PREFIX, build_app,
                           start_discovery_responder, yuv420_to_bgr)
 
@@ -65,11 +66,11 @@ class YuvTest(unittest.TestCase):
 
 
 class ServerTest(unittest.TestCase):
-    def _client(self, coco_boxes=(), custom=None):
+    def _client(self, coco_boxes=(), custom=None, router=None):
         # custom=None -> explicitly NO custom model (build_app only
         # auto-loads the real .pt when custom_model is left unset)
         coco = FakeYOLO({0: "person", 39: "bottle", 62: "tv"}, coco_boxes)
-        app = build_app(coco_model=coco, custom_model=custom)
+        app = build_app(coco_model=coco, custom_model=custom, router=router)
         return app.test_client(), coco
 
     def _post(self, client, w=8, h=8, rotation=0):
@@ -83,10 +84,50 @@ class ServerTest(unittest.TestCase):
             "v": (io.BytesIO(v), "v"),
         }, content_type="multipart/form-data")
 
+    def _post_jpeg(self, client, w=32, h=32, rotation=0):
+        """The frame shape the app normally sends since 2026-09-05."""
+        import cv2
+        img = np.full((h, w, 3), 128, np.uint8)
+        ok, buf = cv2.imencode(".jpg", img)
+        assert ok
+        return client.post("/infer", data={
+            "width": str(w), "height": str(h), "rotation": str(rotation),
+            "jpeg": (io.BytesIO(buf.tobytes()), "f.jpg"),
+        }, content_type="multipart/form-data")
+
+    def test_infer_accepts_a_jpeg_frame(self):
+        """JPEG is the fast path: ~45 KB instead of ~506 KB of raw planes.
+        The raw upload was measured at 320-510 ms against 171 ms of inference
+        and was losing frames to the app's 1.2 s timeout."""
+        client, _ = self._client(
+            coco_boxes=[_FakeBox(0, 0.9, (0.1, 0.2, 0.3, 0.4))])
+        data = json.loads(self._post_jpeg(client).data)
+        self.assertEqual(len(data["detections"]), 1)
+        self.assertEqual(data["detections"][0]["name"], "person")
+
+    def test_raw_planes_still_work(self):
+        """The fallback must stay alive: a handset whose platform channel
+        fails, or an older APK, posts raw planes and has to keep working."""
+        client, _ = self._client(
+            coco_boxes=[_FakeBox(0, 0.9, (0.1, 0.2, 0.3, 0.4))])
+        data = json.loads(self._post(client).data)
+        self.assertEqual(len(data["detections"]), 1)
+
+    def test_undecodable_jpeg_is_refused_not_guessed(self):
+        """A corrupt frame must be an error, never an empty detection list:
+        [] means 'verified clear scene' to the guidance engine."""
+        client, _ = self._client()
+        r = client.post("/infer", data={
+            "width": "32", "height": "32", "rotation": "0",
+            "jpeg": (io.BytesIO(b"not a jpeg"), "f.jpg"),
+        }, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+
     def test_health_reports_custom_flag(self):
         client, _ = self._client()
         data = json.loads(client.get("/health").data)
-        self.assertEqual(data, {"ok": True, "custom": False})
+        self.assertEqual(data, {"ok": True, "custom": False, "namer": False,
+                                "agent": False})
         client2, _ = self._client(custom=FakeYOLO({0: "door"}))
         data2 = json.loads(client2.get("/health").data)
         self.assertTrue(data2["custom"])
@@ -129,6 +170,35 @@ class ServerTest(unittest.TestCase):
     def test_warmup_runs_at_startup(self):
         _, coco = self._client()
         self.assertEqual(coco.seen_shapes, [(640, 640, 3)])
+
+
+class AgentRouteTest(unittest.TestCase):
+    """/agent is registered only when a router is supplied, and it returns
+    ACTIONS rather than executing them — this server has no GuidanceEngine and
+    no frame state, so a second source of truth here would be worse than none.
+    """
+
+    def _client(self, router=None):
+        coco = FakeYOLO({0: "person"})
+        return build_app(coco_model=coco, custom_model=None,
+                         router=router).test_client()
+
+    def test_absent_without_a_router(self):
+        self.assertEqual(
+            self._client().post("/agent", json={"text": "walk"}).status_code,
+            404)
+
+    def test_returns_actions_for_the_phone_to_execute(self):
+        client = self._client(AgentRouter(llm=None))
+        body = json.loads(
+            client.post("/agent", json={"text": "find the bottle"}).data)
+        self.assertEqual(body["actions"], [{"tool": "find", "arg": "bottle"}])
+        self.assertEqual(body["source"], "grammar")
+        self.assertNotIn("spoken", body)     # nothing is executed here
+
+    def test_health_reports_the_agent(self):
+        client = self._client(AgentRouter(llm=None))
+        self.assertFalse(json.loads(client.get("/health").data)["agent"])
 
 
 class DiscoveryTest(unittest.TestCase):

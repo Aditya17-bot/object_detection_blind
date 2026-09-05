@@ -1,0 +1,223 @@
+{
+  "ask_templates": {
+    "listening": "Yes?",
+    "not_understood": "Sorry, I didn't catch that. Say it again?",
+    "unknown": "Sorry, I can't do that. I can find things, describe the scene, count them, read text, or check your path.",
+    "unsupported": "That control isn't available here.",
+    "which_object": "Which object should I look for?",
+    "working": "One moment"
+  },
+  "enums": {
+    "class": [
+      "backpack",
+      "bed",
+      "bench",
+      "book",
+      "bottle",
+      "cell phone",
+      "chair",
+      "couch",
+      "cup",
+      "dining table",
+      "door",
+      "dustbin",
+      "laptop",
+      "laundry basket",
+      "person",
+      "potted plant",
+      "refrigerator",
+      "sink",
+      "suitcase",
+      "toilet",
+      "toothbrush",
+      "tv",
+      "wardrobe",
+      "window"
+    ],
+    "direction": [
+      "left",
+      "ahead",
+      "right"
+    ],
+    "onoff": [
+      "on",
+      "off"
+    ],
+    "template": [
+      "listening",
+      "not_understood",
+      "unknown",
+      "unsupported",
+      "which_object",
+      "working"
+    ]
+  },
+  "tools": [
+    {
+      "arg": null,
+      "examples": [
+        "walk mode",
+        "walk"
+      ],
+      "internal": false,
+      "name": "walk",
+      "required": false
+    },
+    {
+      "arg": "class",
+      "examples": [
+        "find bottle",
+        "find the door"
+      ],
+      "internal": false,
+      "name": "find",
+      "required": true
+    },
+    {
+      "arg": null,
+      "examples": [
+        "describe",
+        "describe scene",
+        "summary"
+      ],
+      "internal": false,
+      "name": "describe",
+      "required": false
+    },
+    {
+      "arg": "class",
+      "examples": [
+        "how many chairs"
+      ],
+      "internal": false,
+      "name": "count",
+      "required": true
+    },
+    {
+      "arg": "class",
+      "examples": [
+        "where is the cup"
+      ],
+      "internal": false,
+      "name": "recall",
+      "required": true
+    },
+    {
+      "arg": null,
+      "examples": [
+        "clear path",
+        "which way"
+      ],
+      "internal": false,
+      "name": "path",
+      "required": false
+    },
+    {
+      "arg": "direction",
+      "examples": [
+        "what is on my left",
+        "is there anything in front of me",
+        "anything on my right"
+      ],
+      "internal": false,
+      "name": "check",
+      "required": true
+    },
+    {
+      "arg": null,
+      "examples": [
+        "read",
+        "read text"
+      ],
+      "internal": false,
+      "name": "read",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "take a picture",
+        "take a photo",
+        "photo"
+      ],
+      "internal": false,
+      "name": "photo",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "clock mode"
+      ],
+      "internal": false,
+      "name": "clock",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "zone mode"
+      ],
+      "internal": false,
+      "name": "zones",
+      "required": false
+    },
+    {
+      "arg": "onoff",
+      "examples": [
+        "sonar",
+        "sonar on",
+        "sonar off"
+      ],
+      "internal": false,
+      "name": "sonar",
+      "required": false
+    },
+    {
+      "arg": "onoff",
+      "examples": [
+        "mute",
+        "unmute"
+      ],
+      "internal": false,
+      "name": "mute",
+      "required": true
+    },
+    {
+      "arg": null,
+      "examples": [
+        "stop"
+      ],
+      "internal": false,
+      "name": "stop",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "repeat",
+        "say again"
+      ],
+      "internal": false,
+      "name": "repeat",
+      "required": false
+    },
+    {
+      "arg": "template",
+      "examples": [],
+      "internal": false,
+      "name": "abstain",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "assistant"
+      ],
+      "internal": true,
+      "name": "ask",
+      "required": false
+    }
+  ],
+  "version": 1
+}

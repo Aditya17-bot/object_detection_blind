@@ -53,6 +53,19 @@ if the object really was in the spoken zone/clock position.
    touching the phone.
 7. **Pocket drill**: press the power button (screen off), turn it back on.
    Expect "Resuming" and detections continuing.
+8. **Agent round** (only if the server runs with `--agent-model`): say
+   "assistant", wait for "Yes?", then ask five things in your OWN words —
+   e.g. "is there anywhere I can sit", "what does this label say", "how many
+   of them are there". Note which ones routed correctly and how long each took
+   from the end of your question to the answer. Then ask one thing the system
+   genuinely cannot do ("what's the weather"). **It must abstain**, not run
+   the nearest tool — that is the safety property, and hearing it guess is a
+   failure even when the guess sounds sensible.
+9. **Agent failure drill**: with the agent enabled, kill Ollama (leave the
+   inference server running). The keyword commands must all still work
+   unchanged — "find the door", "describe", "sonar off" — and a free-form
+   question must abstain rather than hang. Then kill the whole server: the
+   phone falls back to local keyword parsing and says so.
 
 ## Score sheet
 
@@ -65,6 +78,8 @@ if the object really was in the spoken zone/clock position.
 | 5 voice | commands recognized: /10 | | |
 | 6 failure drill | pass / fail | | |
 | 7 pocket drill | pass / fail | | |
+| 8 agent round | routed correctly: /5 | abstained on the out-of-scope one? | seconds to answer: |
+| 9 agent failure drill | pass / fail | | |
 
 Wrong-direction announcements are the metric that matters most — a wrong
 NAME with the right direction is a known COCO limit, not a failure.

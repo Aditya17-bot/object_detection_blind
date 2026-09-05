@@ -42,11 +42,20 @@ void main() {
     test('far never announced', () {
       expect(pickObstacle([info('chair', proximity: 'far')]), isNull);
     });
-    test('medium only matters in center', () {
+    test('medium is silent even dead ahead', () {
+      // 2026-07-31: walk mode used to announce a medium obstacle in the
+      // centre. Field feedback was that continuous naming became noise, so the
+      // line moved to walkMinProximity ('close'). The full inventory is still
+      // available on demand through describe() / checkDirection().
       expect(pickObstacle([info('chair', hZone: 'left', proximity: 'medium')]),
           isNull);
-      final center = info('chair', proximity: 'medium');
-      expect(pickObstacle([center]), same(center));
+      expect(pickObstacle([info('chair', proximity: 'medium')]), isNull);
+    });
+    test('close and very close still announced', () {
+      final close = info('chair', hZone: 'left');
+      expect(pickObstacle([close]), same(close));
+      final vc = info('chair', hZone: 'right', proximity: 'very close');
+      expect(pickObstacle([vc]), same(vc));
     });
     test('find classes never obstacles', () {
       expect(pickObstacle([info('bottle', proximity: 'very close')]), isNull);
@@ -149,42 +158,70 @@ void main() {
       final big = info('bottle', hZone: 'right', area: 0.04);
       expect(findTarget([small, big], 'bottle'), same(big));
     });
-    test('found message', () {
+    test('found message on the very first sighting', () {
+      // Find is EAGER: the user asked, so one solid detection is enough.
+      // Requiring two consecutive frames cost four of six sightings at the
+      // phone's real 2 FPS (measured 2026-09-05) - the app stayed silent with
+      // the object on screen.
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle = info('bottle',
           hZone: 'right', vZone: 'top', proximity: 'close', area: 0.02);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle top right, close');
+      expect(e.update([bottle], 0.0), 'Bottle top right, close');
+    });
+    test('a flickering target is never called absent', () {
+      // The regression the user reported: "I see the person on screen but it
+      // just keeps saying it is still looking". A detector that drops the
+      // object on alternate frames must not produce "not visible" - saying
+      // that about something in frame is the expensive error, and a blind
+      // user cannot check the screen to find out.
+      final e = GuidanceEngine(mode: 'find', target: 'person', useClock: false);
+      final person =
+          info('person', hZone: 'center', proximity: 'medium', area: 0.02);
+      final said = <String>[];
+      for (var n = 0; n < 20; n++) {
+        final msg = e.update(n % 2 == 0 ? [person] : [], n * 0.5);
+        if (msg != null) said.add(msg);
+        if (e.mode != 'find') break; // announced and completed
+      }
+      expect(said, isNotEmpty, reason: 'a visible target must be announced');
+      final joined = said.join(' ').toLowerCase();
+      expect(joined, isNot(contains('not visible')));
+      expect(joined, isNot(contains('still looking')));
+    });
+    test('absence is measured in seconds not frames', () {
+      final e = GuidanceEngine(mode: 'find', target: 'bottle');
+      expect(e.update([], 0.0), isNull);
+      expect(e.update([], 0.1), isNull, reason: '0.1 s is not absence');
+      expect(e.update([], 2.0), isNull, reason: 'still inside the grace');
+      expect(e.update([], 2.6), 'Bottle not visible');
     });
     test('not visible said once then periodic reminder', () {
       final e = GuidanceEngine(mode: 'find', target: 'bottle');
-      expect(e.update([], 0.0), isNull); // absence persistence
-      expect(e.update([], 0.1), 'Bottle not visible');
+      expect(e.update([], 0.0), isNull); // absence grace
+      expect(e.update([], 2.6), 'Bottle not visible');
       expect(e.update([], 5.0), isNull); // not repeated...
       // ...but after reminderInterval the engine says it is still trying
-      expect(e.update([], 10.2), 'Still looking for bottle');
+      expect(e.update([], 12.7), 'Still looking for bottle');
       expect(e.update([], 15.0), isNull); // next one waits too
-      expect(e.update([], 20.3), 'Still looking for bottle');
+      expect(e.update([], 22.8), 'Still looking for bottle');
     });
     test('reminder keeps firing until target found', () {
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       e.update([], 0.0);
-      expect(e.update([], 0.1), 'Bottle not visible');
+      expect(e.update([], 2.6), 'Bottle not visible');
       expect(e.update([], 5.0), isNull);
-      expect(e.update([], 10.2), 'Still looking for bottle');
+      expect(e.update([], 12.7), 'Still looking for bottle');
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 15.0);
-      expect(e.update([bottle], 15.1), 'Bottle left, medium');
+      expect(e.update([bottle], 15.0), 'Bottle left, medium');
     });
     test('found completes search', () {
       // user decision 2026-07-16: announcing the position once IS the find
-      // result — the engine must drop back to walk mode, not keep repeating
+      // result - the engine must drop back to walk mode, not keep repeating
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle left, medium');
+      expect(e.update([bottle], 0.0), 'Bottle left, medium');
       expect(e.mode, 'walk');
       // bottle is a FIND class -> silent in walk mode, no more repeats
       expect(e.update([bottle], 5.0), isNull);
@@ -194,13 +231,23 @@ void main() {
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle left, medium');
-      // asking again starts a fresh search that reports again (the bottle's
-      // persistence streak is already met — it never left the frame)
+      expect(e.update([bottle], 0.0), 'Bottle left, medium');
+      // asking again starts a fresh search that reports again
       e.setMode('find', 'bottle');
       expect(e.update([bottle], 5.0), 'Bottle left, medium');
       expect(e.mode, 'walk');
+    });
+    test('a single misdetection still never warns in walk mode', () {
+      // Decaying the streak must not make walk mode trigger-happy: one stray
+      // frame still never reaches the walk persistence of 2.
+      final e = GuidanceEngine(useClock: false);
+      final chair =
+          info('chair', hZone: 'center', proximity: 'close', area: 0.2);
+      expect(e.update([chair], 0.0), isNull);
+      for (var n = 1; n < 8; n++) {
+        expect(e.update([], n * 0.5), isNull,
+            reason: 'a one-frame ghost must decay away silently');
+      }
     });
     test('find mode requires target', () {
       expect(() => GuidanceEngine(mode: 'find'), throwsArgumentError);
@@ -234,15 +281,19 @@ void main() {
   });
 
   group('clock bearings', () {
-    // info() maps left->0.15, center->0.5, right->0.85 => 10, 12, 2 o'clock
+    // info() maps left->0.15, center->0.5, right->0.85. At the corrected
+    // 65-degree field of view those are -22.8, 0.0 and +22.8 degrees, i.e.
+    // 11, 12 and 1 o'clock. The old expectations (10 / 12 / 2) came from a
+    // mapping that spread 120 degrees across a 65-degree camera and so
+    // roughly doubled every bearing — see position_test 'clock hour'.
     test('find message clock', () {
       final bottle = info('bottle',
           hZone: 'right', vZone: 'top', proximity: 'close', area: 0.02);
-      expect(findMessage(bottle, 'bottle', true), "Bottle at 2 o'clock, close");
+      expect(findMessage(bottle, 'bottle', true), "Bottle at 1 o'clock, close");
     });
     test('walk message clock', () {
       final chair = info('chair', hZone: 'left', proximity: 'close');
-      expect(walkMessage(chair, const [], true), "Chair at 10 o'clock, close");
+      expect(walkMessage(chair, const [], true), "Chair at 11 o'clock, close");
     });
     test('walk message clock center ahead', () {
       final person = info('person', proximity: 'close');
@@ -253,7 +304,7 @@ void main() {
       final e = GuidanceEngine(mode: 'walk');
       final chair = info('chair', hZone: 'right', proximity: 'close');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), "Chair at 2 o'clock, close");
+      expect(e.update([chair], 0.1), "Chair at 1 o'clock, close");
     });
     test('engine toggle switches wording', () {
       final e = GuidanceEngine(mode: 'walk', useClock: false);
@@ -261,7 +312,7 @@ void main() {
       e.update([chair], 0.0);
       expect(e.update([chair], 0.1), 'Chair on right, close');
       e.setClock(true);
-      expect(e.update([chair], 2.0), "Chair at 2 o'clock, close");
+      expect(e.update([chair], 2.0), "Chair at 1 o'clock, close");
     });
   });
 
@@ -274,7 +325,7 @@ void main() {
     test('recall message clock', () {
       final cup = info('cup', hZone: 'left', proximity: 'close', area: 0.02);
       expect(recallMessage(cup, 1, 'cup', true),
-          "Cup last seen at 10 o'clock, a moment ago");
+          "Cup last seen at 11 o'clock, a moment ago");
     });
     test('recall no memory', () {
       expect(recallMessage(null, 0, 'apple'), 'No memory of an apple');
@@ -424,6 +475,65 @@ void main() {
     test('engine count stamps clock', () {
       final e = GuidanceEngine();
       expect(e.count([info('chair'), info('chair')], 'chair', 0.0), '2 chairs');
+    });
+  });
+
+  group('checkDirection', () {
+    test('empty direction says nothing there', () {
+      final scene = [info('chair', hZone: 'right')];
+      expect(checkDirection(scene, 'left'), 'Nothing on your left');
+      expect(checkDirection(scene, 'ahead'), 'Nothing ahead');
+    });
+    test('reports what is there with its bucket', () {
+      expect(checkDirection([info('chair', hZone: 'left')], 'left'),
+          'A chair close on your left');
+    });
+    test('ahead maps to the center zone', () {
+      expect(checkDirection([info('door', proximity: 'medium')], 'ahead'),
+          'A door medium ahead');
+    });
+    test('closest first and capped at two', () {
+      final scene = [
+        info('chair', hZone: 'right', proximity: 'far', area: 0.4),
+        info('person', hZone: 'right', proximity: 'very close'),
+        info('bottle', hZone: 'right', proximity: 'medium'),
+      ];
+      final msg = checkDirection(scene, 'right');
+      expect(msg, 'A person very close on your right, and a bottle medium');
+      expect(msg, isNot(contains('chair')));
+    });
+    test('find classes are reported too', () {
+      expect(checkDirection([info('cup', hZone: 'left')], 'left'),
+          'A cup close on your left');
+    });
+    test('untrusted name becomes obstacle', () {
+      expect(checkDirection([info('toilet', hZone: 'left', conf: 0.65)], 'left'),
+          'An obstacle close on your left');
+    });
+    test('unknown direction returns null', () {
+      expect(checkDirection([info('chair')], 'behind'), isNull);
+    });
+    test('engine check stamps the clock and passes null through', () {
+      final e = GuidanceEngine();
+      expect(e.check([info('chair', hZone: 'left')], 'left', 0.0),
+          'A chair close on your left');
+      expect(e.check([info('chair')], 'behind', 1.0), isNull);
+    });
+  });
+
+  group('stateSummary', () {
+    test('groups what is visible and reports engine state', () {
+      final e = GuidanceEngine();
+      final state = e.stateSummary(
+          [info('chair', hZone: 'left'), info('chair', hZone: 'left')], 0.0);
+      expect(state['mode'], 'walk');
+      final visible = state['visible'] as List;
+      expect(visible.length, 1);
+      expect(visible.first['name'], 'chair');
+      expect(visible.first['count'], 2);
+      expect(visible.first['zone'], 'left');
+      // no leaked internals: the router reads facts, not object handles
+      expect(visible.first.containsKey('_area'), isFalse);
     });
   });
 }

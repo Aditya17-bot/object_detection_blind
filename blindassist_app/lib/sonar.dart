@@ -71,8 +71,12 @@ class Sonar {
     }
   }
 
-  void toggle() {
-    enabled = !enabled;
+  void toggle() => setEnabled(!enabled);
+
+  /// Explicit on/off. Used by the features page, which silences the beeps
+  /// while the user is reading it and restores whatever state they had.
+  void setEnabled(bool on) {
+    enabled = on;
     if (enabled) {
       _schedule();
     } else {

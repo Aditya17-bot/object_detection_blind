@@ -17,6 +17,7 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
+from name_index import TRUSTED_KEY
 from position import TARGET_CLASSES, analyze_box
 
 CONF_THRESHOLD = 0.6
@@ -39,24 +40,91 @@ def draw_grid(frame):
         cv2.line(frame, (0, h * i // 3), (w, h * i // 3), GRID, 1)
 
 
-def annotate(frame, result, conf_threshold):
-    """Draw grid + analyzed target objects. Returns list of ObjectInfo."""
-    draw_grid(frame)
-    h, w = frame.shape[:2]
-    infos = []
+def collect_dets(result, conf_threshold, frame_w, frame_h, keep_all=False,
+                 trusted=False):
+    """Raw detections as plain dicts, before any position analysis.
+
+    Carries BOTH normalized coords (what the naming head and the phone
+    protocol use) and the original pixel box (what analyze_box wants), so
+    nothing is lost to a round trip through floats.
+
+    keep_all skips the TARGET_CLASSES filter — required when a naming head is
+    active, because the boxes worth renaming are precisely the ones YOLO gave a
+    word we don't target ("vase" for a dustbin), and filtering first throws
+    them away.
+
+    trusted marks detections the naming head must not touch — used for the
+    dedicated door/dustbin model, whose classes exist because COCO had no word
+    for them, so there is no forced-choice error to correct.
+    """
+    dets = []
     for box in result.boxes:
         conf = float(box.conf[0])
         name = result.names[int(box.cls[0])]
-        if conf < conf_threshold or name not in TARGET_CLASSES:
+        if conf < conf_threshold:
+            continue
+        if not keep_all and name not in TARGET_CLASSES:
             continue
         x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
-        info = analyze_box(name, conf, x1, y1, x2, y2, w, h)
-        infos.append(info)
+        det = {"name": name, "conf": conf, "px": (x1, y1, x2, y2),
+               "x1": x1 / frame_w, "y1": y1 / frame_h,
+               "x2": x2 / frame_w, "y2": y2 / frame_h}
+        if trusted:
+            det[TRUSTED_KEY] = True
+        dets.append(det)
+    return dets
+
+
+def apply_namer(namer, clean_frame, dets):
+    """Rename in place, then drop anything the app has no vocabulary for.
+
+    Call this ONCE per frame over the merged detections of every model: the
+    namer's hysteresis tracks boxes between frames, and calling it per model
+    would have each pass overwrite the other's tracks.
+    """
+    if namer is None:
+        return dets
+    namer.apply(clean_frame, dets)
+    return [d for d in dets if d["name"] in TARGET_CLASSES]
+
+
+def infos_from_dets(dets, frame_w, frame_h):
+    """Position analysis for each detection, carrying the name-trust flag
+    through: a dedicated-model class or a committed rename from the naming
+    head must not be re-gated on detector confidence downstream."""
+    return [analyze_box(d["name"], d["conf"], *d["px"], frame_w, frame_h,
+                        trusted_name=bool(d.get(TRUSTED_KEY)))
+            for d in dets]
+
+
+def draw_dets(frame, dets, infos):
+    """Boxes + labels. A renamed detection shows what YOLO had called it —
+    the demo UI is where that substitution has to be visible."""
+    for det, info in zip(dets, infos):
+        x1, y1, x2, y2 = det["px"]
         color = PROX_COLOR[info.proximity]
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        name = info.name
+        if "yolo_name" in det:
+            name = f"{name} (was {det['yolo_name']})"
         label = f"{name} | {info.phrase} | {info.proximity}"
         cv2.putText(frame, label, (x1, max(y1 - 8, 14)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+
+def annotate(frame, result, conf_threshold, namer=None, clean=None):
+    """Draw grid + analyzed target objects. Returns list of ObjectInfo.
+
+    `clean` is an un-drawn-on copy of the frame; the naming head must embed
+    those pixels, not ones with boxes and grid lines burned into them.
+    """
+    draw_grid(frame)
+    h, w = frame.shape[:2]
+    dets = collect_dets(result, conf_threshold, w, h,
+                        keep_all=namer is not None)
+    dets = apply_namer(namer, clean if clean is not None else frame, dets)
+    infos = infos_from_dets(dets, w, h)
+    draw_dets(frame, dets, infos)
     return infos
 
 

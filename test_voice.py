@@ -78,6 +78,33 @@ class TestParseCommand(unittest.TestCase):
                          ("count", "couch"))
         self.assertEqual(parse_command("find bottles"), ("find", "bottle"))
 
+    def test_direction_queries(self):
+        for text in ("is there anything in front of me", "what is ahead",
+                     "anything in front of me", "check ahead"):
+            self.assertEqual(parse_command(text), ("check", "ahead"), text)
+        self.assertEqual(parse_command("what is on my left"),
+                         ("check", "left"))
+        self.assertEqual(parse_command("is there anything on my right"),
+                         ("check", "right"))
+
+    def test_direction_never_steals_an_existing_command(self):
+        # a direction word inside another command must not become a query
+        self.assertEqual(parse_command("find the door on my left"),
+                         ("find", "door"))
+        self.assertEqual(parse_command("where is the cup on my right"),
+                         ("recall", "cup"))
+        self.assertEqual(parse_command("which way is clear"), ("path", None))
+        # a bare direction with no question word is not a query either
+        self.assertIsNone(parse_command("left"))
+
+    def test_left_and_right_need_a_positional_lead_in(self):
+        # found by the 2026-08-01 eval run, not by hand: "left" is an ordinary
+        # English word and was turning an out-of-scope utterance into a query
+        self.assertIsNone(parse_command("how much battery is left"))
+        self.assertIsNone(parse_command("turn left at the corner"))
+        # ...while "ahead"/"front"/"forward" have no non-spatial reading here
+        self.assertEqual(parse_command("is anything ahead"), ("check", "ahead"))
+
     def test_unknown_utterances_ignored(self):
         self.assertIsNone(parse_command("hello there"))
         self.assertIsNone(parse_command("find unicorn"))
@@ -95,6 +122,28 @@ class TestParseCommand(unittest.TestCase):
         for p in phrases:
             self.assertIsNotNone(parse_command(p), p)
 
+
+
+class PhotoCommandTest(unittest.TestCase):
+    """"take a picture" — the photo goes to the phone GALLERY, because the
+    user cannot review it and the point is handing it to a sighted person."""
+
+    def test_the_spoken_forms_parse(self):
+        for text in ("take a picture", "take a photo", "photo",
+                     "please take a picture"):
+            self.assertEqual(parse_command(text), ("photo", None), text)
+
+    def test_it_does_not_steal_an_object_query(self):
+        # "picture" is checked before find/count, so a stray class word later
+        # in the utterance must not drag it away — but a real find still wins
+        self.assertEqual(parse_command("find the bottle"), ("find", "bottle"))
+        self.assertEqual(parse_command("take a picture of the chair"),
+                         ("photo", None))
+
+    def test_read_still_wins_over_photo(self):
+        # OCR is checked first: "read the text in the picture" is a read
+        self.assertEqual(parse_command("read the text in the picture"),
+                         ("read", None))
 
 if __name__ == "__main__":
     unittest.main()

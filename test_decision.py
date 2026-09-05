@@ -2,9 +2,9 @@
 
 import unittest
 
-from decision import (GuidanceEngine, clear_path, count_message, find_message,
-                      find_target, pick_obstacle, recall_message,
-                      summarize_scene, walk_message)
+from decision import (GuidanceEngine, check_direction, clear_path,
+                      count_message, find_message, find_target, pick_obstacle,
+                      recall_message, summarize_scene, walk_message)
 from position import ObjectInfo, analyze_box, direction_phrase
 
 _CENTER_X = {"left": 0.15, "center": 0.5, "right": 0.85}
@@ -32,11 +32,21 @@ class TestPickObstacle(unittest.TestCase):
     def test_far_never_announced(self):
         self.assertIsNone(pick_obstacle([info("chair", proximity="far")]))
 
-    def test_medium_only_matters_in_center(self):
+    def test_medium_is_silent_even_dead_ahead(self):
+        # 2026-07-31: walk mode used to announce a medium obstacle in the
+        # centre. Field feedback was that continuous naming became noise, so
+        # the line moved to WALK_MIN_PROXIMITY ("close"). The full inventory
+        # is still available on demand through describe() / check().
         self.assertIsNone(pick_obstacle([info("chair", "left",
                                               proximity="medium")]))
-        center = info("chair", "center", proximity="medium")
-        self.assertIs(pick_obstacle([center]), center)
+        self.assertIsNone(pick_obstacle([info("chair", "center",
+                                              proximity="medium")]))
+
+    def test_close_and_very_close_still_announced(self):
+        close = info("chair", "left", proximity="close")
+        self.assertIs(pick_obstacle([close]), close)
+        vc = info("chair", "right", proximity="very close")
+        self.assertIs(pick_obstacle([vc]), vc)
 
     def test_find_classes_never_obstacles(self):
         bottle = info("bottle", "center", proximity="very close")
@@ -143,40 +153,75 @@ class TestEngineFind(unittest.TestCase):
         big = info("bottle", "right", area=0.04)
         self.assertIs(find_target([small, big], "bottle"), big)
 
-    def test_found_message(self):
+    def test_found_message_on_the_very_first_sighting(self):
+        """Find is EAGER: the user asked, so one solid detection is enough.
+
+        Requiring two consecutive frames cost four of six sightings at the
+        phone's real 2 FPS (measured 2026-09-05) - the app stayed silent with
+        the object on screen.
+        """
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "right", v_zone="top", proximity="close",
                       area=0.02)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle top right, close")
+        self.assertEqual(e.update([bottle], 0.0), "Bottle top right, close")
+
+    def test_a_flickering_target_is_never_called_absent(self):
+        """The regression the user reported: "I see the person on screen but
+        it just keeps saying it is still looking".
+
+        A detector that drops the object on alternate frames must not produce
+        "not visible" - saying that about something in frame is the expensive
+        error, and a blind user cannot check the screen to find out.
+        """
+        e = GuidanceEngine("find", "person", use_clock=False)
+        person = info("person", "center", proximity="medium", area=0.02)
+        said = []
+        # alternate seen/unseen at 2 FPS, the measured field pattern
+        for n in range(20):
+            msg = e.update([person] if n % 2 == 0 else [], n * 0.5)
+            if msg:
+                said.append(msg)
+            if e.mode != "find":       # announced and completed
+                break
+        self.assertTrue(said, "a visible target must be announced")
+        joined = " ".join(said).lower()
+        self.assertNotIn("not visible", joined)
+        self.assertNotIn("still looking", joined)
+
+    def test_absence_is_measured_in_seconds_not_frames(self):
+        """Absence needs MORE evidence than presence, and the threshold must
+        not mean different things at 2 FPS and 6 FPS."""
+        e = GuidanceEngine("find", "bottle")
+        self.assertIsNone(e.update([], 0.0))
+        self.assertIsNone(e.update([], 0.1), "0.1 s is not absence")
+        self.assertIsNone(e.update([], 2.0), "still inside the grace period")
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
 
     def test_not_visible_said_once_then_periodic_reminder(self):
         e = GuidanceEngine("find", "bottle")
-        self.assertIsNone(e.update([], 0.0))               # absence persistence
-        self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        self.assertIsNone(e.update([], 0.0))               # absence grace
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
         self.assertIsNone(e.update([], 5.0))               # not repeated...
         # ...but after reminder_interval the engine says it is still trying
-        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
+        self.assertEqual(e.update([], 12.7), "Still looking for bottle")
         self.assertIsNone(e.update([], 15.0))              # next one waits too
-        self.assertEqual(e.update([], 20.3), "Still looking for bottle")
+        self.assertEqual(e.update([], 22.8), "Still looking for bottle")
 
     def test_reminder_keeps_firing_until_target_found(self):
         e = GuidanceEngine("find", "bottle", use_clock=False)
         e.update([], 0.0)
-        self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
         self.assertIsNone(e.update([], 5.0))
-        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
+        self.assertEqual(e.update([], 12.7), "Still looking for bottle")
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 15.0)
-        self.assertEqual(e.update([bottle], 15.1), "Bottle left, medium")
+        self.assertEqual(e.update([bottle], 15.0), "Bottle left, medium")
 
     def test_found_completes_search(self):
         # user decision 2026-07-16: announcing the position once IS the find
-        # result — the engine must drop back to walk mode, not keep repeating
+        # result - the engine must drop back to walk mode, not keep repeating
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
+        self.assertEqual(e.update([bottle], 0.0), "Bottle left, medium")
         self.assertEqual(e.mode, "walk")
         # bottle is a FIND class -> silent in walk mode, no more repeats
         self.assertIsNone(e.update([bottle], 5.0))
@@ -185,13 +230,21 @@ class TestEngineFind(unittest.TestCase):
     def test_new_search_after_completion(self):
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
-        # asking again starts a fresh search that reports again (the bottle's
-        # persistence streak is already met — it never left the frame)
+        self.assertEqual(e.update([bottle], 0.0), "Bottle left, medium")
+        # asking again starts a fresh search that reports again
         e.set_mode("find", "bottle")
         self.assertEqual(e.update([bottle], 5.0), "Bottle left, medium")
         self.assertEqual(e.mode, "walk")
+
+    def test_a_single_misdetection_still_never_warns_in_walk_mode(self):
+        """Decaying the streak must not make walk mode trigger-happy: one
+        stray frame still never reaches the walk persistence of 2."""
+        e = GuidanceEngine(use_clock=False)
+        chair = info("chair", "center", proximity="close", area=0.2)
+        self.assertIsNone(e.update([chair], 0.0))
+        for n in range(1, 8):
+            self.assertIsNone(e.update([], n * 0.5),
+                              "a one-frame ghost must decay away silently")
 
     def test_find_mode_requires_target(self):
         with self.assertRaises(ValueError):
@@ -225,17 +278,21 @@ class TestFindMessage(unittest.TestCase):
 
 
 class TestClockBearings(unittest.TestCase):
-    # info() maps left->0.15, center->0.5, right->0.85 => 10, 12, 2 o'clock
+    # info() maps left->0.15, center->0.5, right->0.85. At the corrected
+    # 65-degree field of view those are -22.8, 0.0 and +22.8 degrees, i.e.
+    # 11, 12 and 1 o'clock. The old expectations (10 / 12 / 2) came from a
+    # mapping that spread 120 degrees across a 65-degree camera and so
+    # roughly doubled every bearing — see test_position.TestClockHour.
     def test_find_message_clock(self):
         bottle = info("bottle", "right", v_zone="top", proximity="close",
                       area=0.02)
         self.assertEqual(find_message(bottle, "bottle", use_clock=True),
-                         "Bottle at 2 o'clock, close")
+                         "Bottle at 1 o'clock, close")
 
     def test_walk_message_clock(self):
         chair = info("chair", "left", proximity="close")
         self.assertEqual(walk_message(chair, use_clock=True),
-                         "Chair at 10 o'clock, close")
+                         "Chair at 11 o'clock, close")
 
     def test_walk_message_clock_center_ahead(self):
         person = info("person", "center", proximity="close")
@@ -247,7 +304,7 @@ class TestClockBearings(unittest.TestCase):
         e = GuidanceEngine("walk")
         chair = info("chair", "right", proximity="close")
         e.update([chair], 0.0)
-        self.assertEqual(e.update([chair], 0.1), "Chair at 2 o'clock, close")
+        self.assertEqual(e.update([chair], 0.1), "Chair at 1 o'clock, close")
 
     def test_engine_toggle_switches_wording(self):
         e = GuidanceEngine("walk", use_clock=False)
@@ -256,7 +313,7 @@ class TestClockBearings(unittest.TestCase):
         self.assertEqual(e.update([chair], 0.1), "Chair on right, close")
         e.set_clock(True)
         # same obstacle, new phrasing -> not a repeat, speaks immediately
-        self.assertEqual(e.update([chair], 2.0), "Chair at 2 o'clock, close")
+        self.assertEqual(e.update([chair], 2.0), "Chair at 1 o'clock, close")
 
 
 class TestObjectMemory(unittest.TestCase):
@@ -268,7 +325,7 @@ class TestObjectMemory(unittest.TestCase):
     def test_recall_message_clock(self):
         cup = info("cup", "left", proximity="close", area=0.02)
         self.assertEqual(recall_message(cup, 1, "cup", use_clock=True),
-                         "Cup last seen at 10 o'clock, a moment ago")
+                         "Cup last seen at 11 o'clock, a moment ago")
 
     def test_recall_no_memory(self):
         self.assertEqual(recall_message(None, 0, "apple"),
@@ -410,6 +467,97 @@ class TestCount(unittest.TestCase):
         e = GuidanceEngine()
         self.assertEqual(e.count([info("chair"), info("chair")], "chair", 0.0),
                          "2 chairs")
+
+
+class TestCheckDirection(unittest.TestCase):
+    def test_empty_direction_says_nothing_there(self):
+        scene = [info("chair", "right")]
+        self.assertEqual(check_direction(scene, "left"), "Nothing on your left")
+        self.assertEqual(check_direction(scene, "ahead"), "Nothing ahead")
+
+    def test_reports_what_is_there_with_bucket(self):
+        scene = [info("chair", "left", proximity="close")]
+        self.assertEqual(check_direction(scene, "left"),
+                         "A chair close on your left")
+
+    def test_ahead_maps_to_center_zone(self):
+        scene = [info("door", "center", proximity="medium")]
+        self.assertEqual(check_direction(scene, "ahead"),
+                         "A door medium ahead")
+
+    def test_closest_first_and_capped_at_two(self):
+        scene = [info("chair", "right", proximity="far", area=0.4),
+                 info("person", "right", proximity="very close"),
+                 info("bottle", "right", proximity="medium")]
+        msg = check_direction(scene, "right")
+        self.assertEqual(msg,
+                         "A person very close on your right, "
+                         "and a bottle medium")
+        self.assertNotIn("chair", msg)   # the third item is dropped, not read
+
+    def test_find_classes_are_reported_too(self):
+        # unlike walk mode, a query answers about anything detected: the user
+        # asked, so a cup on the table is a legitimate answer
+        self.assertEqual(check_direction([info("cup", "left")], "left"),
+                         "A cup close on your left")
+
+    def test_untrusted_name_becomes_obstacle(self):
+        scene = [info("toilet", "left", conf=0.65)]
+        self.assertEqual(check_direction(scene, "left"),
+                         "An obstacle close on your left")
+
+    def test_unknown_direction_returns_none(self):
+        self.assertIsNone(check_direction([info("chair")], "behind"))
+
+    def test_engine_check_stamps_clock_and_passes_none_through(self):
+        e = GuidanceEngine()
+        self.assertEqual(e.check([info("chair", "left")], "left", 0.0),
+                         "A chair close on your left")
+        self.assertIsNone(e.check([info("chair")], "behind", 1.0))
+
+
+
+
+class TestTrustedName(unittest.TestCase):
+    """A name vouched for by the naming head must be SPOKEN, not swallowed.
+
+    The NAME_CONFIDENCE gate replaces a class name with the generic word
+    "obstacle" below 0.8. Its stated basis is falsified (EVALUATION.md 6.2:
+    a dustbin called "toilet" peaks at 0.94 while a correct "chair" sits at
+    0.92 — overlapping bands), so it cannot be allowed to override the one
+    signal that IS calibrated: an embedding rename that beat every competing
+    label by MIN_MARGIN. Before this, the app identified a wardrobe correctly
+    and then announced "Obstacle on left, close".
+    """
+
+    def _chair(self, conf, trusted):
+        return ObjectInfo(name="wardrobe", confidence=conf, h_zone="left",
+                          v_zone="middle", proximity="close", area=0.2,
+                          center_x=0.15, phrase="left", trusted_name=trusted)
+
+    def test_untrusted_low_confidence_says_obstacle(self):
+        msg = walk_message(self._chair(0.72, False))
+        self.assertIn("obstacle", msg.lower())
+        self.assertNotIn("wardrobe", msg.lower())
+
+    def test_trusted_low_confidence_says_the_name(self):
+        msg = walk_message(self._chair(0.72, True))
+        self.assertIn("wardrobe", msg.lower())
+        self.assertNotIn("obstacle", msg.lower())
+
+    def test_trust_does_not_depend_on_confidence_at_all(self):
+        """The whole point: the flag, not the number, decides the word."""
+        for conf in (0.30, 0.55, 0.72, 0.99):
+            self.assertIn("wardrobe",
+                          walk_message(self._chair(conf, True)).lower())
+
+    def test_high_confidence_still_speaks_without_the_flag(self):
+        self.assertIn("wardrobe", walk_message(self._chair(0.95, False)).lower())
+
+    def test_default_is_untrusted(self):
+        """A caller that forgets the flag gets the old, safe behaviour."""
+        info = analyze_box("wardrobe", 0.72, 0, 0, 100, 100, 1000, 1000)
+        self.assertFalse(info.trusted_name)
 
 
 if __name__ == "__main__":

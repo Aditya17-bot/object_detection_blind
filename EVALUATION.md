@@ -103,13 +103,67 @@ session.
 1. **Live protocol test** (completes Phase 5): objects at known positions
    left/center/right × near/far, walk toward them with the phone stream,
    log spoken output vs ground truth. Needs ~15 min with the phone.
-2. ✅ IMPLEMENTED (2026-07-11): obstacle warnings below
+2. ⚠️ **RETRACTED 2026-08-02 — the confidence gate does not work.**
+   Implemented 2026-07-11: obstacle warnings below
    `decision.NAME_CONFIDENCE` say generic **"obstacle"** instead of the
-   class name. Clip probing: known misnames scored 0.65–0.75
+   class name, with the threshold set to 0.8 on the strength of a clip
+   probe recorded here claiming misnames scored 0.65–0.75
    (dustbin→toilet 0.65–0.72, wardrobe→refrigerator 0.72–0.75) while
-   correct names scored ≥ 0.85 — threshold set to **0.8** (2026-07-11,
-   raised from the initial 0.7), which catches all observed misnames.
-   Small sample; revisit after the live protocol test.
+   correct names scored ≥ 0.85.
+
+   **Re-measured on the same clips (14 sampled frames, conf 0.6, GPU), those
+   numbers do not hold:**
+
+   | | claimed 2026-07-11 | measured 2026-08-02 |
+   |---|---|---|
+   | dustbin → "toilet" | 0.65–0.72 | **peak 0.94**, mean 0.80 |
+   | wardrobe → "refrigerator" | 0.72–0.75 | **peak 0.82** |
+   | correct "chair" | ≥ 0.85 | 0.92 |
+
+   The bands **overlap**, so no threshold separates them: at 0.8 the
+   dustbin is still announced as "Toilet ahead" — which
+   `test_output/phase3_WhatsApp Video 2026-07-09 at 10.14.53 PM (2)_walk.log:1`
+   shows happening. The original probe was too small a sample and was read
+   as a separation that was never there.
+
+   **Confidence is not a signal for "is this word right."** It reports how
+   sure the detector is about the box, over a vocabulary that contains no
+   word for a wardrobe — a forced choice between 80 words can be made with
+   total certainty and still be wrong. The gate is left in place (it costs
+   nothing and does catch genuinely weak detections) but it is NOT the
+   mechanism that fixes naming.
+
+   **Replacement, measured 2026-08-02**: `name_index.py`, an embedding-distance
+   naming head — keep YOLO's box, re-decide the word from a nearest-neighbour
+   match against user-labelled crops, and abstain when the match is not clearly
+   closest. Unlike confidence, that distance IS separable. Built from 280 crops
+   the user labelled into 17 classes:
+
+   - Leave-one-out over the index: at `min_margin` **0.15** it names 49/280
+     crops with **49/49 correct — zero wrong names**, versus 10 errors at the
+     untuned 0.05. A clean operating point exists, which is precisely what
+     §6.2's confidence gate could not offer at any threshold. Full grid in
+     `test_output/name_index_report.md`.
+   - The separating axis is the **margin over the runner-up label**, not the
+     similarity: `min_sim` is inert anywhere in 0.50-0.65 on this data.
+   - Clips at stride 1 (`verify_namer.py`, 8 clips, ~2000 frames): **105
+     renames in 8 distinct patterns, all inspected by eye, 104 correct**. Five
+     are errors this report previously recorded as unfixable COCO-vocabulary
+     limits — `refrigerator -> wardrobe` (31x, §3 dark-room row),
+     `toilet -> dustbin` (23x, §3 dustbin row), `laptop -> book` (28x, the
+     notebook from §3's eval_c summary row), `cell phone -> suitcase` (11x, the
+     maroon suitcase of the appendix dark-clip note), and `person -> chair`
+     (4x, a blanket draped over a chair that YOLO read as a person). The single
+     arguable case is `bench -> suitcase` (1x) on a box holding a bench with a
+     suitcase on it; both are obstacle classes, so the warning is unchanged in
+     kind.
+   - **Zero renames on the 2 clips containing none of the labelled objects** —
+     the false-positive bar the stairs class failed.
+
+   Note the asymmetry this buys, and why it is the point: the gate in §6.2
+   could only ever downgrade a name to the generic word "obstacle". The naming
+   head can produce the *right* word, and abstains — leaving YOLO's word in
+   place — whenever it cannot.
 3. Door + dustbin (+ stairs) fine-tune — user started training a separate
    YOLOv8n model on Colab 2026-07-11 (see `finetune_handoff.md`); will be
    integrated as a second inference pass when the `.pt` arrives.

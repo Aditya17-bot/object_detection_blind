@@ -63,16 +63,20 @@ def _cap(text):
 # Walk Mode
 # --------------------------------------------------------------------------
 
+# Walk Mode speaks ONLY at this proximity or nearer. Field feedback
+# 2026-07-31: continuous naming of everything in the room ("too much of a
+# cluster") drowned the warnings that mattered — the user stops listening, and
+# an ignored warning is worth less than silence. Medium obstacles are therefore
+# silent even dead ahead; the full inventory moved to describe(), which is
+# on-demand and cannot interrupt anything.
+WALK_MIN_PROXIMITY = "close"
+
+
 def _relevant_obstacle(info):
     """Is this detection worth warning about at all?"""
     if info.name not in OBSTACLE_CLASSES:
         return False
-    if info.proximity == "far":
-        return False
-    # medium-distance obstacles only matter when they are in the walking path
-    if info.proximity == "medium" and info.h_zone != "center":
-        return False
-    return True
+    return _PROX_RANK[info.proximity] >= _PROX_RANK[WALK_MIN_PROXIMITY]
 
 
 def walk_priority(info):
@@ -103,14 +107,36 @@ def _freer_side(chosen, infos):
     return "left" if chosen.center_x >= 0.5 else "right"
 
 
+def _spoken_name(info):
+    """The class name, or "obstacle" when the label is not trustworthy enough
+    to say out loud (see NAME_CONFIDENCE / TRUSTED_NAME_CLASSES).
+
+    Three ways a name earns the right to be spoken, in order of evidence:
+
+    1. `info.trusted_name` — the embedding naming head committed a rename, or
+       the detection came from the dedicated door/dustbin model. This is the
+       STRONGEST signal and the only calibrated one: a rename had to beat every
+       competing label by MIN_MARGIN and survive hysteresis.
+    2. `TRUSTED_NAME_CLASSES` — a class with no COCO lookalike to confuse.
+    3. `confidence >= NAME_CONFIDENCE` — the legacy gate, kept for un-renamed
+       COCO detections only. Its stated basis is FALSIFIED (EVALUATION.md
+       section 6.2): misnames and correct names occupy overlapping confidence
+       bands, so no threshold separates them. It survives because it is still a
+       weak prior against speaking a low-confidence guess by name, not because
+       the number means what the original probe claimed.
+    """
+    if (info.trusted_name
+            or info.name in TRUSTED_NAME_CLASSES
+            or info.confidence >= NAME_CONFIDENCE):
+        return info.name
+    return "obstacle"
+
+
 def walk_message(info, all_infos=(), use_clock=False):
     """Spoken warning for the chosen obstacle. Short on purpose; vertical
     zone is irrelevant for walking, so only left/ahead/right (or the clock
     bearing when use_clock) is spoken."""
-    name = (info.name
-            if info.name in TRUSTED_NAME_CLASSES
-            or info.confidence >= NAME_CONFIDENCE
-            else "obstacle")
+    name = _spoken_name(info)
     side = clock_phrase(info.center_x) if use_clock else _SIDE_WORD[info.h_zone]
     if info.proximity == "very close":
         if info.h_zone == "center":
@@ -163,6 +189,44 @@ def clear_path(infos):
     if ranks[best] >= _PROX_RANK["close"]:
         return "Stop, no clear path"
     return _PATH_WORD[best]
+
+
+# --------------------------------------------------------------------------
+# Directional query ("is there anything on my left?")
+# --------------------------------------------------------------------------
+# The question a blind user actually asks, and the one the old command set
+# could not answer: walk mode volunteers ONE obstacle, describe() dumps the
+# whole room, and neither answers "what is over there". This is deliberately
+# DETERMINISTIC and lives in tier 0, so it works with the laptop switched off
+# and its answer can never be a language model's invention.
+
+_DIRECTIONS = ("left", "ahead", "right")
+_DIR_ZONE = {"left": "left", "ahead": "center", "right": "right"}
+_DIR_WORD = {"left": "on your left", "ahead": "ahead", "right": "on your right"}
+_CHECK_LIMIT = 2   # two things is an answer; five is another cluster
+
+
+def check_direction(infos, direction):
+    """What is in one third of the frame, closest first.
+
+    Reports everything detected there (not just OBSTACLE_CLASSES) — the user
+    asked, so a cup on the table is a legitimate answer. Distance stays a
+    bucket: this is an orientation question, not a navigation one.
+    """
+    if direction not in _DIR_ZONE:
+        return None          # caller abstains; never guess a direction
+    zone = _DIR_ZONE[direction]
+    here = [i for i in infos if i.h_zone == zone]
+    if not here:
+        return _cap(f"nothing {_DIR_WORD[direction]}")
+    here.sort(key=lambda i: (_PROX_RANK[i.proximity], i.area), reverse=True)
+    first = here[0]
+    parts = [f"{_article(_spoken_name(first))} {_spoken_name(first)} "
+             f"{first.proximity} {_DIR_WORD[direction]}"]
+    for extra in here[1:_CHECK_LIMIT]:
+        name = _spoken_name(extra)
+        parts.append(f"and {_article(name)} {name} {extra.proximity}")
+    return _cap(", ".join(parts))
 
 
 # --------------------------------------------------------------------------
@@ -280,10 +344,33 @@ class GuidanceEngine:
 
     def __init__(self, mode="walk", target=None,
                  repeat_cooldown=3.0, min_gap=1.5, persistence=2,
-                 reminder_interval=10.0, use_clock=True, memory_ttl=30.0):
+                 reminder_interval=10.0, use_clock=True, memory_ttl=30.0,
+                 find_persistence=1, absence_grace=2.5, miss_decay=0.5):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
         self.persistence = persistence          # frames a class must persist
+        # Find mode is DELIBERATELY more eager than walk mode, because the
+        # errors are not symmetric. The user ASKED for this object: announcing
+        # a misdetection costs them one wasted look, while staying silent about
+        # an object that is on screen reads as "the app is broken" — and a
+        # blind user cannot glance at the screen to find out which it was.
+        # Measured on the 2026-09-05 room walk: at the phone's real 2 FPS the
+        # person was detected in runs of [1,1,1,1,2,2] frames, so requiring two
+        # CONSECUTIVE frames missed four of six sightings and announced "not
+        # visible" while the person was in frame.
+        self.find_persistence = find_persistence
+        # ...and the reverse claim needs MORE evidence, not less. Saying "not
+        # visible" about something visible is the expensive error, so absence
+        # is measured in SECONDS of continuous non-detection rather than in
+        # frames, which also stops the threshold meaning different things on a
+        # 2 FPS phone and a 6 FPS laptop.
+        self.absence_grace = absence_grace
+        # Evidence DECAYS, it is not erased. A single missed frame used to
+        # reset a streak to zero, so an object detected on alternate frames
+        # never accumulated anything. A lone misdetection still decays away
+        # without ever reaching `persistence`, so false positives are not made
+        # more likely by this.
+        self.miss_decay = miss_decay
         self.reminder_interval = reminder_interval  # s between "still looking"
         self.use_clock = use_clock              # clock bearings vs left/right
         self.memory_ttl = memory_ttl            # s before a sighting goes stale
@@ -292,7 +379,7 @@ class GuidanceEngine:
         self._last_msg = None
         self._last_time = None
         self._last_obstacle = None  # (name, prox rank) of last walk warning
-        self._absent = 0            # find mode: consecutive frames w/o target
+        self._absent_since = None   # find mode: when the target went missing
         self._said_not_visible = False
         self._not_visible_time = None  # when "not visible"/reminder last said
         self.set_mode(mode, target)
@@ -312,7 +399,7 @@ class GuidanceEngine:
         self.target = target
         self._last_msg = None
         self._last_obstacle = None
-        self._absent = 0
+        self._absent_since = None
         self._said_not_visible = False
         self._not_visible_time = None
 
@@ -358,8 +445,15 @@ class GuidanceEngine:
         # persistence is tracked per class name (not per zone) so an object
         # keeps its streak while the user walks and it drifts across zones;
         # one-frame misdetections never reach `persistence` and stay silent.
-        self._streaks = {i.name: self._streaks.get(i.name, 0) + 1
-                         for i in infos}
+        seen = {i.name for i in infos}
+        cap = max(self.persistence, self.find_persistence) + 1.0
+        decayed = {}
+        for name in set(self._streaks) | seen:
+            prev = self._streaks.get(name, 0.0)
+            score = min(prev + 1.0, cap) if name in seen                 else prev - self.miss_decay
+            if score > 0:
+                decayed[name] = score
+        self._streaks = decayed
         self._remember(infos, now)
         if self.mode == "walk":
             return self._update_walk(infos, now)
@@ -387,8 +481,13 @@ class GuidanceEngine:
     def _update_find(self, infos, now):
         match = find_target(infos, self.target)
         if match is None:
-            self._absent += 1
-            if self._absent < self.persistence:  # flicker, not really gone
+            if self._absent_since is None:
+                self._absent_since = now
+            # Not "gone" until it has been continuously missing for a while.
+            # One dropped frame — or one flicker in the detector — is not
+            # evidence of absence, and calling it absence is what made the app
+            # announce "Person not visible" with the person on screen.
+            if now - self._absent_since < self.absence_grace:
                 return None
             if self._said_not_visible:
                 # target still missing: remind periodically so long silence
@@ -416,8 +515,8 @@ class GuidanceEngine:
             self._said_not_visible = True
             self._not_visible_time = now
             return self._speak(msg, now)
-        self._absent = 0
-        if self._streaks.get(self.target, 0) < self.persistence:
+        self._absent_since = None
+        if self._streaks.get(self.target, 0) < self.find_persistence:
             return None
         self._said_not_visible = False
         msg = find_message(match, self.target, self.use_clock)
@@ -444,3 +543,10 @@ class GuidanceEngine:
     def path(self, infos, now):
         """On-demand clear-path guidance; stamps the clock like describe()."""
         return self._speak(clear_path(infos), now)
+
+    def check(self, infos, direction, now):
+        """On-demand directional query ('anything on my left?'); stamps the
+        clock like describe(). None (unknown direction) is passed straight
+        through so the caller can abstain instead of inventing an answer."""
+        msg = check_direction(infos, direction)
+        return self._speak(msg, now) if msg else None

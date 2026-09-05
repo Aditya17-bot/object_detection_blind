@@ -101,7 +101,16 @@ class Detection {
   final String name;
   final double confidence;
   final double x1, y1, x2, y2; // 0..1
-  const Detection(this.name, this.confidence, this.x1, this.y1, this.x2, this.y2);
+
+  /// The NAME is independently vouched for: a dedicated-model class
+  /// (door/dustbin) or a rename committed by the server's embedding naming
+  /// head. Set from the server's `trusted_name` field; always false for
+  /// on-device detection, which has no naming head. Lets decision.dart skip
+  /// the nameConfidence gate, which cannot tell a right word from a wrong one.
+  final bool trustedName;
+
+  const Detection(this.name, this.confidence, this.x1, this.y1, this.x2, this.y2,
+      {this.trustedName = false});
 }
 
 // --- messages across the isolate boundary ---------------------------------

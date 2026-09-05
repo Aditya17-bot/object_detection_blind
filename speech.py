@@ -36,6 +36,18 @@ class Speaker:
             self._pending = message
             self._cond.notify_all()
 
+    def stop(self):
+        """Drop whatever is waiting to be said (voice command "stop").
+
+        Honest about its limits: pyttsx3's engine is owned by the worker
+        thread and cannot be interrupted safely from outside, so an utterance
+        already in progress finishes. That is enough for the case this exists
+        for — cancelling a long queued read-out — and the phone port has a real
+        mid-utterance stop."""
+        with self._cond:
+            self._pending = None
+            self._cond.notify_all()
+
     def wait_until_idle(self, timeout=10.0):
         """Block until nothing is pending or being spoken (demo shutdown /
         tests). Returns True if idle was reached within the timeout."""
