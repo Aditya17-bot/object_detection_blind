@@ -271,6 +271,104 @@ prior art. Ranked by perceived strength of the novelty case.
   (`test_output/eval_*.mp4`), so the before/after is reproducible from the
   logged announcement streams.
 
+### 4.9 Embedding-distance naming head with a derived abstention criterion *(strong — the perception-layer instance of the §9 thesis, and it comes with a falsified predecessor)*
+- **What:** the detector keeps the job it is good at — *where* — and the spoken
+  **word** is re-decided by nearest-neighbour matching an embedding of the
+  detected crop against a small set of user-labelled example crops of that
+  user's own objects. The system speaks the matched label only when the nearest
+  labelled example is both close enough and **clearly closer than the best
+  competing label**; otherwise it abstains and leaves the detector's word alone.
+  No training run: adding a class means adding crops and rebuilding an index in
+  seconds. The embedding comes from the already-loaded detector backbone
+  (`YOLO.embed()`), so there is no second model and no extra download.
+- **The problem it solves:** COCO has 80 words and none of them is *wardrobe*,
+  *dustbin* or *window*. The detector cannot decline to answer — it makes a
+  forced choice over the vocabulary it has and returns the nearest available
+  word. This is not a weak-model problem: a 2026-08-02 benchmark showed YOLO11
+  still calling the dustbin "toilet" at 0.93, and the repo's own 6.2 MB custom
+  nano model beating a 21.5 MB yolov8s on exactly the objects yolov8s misnames.
+  It is a **vocabulary** problem, and no amount of model capacity fixes it.
+- **The falsified predecessor — this is the valuable part.** The prior
+  mechanism was a **confidence gate**: below `NAME_CONFIDENCE` speak the generic
+  word "obstacle". Its threshold rested on a probe recording misnames at
+  0.65–0.75 and correct names at ≥0.85. Re-measured on the same clips:
+
+  | | claimed | measured 2026-08-02 |
+  |---|---|---|
+  | dustbin → "toilet" | 0.65–0.72 | **peak 0.94**, mean 0.80 |
+  | wardrobe → "refrigerator" | 0.72–0.75 | **peak 0.82** |
+  | correct "chair" | ≥0.85 | 0.92 |
+
+  The bands overlap, so **no threshold exists**, and "Toilet ahead" was being
+  spoken in the logs. Detection confidence answers *how sure am I this box holds
+  one of my 80 classes* — a question asked over a vocabulary with no word for a
+  wardrobe. A forced choice can be made with total certainty and still be wrong.
+  **The quantity being thresholded was never the quantity of interest.**
+- **Why that matters for the §9 thesis:** this is a clean, empirically
+  demonstrated instance of the failure C1 predicts — an abstention criterion
+  *borrowed from a neighbouring layer* rather than *derived from the failure
+  mode of the layer it guards*. The replacement is derived: embedding distance
+  to a labelled exemplar is a direct measure of "have I actually seen this thing
+  before, and is it unambiguously this one thing", which is exactly the question
+  naming poses. And unlike confidence, it is **separable**: a leave-one-out
+  sweep over labelled crops (`build_name_index.py`) finds operating points with
+  **zero wrong names retained**, printed as a grid so the claim is checkable
+  rather than asserted. If the zero-error column were ever empty, the report
+  says so in those words.
+- **Second derived criterion — provenance beats similarity.** Detections from
+  the dedicated door/dustbin model are marked trusted and are **never renamed**:
+  those classes exist *because* COCO lacked a word for them, so there is no
+  forced-choice error to correct. Discovered empirically — without the rule the
+  namer relabelled a real door as "wardrobe" three times on `eval_a`, both being
+  large flat rectangles. The general principle: a detector that owns a word
+  outranks a similarity match on that word.
+- **Third mechanism — hysteresis as a safety property, not a polish item.**
+  `GuidanceEngine` requires the same name on two consecutive frames before it
+  speaks, so an unstable namer does not produce *wrong* announcements, it
+  produces **silence** — and an app that has gone quiet in front of an obstacle
+  looks identical to an app that is working. The namer therefore carries its own
+  IoU tracker and commits a name change only after it repeats. Tracks are keyed
+  by the detector's original word as well as by overlap: two models detecting
+  the same object give near-identical boxes (COCO's "refrigerator" and the
+  custom model's "door" on one wardrobe), and greedy IoU matching alone let one
+  steal the other's track, silently swallowing every rename on `eval_a` until
+  keys were added.
+- **Fourth — vocabulary containment.** A name outside the app's known class set
+  fails *silently* downstream: person-sized proximity thresholds, no distance
+  estimate, and never walk-warned. So the namer refuses any label outside the
+  vocabulary at the point of decision, and the build script refuses to build an
+  index containing one without an explicit override. Same containment shape as
+  §4.7's tool-argument validation, applied to perception.
+- **Non-obviousness angle:** the combination is (a) using the detector's *own*
+  backbone as an embedder so personalisation costs no model and no training,
+  (b) taking the abstention criterion from *retrieval distance* rather than
+  classifier confidence, with a published falsification of the latter in the
+  same system, and (c) provenance-based trust between a general and a dedicated
+  detector. Personalised object recognition for blind users is prior art
+  (teachable object recognisers); what is claimed here is the abstention
+  criterion and its derivation, in a system where being wrong is spoken aloud
+  as fact.
+- **Evidence:** `name_index.py` (+ 33 unit tests in `test_name_index.py`),
+  `harvest_crops.py` (+ `test_harvest_crops.py`), `build_name_index.py`,
+  `verify_namer.py`. Built and calibrated on **280 crops the user labelled into
+  17 classes** (2026-08-02):
+  - leave-one-out at `min_margin` 0.15 names 49/280 with **49/49 correct, zero
+    wrong names** (10 errors at the untuned 0.05) — the separable operating
+    point the retracted confidence gate could not provide at any threshold;
+  - the discriminating quantity is the **margin over the runner-up label**, not
+    the distance: `min_sim` is inert across 0.50–0.65 on this data;
+  - on the recorded clips at stride 1, **105 renames in 8 patterns, all
+    eye-checked, 104 correct**, including five errors `EVALUATION.md` had
+    recorded as unfixable COCO-vocabulary limits, and a hallucinated *person*
+    (a blanket on a chair) corrected to *chair*;
+  - **no renames at all on the clips containing none of the labelled objects** —
+    the stairs-class bar (0.072 recall with 0.68–0.91 confidence false
+    positives) that this project has failed once before and pulled a feature
+    for.
+- **Status:** wired into `infer_server.py` and `webapp.py`; the production index
+  is built, tuned and committed (`name_index.npz`). Remaining: a walk with the
+  phone to confirm names are stable rather than flickering.
+
 ### 4.5 Pulse-count haptic direction *(minor)*
 - **What:** on a single-vibrator phone, direction is encoded by **number of
   pulses** (1 = left, 2 = ahead, 3 = right), firing only on a zone *change*.
@@ -284,6 +382,57 @@ prior art. Ranked by perceived strength of the novelty case.
 - **Note:** clock-direction speech for the blind is known; the only wrinkle is
   the explicit *camera-frame* remapping. Weak on its own; include only as part
   of the combination. (See open issue: mapping ≠ literal O&M bearings.)
+
+### 4.10 Focus arbitration over a single speech channel, with a solicitation-typed abstention rule *(strong — the output-scheduling instance of the §9 thesis)*
+- **What:** every spoken message carries a *class* (safety / response to an
+  explicit request / state confirmation / routine guidance) and a *task tag*,
+  and a task the user asked for **holds the channel** until it completes. While
+  a task holds focus, routine guidance is DROPPED rather than queued,
+  informational read-outs from any source wait, the user's own steering
+  commands still pass, and safety speech is never gated. Holds are open-ended
+  for tasks that run until an event (find) and timed for tasks that end when
+  they have spoken, and **every hold expires**, so a missed release degrades to
+  chatter rather than to silence.
+- **The non-obvious half — `solicited`.** Each request is typed by *how the
+  system came to believe the user wanted it*: deterministic parse or deliberate
+  dictation (solicited) versus a language model's guess at audio the parser
+  could not resolve (unsolicited). An unsolicited route may RUN a capability but
+  may **never speak an abstention**, and may never interrupt a task in progress.
+  The asymmetry is the point: "I can't do that" is a correct answer to a
+  question and an intrusion in reply to a door closing, and the *same string*
+  is one or the other depending only on provenance. Gating the COMMAND and not
+  merely its speech matters too — an OCR read pauses the camera stream and a
+  find changes mode, so a spurious trigger costs more than a spurious sentence.
+- **The input floor.** A grammar-constrained recognizer cannot report "I did not
+  understand": it returns its best match over the trained phrases for *any*
+  audio. So the absence of a parse is NOT evidence of a paraphrase — it is
+  weakly the opposite. A cheap lexical floor (≥2 words, ≥1 capability keyword or
+  object name) must be cleared before a language model is consulted at all, plus
+  an echo gate that ignores the recognizer while the device's own speaker is
+  audible. Without those, the system converses with itself.
+- **Why it is the §9 thesis:** *say less, never mislead* has so far been argued
+  per layer (perception §4.9, planning §4.8, transport F2, dialogue §4.7). This
+  is the layer that decides **whose turn it is**, and it shows the thesis has a
+  scheduling form: an over-full channel is not merely annoying, it is less safe,
+  because the one message that mattered arrives indistinguishable from four that
+  did not.
+- **Evidence / reduction to practice:** `speech_policy.py` +
+  `lib/logic/speech_policy.dart` (hand-mirrored, 22 + 23 tests including a
+  table-parity assertion). Prompted by a 2026-08-02 field walk in which the
+  handset made 26 router calls in 2.5 minutes on unsolicited recognizer output.
+  Both reported symptoms were then **reproduced deterministically** against the
+  running server: glue-word soup `'the is my on'` caused the model to attempt
+  `check(left)` — the unrequested directional read-out the user heard mid-find —
+  and, once validation rejected it, produced the spoken abstention the user
+  heard at random. A negative result worth keeping with the claim: the same
+  system's measured 55% out-of-scope over-trigger rate (paper §7) is exactly
+  what predicts this failure, so the arbitration layer is not defensive
+  programming but a consequence of a published measurement.
+- **Prior art to distinguish:** audio focus / ducking on mobile platforms
+  arbitrates between *applications* by stream type; screen-reader speech queues
+  arbitrate by recency and interruption class. Neither types a request by its
+  *provenance*, and neither drops rather than queues on the grounds that late
+  guidance is unsafe.
 
 ## 5. Candidate independent claim (illustrative, non-final)
 
@@ -656,3 +805,241 @@ vs. useful announcements retained.
      in addition to `main.tex`. ⚠ Both are disclosures — §8a applies to
      whichever goes out first, and the .docx is the one most likely to be
      emailed casually.
+
+- **2026-08-02 — §4.9 added: embedding-distance naming head, and a mechanism
+  RETRACTED.** Two things happened and the second is the more important one.
+  1. **The confidence gate is falsified.** `decision.NAME_CONFIDENCE = 0.8`
+     (speak the generic word "obstacle" below it) rested on a probe recorded in
+     `EVALUATION.md` claiming misnames sit at 0.65-0.75 and correct names at
+     >=0.85. Re-measured on the same clips: dustbin->"toilet" peaks at **0.94**,
+     wardrobe->"refrigerator" at **0.82**, correct "chair" at 0.92. The bands
+     overlap; no threshold exists; "Toilet ahead" is in the announcement logs.
+     `EVALUATION.md` has been corrected in place rather than quietly amended,
+     and the paper now reports it as a **negative result** (PAPER.md §7,
+     main.tex §6, build_docx.py — the prose is duplicated across all three).
+     A disclosure that claimed this gate worked would have been claiming
+     something the system's own logs contradict.
+  2. **Replacement: §4.9**, an embedding-distance naming head whose abstention
+     criterion is derived from the naming layer's own failure mode rather than
+     borrowed from the detector's. Keep YOLO for *where*, re-decide *what* by
+     nearest-neighbour over user-labelled crops of the user's own objects, and
+     abstain unless the match is unambiguous. `YOLO.embed()` on the loaded
+     backbone, so no second model and no download. Sub-mechanisms worth claiming
+     alongside: provenance trust (a dedicated detector that owns a word outranks
+     a similarity match on it), name hysteresis keyed by detector word as well
+     as box overlap, and vocabulary containment at the decision point.
+  3. Reduction to practice: `name_index.py`, `harvest_crops.py`,
+     `build_name_index.py`, `verify_namer.py`, `test_name_index.py` (30 tests).
+     Test counts now **262 Python / 159 Dart**. On the recorded clips with a
+     preliminary 4-label index: dustbin and wardrobe renamed correctly, and
+     **zero renames on the clips containing neither** — the false-positive bar
+     the stairs class failed.
+  4. ~~⚠ The production index awaits the user's labelling pass~~ — **done the
+     same day, see the next entry.** The *retraction* in item 1 never depended
+     on it and stands on its own.
+  5. **`laundry basket` added as a namer-only class** (same day, during
+     labelling — user found crops of one and asked where to put them; 0.85 m
+     tall, 0.3 m wide). Worth recording because it is the mechanism's intended
+     workflow rather than a code change: the vocabulary is extended by the
+     *user's own environment* at labelling time, and the containment rule turns
+     that into a hard gate — `build_name_index.py` refuses to build on a label
+     outside `TARGET_CLASSES`, so a new word cannot reach the speech layer
+     without also acquiring an area threshold and a real-world height. The
+     alternative outcomes were both worse and both silent: COCO calls one
+     "handbag", which is not a target class and is therefore **dropped
+     entirely** (the app is blind to a waist-high floor obstacle), or
+     "suitcase", which warns correctly under a wrong word.
+
+- **2026-08-02 (later) — §4.9 reduced to practice: the index is built and the
+  abstention criterion is measured.** The user labelled all 280 crops into 17
+  classes and the numbers are no longer preliminary.
+  1. **A clean operating point exists.** Leave-one-out over the built index at
+     `min_margin` 0.15 names 49/280 crops with **49/49 correct — zero wrong
+     names** (10 errors at the untuned 0.05). This is the claim §4.9 rests on
+     and the one the retracted confidence gate could not support at ANY
+     threshold, because there the correct and incorrect bands overlapped.
+     Report: `test_output/name_index_report.md`.
+  2. **The discriminating quantity is the MARGIN, not the distance.**
+     `min_sim` is inert anywhere in 0.50-0.65 on this data; every clean row is
+     produced by the runner-up gap alone. Worth stating precisely in any claim
+     language: the signal is *relative* separation between competing labels,
+     not absolute proximity to a stored example. An absolute-distance
+     formulation would read on far more prior art and would not, on this
+     evidence, actually work.
+  3. **Field evidence, 105 renames across 8 clips, every pattern eye-checked:
+     104 correct, 1 arguable, and 0 renames on the clips containing none of the
+     labelled objects.** Five of the corrected names are errors `EVALUATION.md`
+     had recorded as unfixable vocabulary limits. One is worth singling out:
+     `person -> chair` (4x) on a blanket draped over a chair. The detector did
+     not merely pick the wrong word from its 80 — it announced a **person**
+     where there was none, which for a blind user is a different and worse
+     class of error than "toilet" for a dustbin. The naming head removed it
+     without any change to the detector.
+  4. **A measurement bug that hid the result, worth recording as a hazard of
+     the method rather than an incident.** `leave_one_out` scored a predicted
+     `_ignore` as a wrong name, when at runtime matching `_ignore` is an
+     ABSTENTION. The report therefore charged the system for its safest
+     possible outcome and concluded in print that "no setting reaches zero
+     errors" — the exact opposite of the truth. The general lesson for any
+     abstaining component: **the evaluation harness must mirror the runtime
+     decision function exactly**, or it will misprice abstention and select the
+     wrong operating point. Now enforced by a test that asserts
+     decision-for-decision equality between the two across three settings.
+  5. Data-integrity note with a safety edge: crop filenames were unique only
+     within a guess-folder, and the labelling workflow flattens folders, so
+     Windows Explorer silently replaced 3 crops on same-name moves — one a
+     dustbin, a class with five examples. Recovered from the manifest (which
+     stores clip + frame + box precisely so a crop is reproducible) and the
+     naming scheme made globally unique. A user-labelling step is part of the
+     mechanism, so its failure modes are part of the mechanism.
+
+- **2026-08-02 (night) — §4.10 added: focus arbitration, and a failure the
+  project's own published measurement predicted.** The first field walk with the
+  naming index produced three complaints — an abstention spoken at random, an
+  unrequested directional read-out landing mid-find, and "it's still a cluster".
+  1. **Root cause, reproduced rather than argued.** The handset was posting
+     every unparseable recognizer result to the router: 26 calls in 2.5 minutes.
+     A grammar-constrained recognizer cannot say "I did not understand", so
+     ambient sound arrives as trained-word soup. Replaying that soup at the
+     running server reproduces both symptoms exactly: the model attempts
+     `check(left)`, and the rejection surfaces as the spoken abstention. The
+     paper already reports this model at **55% out-of-scope over-trigger**;
+     feeding it unsolicited noise makes over-triggering the dominant behaviour.
+     The measurement predicted the field failure — worth saying in the paper,
+     because it is the strongest argument available that the eval measures
+     something real.
+  2. **§4.10** is the mechanism: message classes, task focus, drop-not-queue for
+     routine guidance, and the `solicited` type that makes the SAME string a
+     correct answer or an intrusion depending only on how the system came to
+     believe it was wanted.
+  3. Note for claim drafting: the abstention rule in §4.7 said *the model may
+     never author a spoken token*; §4.10 refines the boundary again, this time
+     on the output side — a validated abstention is a legitimate spoken token
+     **only in reply to a request the user is known to have made**. Provenance,
+     not content, decides.
+
+- **2026-08-02 (night, second walk) — §4.11: ARGUMENT GROUNDING, and the
+  sharpest single piece of evidence this project has produced.** The first fix
+  added `/agent` utterance logging; the second walk immediately paid for it.
+  The log shows `llama3.2:3b`, given the single word **"door"**, emitting
+  `check(left)` — and the same for "the cup", "bag", "the person", "cup
+  phones". The user heard *"Nothing on your left"* repeatedly having said no
+  such thing.
+  1. **Why every existing guard missed it.** `check` is a real capability and
+     `left` is a valid member of the direction enum, so the action is
+     *well formed*. Tool-name validation, enum validation and vocabulary
+     containment all pass. The defect is not in the action's SHAPE but in its
+     PROVENANCE: the argument is a fact about the user's request that
+     originated in the model.
+  2. **The rule:** *the model may choose a capability; it may not invent the
+     capability's argument.* An argument must be grounded in the utterance.
+  3. **The non-obvious part is where the rule does NOT apply.** Grounding is
+     enforced for closed-set arguments whose members are also the words people
+     say (directions, on/off) and deliberately NOT for class names, because
+     class names are exactly where paraphrase lives — "the exit" means the
+     door, "something to drink" means the bottle. Grounding those would delete
+     the paraphrase capability the whole tier exists to provide (measured 0% ->
+     47%). A naive "all arguments must appear verbatim" rule would have looked
+     more rigorous and would have destroyed the feature. Required-vs-optional
+     is handled asymmetrically too: an invented REQUIRED argument voids the
+     action, an invented OPTIONAL one is simply dropped, so an unrequested
+     "sonar off" degrades to a toggle rather than a silent state change.
+  4. **Claim relationship.** §4.7 drew the boundary at *perceptual content*
+     (the model may not author facts about the scene). §4.10 drew it at
+     *provenance of the request* (an abstention is speech only if someone
+     asked). §4.11 draws it at *provenance of the argument*. Same thesis, three
+     surfaces — and each was found by a field failure, not by design review,
+     which is itself worth saying in the paper.
+  5. ⚠ **Consequence for the reported evaluation:** grounding changes what the
+     router accepts, so the frozen T3-T6 tables no longer describe the shipped
+     system. Over-trigger should improve — grounding rejects precisely the
+     fabricated-argument class — but that must be MEASURED and recorded as a
+     post-freeze amendment, not asserted.
+
+### 2026-09-05 — Field-walk defect pass: a falsified gate retired, a wrong bearing corrected, and a transport that was breaking perception
+
+Five defects found and fixed in one session, all from a single user report
+("still not production ready"). Three of them are worth the disclosure because
+they are each a case of a mechanism defeating the very thesis it was built to
+serve.
+
+1. **The naming head's verdict was being discarded by the falsified gate it
+   replaced.** §4.9 established that embedding margin is a calibrated
+   abstention signal and that detector confidence is NOT one (measured: a
+   dustbin misnamed "toilet" peaks at 0.94, a correct "chair" at 0.92 —
+   overlapping bands, so no threshold separates them). But `Namer.apply` never
+   marked a committed rename as trusted, so `_spoken_name` re-gated it on the
+   very confidence number §4.9 falsified. A wardrobe correctly identified at
+   YOLO-confidence 0.72 was announced as the generic **"Obstacle"**. The system
+   did the hard part and then threw the answer away. Fixed end to end —
+   `trusted_name` now travels namer -> server JSON -> `Detection` ->
+   `ObjectInfo` -> spoken word — and pinned by tests in both languages.
+   *Lesson for the disclosure: a calibrated signal is only worth what the
+   downstream consumer lets it be worth. The claim should describe the
+   provenance flag, not just the classifier.*
+
+2. **§4.6's clock bearings were about double the true angle, in the DEFAULT
+   configuration.** The frame was mapped onto 10-11-12-1-2 — four hours, 120
+   degrees — across a camera that sees ~65. The right frame edge sits at about
+   +32 deg and was announced as "2 o'clock" (+60). Clock mode has been the
+   default since 2026-07-14, so the users most able to *act* on a bearing (O&M
+   trained) were the ones being systematically over-rotated; untrained users
+   ignored the number and were unaffected. The mapping is now DERIVED from an
+   explicit `CAMERA_FOV_DEG`, which at 65 deg yields 11-12-1 and nothing wider.
+   ⚠ This **weakens §4.6 further**: at this field of view clock bearings cannot
+   be finer than left/center/right — three hours, three zones. The feature's
+   remaining value is the VOCABULARY a trained traveller already has, not
+   angular resolution, and the earlier claim of extra resolution was part of
+   the error. Keep §4.6 rated minor; do not claim precision.
+
+3. **The transport layer was corrupting the perception layer.** The app posted
+   RAW YUV420 planes: 506 KB/frame, measured at 320-510 ms to upload on the
+   user's hotspot against ~171 ms for BOTH models plus the naming head, under a
+   1.2 s frame timeout. Frames were being lost to the network, and a lost frame
+   is not merely a slower app — it breaks `GuidanceEngine`'s two-frame
+   persistence streak. The user-visible symptoms were "obstacles are weirdly
+   said" and "it keeps no memory of the door": erratic announcements and an
+   object that never accumulated enough sightings to enter the object memory
+   of §4.3. Both looked like decision-layer bugs and were neither. Fixed with
+   hardware JPEG encoding on the handset (measured 506 KB -> 26 KB, a 19x cut),
+   with the raw path retained as an automatic fallback.
+   *Lesson: §4.3 and §4.8 both assume a frame rate the transport was not
+   delivering. Any claim that depends on temporal persistence should state the
+   frame-delivery assumption explicitly.*
+
+4. **The grammar path had no noise floor, while the free-speech path had
+   three.** §4.10 added a plausibility floor, a rate limit and a solicitation
+   type to *unmatched* speech before the router is consulted. A MATCHED command
+   went straight to execution with none of them — yet the recognizer is
+   grammar-constrained and therefore returns its best match for **any** audio,
+   including a door closing. Worse, the grammar's explicit `[unk]` token — the
+   recognizer's own statement that it could not place a sound — was being
+   *stripped and discarded*, so "[unk] [unk] clock mode" arrived
+   indistinguishable from a deliberate utterance. That is the user's "randomly
+   says clock mode". The markers are now counted and weighed
+   (`kMaxUnknownRatio` 0.5).
+   *This is the same shape as items 1 and 3: a system possessed the evidence it
+   needed and threw it away before the decision point. Three independent
+   instances in one codebase suggests it is worth stating as a design
+   principle in its own right — **preserve the uncertainty signal all the way
+   to the actor** — rather than as three bug fixes.*
+
+5. **Focus was released before the user had heard the answer** (the OCR case).
+   §4.10's `extend()` fixed exactly this for find announcements; `_readText`
+   bypassed `_say` entirely and so never held the channel at all, then released
+   a hold it had not taken. A page of OCR text outlived the default 6 s focus
+   and routine walk chatter cut into it. Fixed by routing the read-out through
+   the same arbitration path as everything else. *Evidence that §4.10's
+   mechanism is right and its enforcement was incomplete: an arbitration layer
+   is only sound if every speech path is obliged to go through it.*
+
+**Not fixed, and recorded honestly:** on the user's own room the naming head
+made **0 renames over 424 sampled frames** — it abstained everywhere, almost
+always as `ambiguous` (high similarity 0.75-0.90, but margins of 0.005-0.11
+against `MIN_MARGIN` 0.15). The index was labelled from eight older clips and
+this is a new room, so the crops are out of distribution. This is the DESIGNED
+behaviour and the stairs precedent working as intended — it declined to guess
+rather than inventing a confident wrong word — but it means §4.9's benefit is
+**room-specific until labelled**, which is a real deployment limitation and
+should be stated in any filing or paper rather than discovered by a reviewer.
+

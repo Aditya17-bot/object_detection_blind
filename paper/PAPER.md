@@ -269,7 +269,10 @@ gates** all pass:
    for the nearest, largest objects — the ones most likely to be clipped.
 2. **Confidence gate.** Below the name-confidence threshold the class may be a
    misdetection, and a wrong class means a wrong `real_height`, i.e. a
-   confidently wrong number.
+   confidently wrong number. This gate is the weakest of the three: §7 reports
+   that confidence does not separate right names from wrong ones, so it catches
+   genuinely weak detections but not confident misnaming. The distance estimate
+   is protected here mainly by gates 1 and 3.
 3. **Range gate.** Only medium/far. Up close the estimate is least reliable and
    the ordinal bucket already conveys "here".
 
@@ -560,10 +563,76 @@ bedroom clip, for instance, spoke 8 times across 471 frames. Throughput was
 Object *naming* is the known weakness, not object *warning*: **6 of the 31**
 announcements carried a wrong class name, and in every one of those six the
 warning behaviour was still correct. The cause is COCO's label set assigning
-the nearest lookalike (dustbin → "toilet", wardrobe → "refrigerator"), which is
-why low-confidence warnings speak the generic word "obstacle" instead of a
-class name — itself an instance of the same abstention pattern, applied to the
-name rather than to the warning.
+the nearest lookalike (dustbin → "toilet", wardrobe → "refrigerator").
+
+The system's response to this was a **confidence gate**: warnings whose
+detection confidence falls below a threshold speak the generic word "obstacle"
+instead of a class name. We report it here as a **negative result**, because it
+does not work, and because *why* it does not work is the sharpest evidence we
+have for C1.
+
+The threshold was set from a probe finding misnames at 0.65–0.75 and correct
+names at ≥0.85. Re-measured on the same clips (14 sampled frames per clip), the
+dustbin is called "toilet" at a **peak confidence of 0.94** (mean 0.80) and the
+wardrobe "refrigerator" at 0.82, against 0.92 for a correctly named chair. The
+distributions overlap, so **no threshold separates them**, and the announcement
+logs show "Toilet ahead" being spoken.
+
+The failure is structural rather than a matter of calibration. Detection
+confidence answers *how sure is the detector that this box contains one of its
+80 classes* — a question posed over a vocabulary that contains no word for a
+wardrobe. A forced choice among the available words can be made with complete
+certainty and still be wrong, so the quantity being thresholded is not the
+quantity of interest. This is precisely the failure C1 predicts: an abstention
+criterion imported from a neighbouring layer, rather than derived from the
+failure mode of the layer it guards.
+
+Its replacement is derived from that failure mode instead. The naming decision
+is moved off the detector's class scores and onto the distance between an
+embedding of the detected crop and a small set of user-labelled examples, with
+abstention when the nearest labelled example is not clearly closer than the next
+competing label. Concretely: the user labelled 280 crops harvested from their
+own clips into 17 classes (a single ~30-minute pass, no training run — the
+detector's own backbone supplies the embedding).
+
+That criterion is separable where confidence was not. A leave-one-out sweep over
+the labelled crops finds an operating point that names 49 of 280 crops with
+**49/49 correct — zero wrong names**, against 10 errors at the untuned default.
+Two properties of the sweep matter more than the headline. First, the
+discriminating quantity is the **margin over the runner-up label**, not the
+absolute distance: the similarity floor is inert anywhere in 0.50–0.65, so what
+separates a correct rename from a wrong one is how much better the winning label
+is than its nearest competitor, not how good it is in isolation. Second, the
+resulting operating point is deliberately low-coverage — it declines to name
+82% of crops — which is the intended shape for a mechanism whose output is
+spoken as fact.
+
+On the recorded clips the mechanism performs 105 renames across eight distinct
+patterns; we inspected every pattern by eye and 104 are correct. Five of the
+eight are errors our own earlier evaluation had recorded as unfixable
+consequences of COCO's label set, including the dustbin and the wardrobe. One is
+of a different kind: on four frames the detector reports a **person** where a
+blanket is draped over a chair, and the naming head corrects it to *chair* — a
+hallucinated pedestrian is a materially worse error for a blind traveller than a
+mislabelled bin, and it is removed without touching the detector. The single
+arguable rename is a box containing a bench with a suitcase on it, named
+*suitcase*; both are obstacle classes, so the warning is unchanged in kind.
+On the two clips containing none of the labelled objects the mechanism makes
+**no renames at all**.
+
+We report the mechanism and this clip-level check. The labelled examples and the
+clips come from the same rooms, the renames were adjudicated by the author, and
+a calibrated evaluation on held-out rooms and other users' objects is future
+work; no such claim is made here.
+
+One methodological point generalises beyond this component. Our first
+leave-one-out report scored a predicted *do-not-name* label as a wrong name,
+when at runtime that prediction is an **abstention** — and consequently
+concluded in print that no zero-error operating point existed, the exact
+opposite of the truth. An evaluation harness for an abstaining component must
+mirror the runtime decision function exactly; if it misprices abstention it will
+select the wrong operating point, and it will do so silently. We now assert that
+equality in a test.
 
 These numbers are small and were reviewed by the author, so they are reported as
 a sanity check on the deterministic core rather than as a perception result.

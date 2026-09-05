@@ -29,6 +29,7 @@ from flask import Flask, jsonify, request
 from ultralytics import YOLO
 
 from agent_server import register_agent_routes
+from name_index import TRUSTED_KEY, Namer
 from position import TARGET_CLASSES
 
 # yolov8s is the strong model (nano was the phone's weak spot); door/dustbin
@@ -109,7 +110,7 @@ _AUTO = object()  # sentinel: custom_model=None must mean "explicitly none"
 
 def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
               coco_model=None, custom_model=_AUTO, imgsz=640,
-              router=None, transcriber=None):
+              router=None, transcriber=None, name_index=None, namer=None):
     """coco_model/custom_model override the paths — lets tests inject fakes
     without loading real weights (same pattern as test_webapp.py).
     custom_model=None disables the custom model; leaving it unset loads
@@ -128,6 +129,13 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
             custom = None
             print(f"Custom model unavailable ({exc}) — COCO classes only")
 
+    # Naming head: YOLO decides WHERE, this decides WHAT. Optional — with no
+    # index file the server behaves exactly as it did before, which is also the
+    # state every test that doesn't ask for one runs in.
+    if namer is None and name_index:
+        namer = Namer.maybe_load(name_index, coco, coco_path,
+                                 vocabulary=TARGET_CLASSES)
+
     # Warm up now, not on the first phone frame: the first predict pays
     # torch/ultralytics graph init (1-2 s), which would blow the app's 1.2 s
     # frame timeout and make the first user experience a spoken failure.
@@ -135,6 +143,10 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
     coco.predict(dummy, conf=COCO_CONF, imgsz=imgsz, verbose=False)
     if custom is not None:
         custom.predict(dummy, conf=CUSTOM_CONF, imgsz=imgsz, verbose=False)
+    if namer is not None:
+        # the first embed() pays the same graph-init cost as the first predict
+        namer.index.classify_crops([dummy[:64, :64]])
+        namer.smoother.reset()
 
     # Serialize inference: ultralytics predict is not thread-safe, and when
     # the phone times out and abandons a request the server keeps computing
@@ -142,18 +154,24 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
     # and both slow down. Uncontended in normal one-frame-at-a-time operation.
     infer_lock = threading.Lock()
 
-    def _collect(result, names, conf_floor):
+    def _collect(result, names, conf_floor, keep_all=False, trusted=False):
         out = []
         for b in result.boxes:
             name = names[int(b.cls)]
             conf = float(b.conf)
-            if name not in TARGET_CLASSES:
+            # With a naming head active the class filter moves to AFTER
+            # naming: a dustbin YOLO calls "vase" has to reach the namer, and
+            # this filter would have thrown the box away first.
+            if not keep_all and name not in TARGET_CLASSES:
                 continue
             if conf < _CUSTOM_FLOOR.get(name, conf_floor):
                 continue
             x1, y1, x2, y2 = (float(t) for t in b.xyxyn[0])
-            out.append({"name": name, "conf": conf,
-                        "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+            det = {"name": name, "conf": conf,
+                   "x1": x1, "y1": y1, "x2": x2, "y2": y2}
+            if trusted:
+                det[TRUSTED_KEY] = True
+            out.append(det)
         return out
 
     @app.post("/infer")
@@ -163,30 +181,61 @@ def build_app(coco_path="yolov8s.pt", custom_path="door_dustbin_stairs.pt",
         w = int(f["width"])
         h = int(f["height"])
         rotation = int(f.get("rotation", 0))
-        frame = yuv420_to_bgr(
-            request.files["y"].read(), request.files["u"].read(),
-            request.files["v"].read(), w, h,
-            int(f["yStride"]), int(f["uvStride"]), int(f["uvPixelStride"]))
+        # Two frame shapes, and the app picks per frame.
+        #
+        # "jpeg" is the normal one since 2026-09-05: the phone's hardware
+        # encoder ships ~45 KB instead of the ~506 KB of raw planes. That
+        # upload was measured at 320-510 ms on the user's hotspot against
+        # ~171 ms for all inference here, and it was losing frames to the
+        # app's 1.2 s timeout — which breaks the guidance engine's two-frame
+        # persistence and makes announcements erratic.
+        #
+        # The raw "y"/"u"/"v" planes remain supported so an older APK, or a
+        # handset whose platform channel fails, still works.
+        if "jpeg" in request.files:
+            buf = np.frombuffer(request.files["jpeg"].read(), np.uint8)
+            frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if frame is None:
+                return jsonify({"error": "undecodable jpeg"}), 400
+        else:
+            frame = yuv420_to_bgr(
+                request.files["y"].read(), request.files["u"].read(),
+                request.files["v"].read(), w, h,
+                int(f["yStride"]), int(f["uvStride"]),
+                int(f["uvPixelStride"]))
         if rotation in _ROT:
             frame = cv2.rotate(frame, _ROT[rotation])
 
+        keep_all = namer is not None
         with infer_lock:
             dets = _collect(
                 coco.predict(frame, conf=COCO_CONF, imgsz=imgsz,
                              verbose=False)[0],
-                coco.names, COCO_CONF)
+                coco.names, COCO_CONF, keep_all)
             if custom is not None:
                 dets += _collect(
                     custom.predict(frame, conf=CUSTOM_CONF, imgsz=imgsz,
                                    verbose=False)[0],
-                    custom.names, CUSTOM_CONF)
+                    custom.names, CUSTOM_CONF, keep_all, trusted=True)
+            if namer is not None:
+                namer.apply(frame, dets)
+                # Names the app doesn't know fail SILENTLY downstream (wrong
+                # proximity thresholds, no metres, never walk-warned), so the
+                # class filter is applied here instead — after the namer has
+                # had its say, on the name the user will actually hear.
+                dets = [d for d in dets if d["name"] in TARGET_CLASSES]
         ms = (time.monotonic() - t0) * 1000
-        print(f"/infer {w}x{h} rot{rotation} -> {len(dets)} dets in {ms:.0f}ms")
+        renamed = sum(1 for d in dets if "yolo_name" in d)
+        kind = "jpeg" if "jpeg" in request.files else "raw"
+        print(f"/infer {w}x{h} rot{rotation} {kind} -> {len(dets)} dets "
+              f"in {ms:.0f}ms"
+              + (f" ({renamed} renamed)" if renamed else ""))
         return jsonify({"detections": dets})
 
     @app.get("/health")
     def health():
         return jsonify({"ok": True, "custom": custom is not None,
+                        "namer": namer is not None,
                         "agent": router is not None and router.enabled})
 
     # POST /agent — the phone posts an utterance (typed) or a WAV of the
@@ -207,6 +256,9 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=5001)
     ap.add_argument("--model", default="yolov8s.pt")
     ap.add_argument("--extra-model", default="door_dustbin_stairs.pt")
+    ap.add_argument("--name-index", default="name_index.npz",
+                    help="embedding naming head built by build_name_index.py; "
+                         "pass '' to disable and use raw YOLO names")
     ap.add_argument("--imgsz", type=int, default=640,
                     help="inference resolution; 480 is ~1.6x faster at a "
                          "small accuracy cost")
@@ -234,7 +286,8 @@ if __name__ == "__main__":
             print(f"  UNAVAILABLE — {transcriber.error}")
 
     app = build_app(args.model, args.extra_model, imgsz=args.imgsz,
-                    router=agent.AgentRouter(llm=llm), transcriber=transcriber)
+                    router=agent.AgentRouter(llm=llm), transcriber=transcriber,
+                    name_index=args.name_index)
     start_discovery_responder(args.port)
     print(f"BlindAssist inference server on http://{args.host}:{args.port} "
           f"(UDP discovery on {DISCOVERY_PORT})")

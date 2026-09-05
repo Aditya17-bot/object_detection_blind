@@ -58,13 +58,18 @@ class AssistantEngine:
     def __init__(self, source="0", mode="walk", target=None,
                  model_name="yolov8s.pt", conf=0.6, rate=175, muted=False,
                  voice=True, extra_model="door_dustbin_stairs.pt",
-                 extra_conf=0.4, agent_model=None, whisper_model=None):
+                 extra_conf=0.4, agent_model=None, whisper_model=None,
+                 name_index=None):
         self.source = source
         self.model_name = model_name
         self.conf = conf
         self.extra_model = extra_model   # custom door/dustbin/stairs weights
         self.extra_conf = extra_conf
         self._extra = None
+        # Embedding naming head (name_index.py). None = raw YOLO names, which
+        # is exactly the behaviour before it existed.
+        self.name_index = name_index
+        self._namer = None
         self.muted = muted
         self._rate = rate
         self._lock = threading.Lock()
@@ -129,6 +134,12 @@ class AssistantEngine:
                   f"-> {sorted(self._extra.names.values())}")
         elif extra is not None:
             print(f"Custom model {extra.name} not found — COCO classes only")
+        if self.name_index:
+            from name_index import Namer
+            from position import TARGET_CLASSES
+            self._namer = Namer.maybe_load(self.name_index, self._model,
+                                           self.model_name,
+                                           vocabulary=TARGET_CLASSES)
         self._cap, self.source_name, self.is_file = self._open(self.source)
         if not self._cap.isOpened():
             raise SystemExit(f"Could not open source {self.source!r}")
@@ -265,7 +276,8 @@ class AssistantEngine:
     # -- worker ------------------------------------------------------------
 
     def _worker(self):
-        from phase2_detect import annotate
+        from phase2_detect import (apply_namer, collect_dets, draw_dets,
+                                   draw_grid, infos_from_dets)
         from phase3_detect import draw_banner
         cv2 = self._cv2
         banner = "..."
@@ -279,14 +291,25 @@ class AssistantEngine:
                 self.error = "Camera/stream stopped delivering frames"
                 break
             t = time.monotonic() - self._started
-            infos = annotate(frame, self._model(frame, verbose=False)[0],
-                             self.conf)
+            # BEFORE anything draws: the naming head has to embed real pixels,
+            # not the grid lines and labels we are about to burn in.
+            clean = frame.copy()
+            fh, fw = frame.shape[:2]
+            keep_all = self._namer is not None
+            result = self._model(frame, verbose=False)[0]
+            dets = collect_dets(result, self.conf, fw, fh, keep_all)
             if self._extra is not None:  # doors/dustbins/stairs, 2nd pass
-                infos += [
-                    i for i in annotate(frame,
-                                        self._extra(frame, verbose=False)[0],
-                                        self.extra_conf)
-                    if i.confidence >= _CUSTOM_CLASS_CONF.get(i.name, 0.0)]
+                extra = self._extra(frame, verbose=False)[0]
+                dets += [
+                    d for d in collect_dets(extra, self.extra_conf, fw, fh,
+                                            keep_all, trusted=True)
+                    if d["conf"] >= _CUSTOM_CLASS_CONF.get(d["name"], 0.0)]
+            # one call over the MERGED detections — see apply_namer's note on
+            # why per-model calls would break the hysteresis tracks
+            dets = apply_namer(self._namer, clean, dets)
+            draw_grid(frame)
+            infos = infos_from_dets(dets, fw, fh)
+            draw_dets(frame, dets, infos)
             with self._lock:
                 msg = self._engine.update(infos, t)
                 self._last_infos = infos
@@ -482,6 +505,9 @@ def main():
     ap.add_argument("--extra-conf", type=float, default=0.4,
                     help="confidence threshold for the custom model "
                          "(0.4: partial/far doors live in the 0.4-0.5 band)")
+    ap.add_argument("--name-index", default="name_index.npz",
+                    help="embedding naming head built by build_name_index.py; "
+                         "pass '' to disable and use raw YOLO names")
     ap.add_argument("--rate", type=int, default=175)
     ap.add_argument("--mute", action="store_true")
     ap.add_argument("--no-voice", action="store_true",
@@ -510,7 +536,8 @@ def main():
                              extra_model=args.extra_model,
                              extra_conf=args.extra_conf,
                              agent_model=args.agent_model,
-                             whisper_model=args.whisper_model)
+                             whisper_model=args.whisper_model,
+                             name_index=args.name_index)
     engine.start()
     app = create_app(engine)
     print(f"\n  BlindAssist running -> http://127.0.0.1:{args.port}")

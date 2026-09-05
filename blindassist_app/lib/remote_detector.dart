@@ -1,16 +1,22 @@
 // BlindAssist — remote inference client. The phone can't run YOLO in real time
-// (Exynos 990: ~2.5 s/inference on device), so we ship each frame's RAW YUV420
-// planes to infer_server.py on the laptop and get detections back over Wi-Fi.
-// No pixel math on the phone: converting YUV->RGB in Dart is the SAME per-pixel
-// loop that makes on-device slow, so we send the bytes the camera already gave
-// us and let numpy on the laptop do the conversion.
+// (Exynos 990: ~2.5 s/inference on device), so we ship each camera frame to
+// infer_server.py on the laptop and get detections back over Wi-Fi.
+//
+// Frames go up as JPEG, compressed by Android's hardware encoder (see
+// frame_codec.dart). Until 2026-09-05 they went up as RAW YUV420 planes —
+// 506 KB per frame, measured at 320-510 ms to upload against 171 ms for all
+// the inference on the other end, which blew the 1.2 s timeout regularly. The
+// raw path is still here as the fallback when the platform channel is
+// unavailable, so a phone without the native encoder keeps working.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 
 import 'detector.dart';
+import 'frame_codec.dart';
 
 /// A failed frame must resolve well inside the user's ~1 s guidance budget:
 /// _busy in main.dart blocks new frames until the in-flight one resolves, so a
@@ -66,17 +72,27 @@ class RemoteDetector implements FrameDetector {
   /// treats [] as a verified-clear scene (see FrameDetector docs).
   @override
   Future<List<Detection>?> detect(CameraImage image, int rotation) async {
-    final y = image.planes[0], u = image.planes[1], v = image.planes[2];
+    final Uint8List? jpeg = await FrameCodec.jpegFromCameraImage(image);
     final req = http.MultipartRequest('POST', _uri)
       ..fields['width'] = '${image.width}'
       ..fields['height'] = '${image.height}'
-      ..fields['yStride'] = '${y.bytesPerRow}'
-      ..fields['uvStride'] = '${u.bytesPerRow}'
-      ..fields['uvPixelStride'] = '${u.bytesPerPixel ?? 1}'
-      ..fields['rotation'] = '$rotation'
-      ..files.add(http.MultipartFile.fromBytes('y', y.bytes, filename: 'y'))
-      ..files.add(http.MultipartFile.fromBytes('u', u.bytes, filename: 'u'))
-      ..files.add(http.MultipartFile.fromBytes('v', v.bytes, filename: 'v'));
+      ..fields['rotation'] = '$rotation';
+    if (jpeg != null) {
+      req.files.add(http.MultipartFile.fromBytes('jpeg', jpeg,
+          filename: 'f.jpg'));
+    } else {
+      // Fallback: the raw planes, exactly as before the codec existed. The
+      // server accepts either shape, so an old server or a phone without the
+      // native encoder still works.
+      final y = image.planes[0], u = image.planes[1], v = image.planes[2];
+      req
+        ..fields['yStride'] = '${y.bytesPerRow}'
+        ..fields['uvStride'] = '${u.bytesPerRow}'
+        ..fields['uvPixelStride'] = '${u.bytesPerPixel ?? 1}'
+        ..files.add(http.MultipartFile.fromBytes('y', y.bytes, filename: 'y'))
+        ..files.add(http.MultipartFile.fromBytes('u', u.bytes, filename: 'u'))
+        ..files.add(http.MultipartFile.fromBytes('v', v.bytes, filename: 'v'));
+    }
     try {
       final streamed = await _client.send(req).timeout(_inferTimeout);
       final body = await streamed.stream.bytesToString();
@@ -96,6 +112,8 @@ class RemoteDetector implements FrameDetector {
             (d['y1'] as num).toDouble(),
             (d['x2'] as num).toDouble(),
             (d['y2'] as num).toDouble(),
+            // absent on an older server -> false, i.e. today's behaviour
+            trustedName: d['trusted_name'] == true,
           ),
       ];
     } on TimeoutException {

@@ -84,10 +84,50 @@ class ServerTest(unittest.TestCase):
             "v": (io.BytesIO(v), "v"),
         }, content_type="multipart/form-data")
 
+    def _post_jpeg(self, client, w=32, h=32, rotation=0):
+        """The frame shape the app normally sends since 2026-09-05."""
+        import cv2
+        img = np.full((h, w, 3), 128, np.uint8)
+        ok, buf = cv2.imencode(".jpg", img)
+        assert ok
+        return client.post("/infer", data={
+            "width": str(w), "height": str(h), "rotation": str(rotation),
+            "jpeg": (io.BytesIO(buf.tobytes()), "f.jpg"),
+        }, content_type="multipart/form-data")
+
+    def test_infer_accepts_a_jpeg_frame(self):
+        """JPEG is the fast path: ~45 KB instead of ~506 KB of raw planes.
+        The raw upload was measured at 320-510 ms against 171 ms of inference
+        and was losing frames to the app's 1.2 s timeout."""
+        client, _ = self._client(
+            coco_boxes=[_FakeBox(0, 0.9, (0.1, 0.2, 0.3, 0.4))])
+        data = json.loads(self._post_jpeg(client).data)
+        self.assertEqual(len(data["detections"]), 1)
+        self.assertEqual(data["detections"][0]["name"], "person")
+
+    def test_raw_planes_still_work(self):
+        """The fallback must stay alive: a handset whose platform channel
+        fails, or an older APK, posts raw planes and has to keep working."""
+        client, _ = self._client(
+            coco_boxes=[_FakeBox(0, 0.9, (0.1, 0.2, 0.3, 0.4))])
+        data = json.loads(self._post(client).data)
+        self.assertEqual(len(data["detections"]), 1)
+
+    def test_undecodable_jpeg_is_refused_not_guessed(self):
+        """A corrupt frame must be an error, never an empty detection list:
+        [] means 'verified clear scene' to the guidance engine."""
+        client, _ = self._client()
+        r = client.post("/infer", data={
+            "width": "32", "height": "32", "rotation": "0",
+            "jpeg": (io.BytesIO(b"not a jpeg"), "f.jpg"),
+        }, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+
     def test_health_reports_custom_flag(self):
         client, _ = self._client()
         data = json.loads(client.get("/health").data)
-        self.assertEqual(data, {"ok": True, "custom": False, "agent": False})
+        self.assertEqual(data, {"ok": True, "custom": False, "namer": False,
+                                "agent": False})
         client2, _ = self._client(custom=FakeYOLO({0: "door"}))
         data2 = json.loads(client2.get("/health").data)
         self.assertTrue(data2["custom"])

@@ -23,13 +23,34 @@ class Speaker {
   bool get _onDemandPlaying =>
       _onDemandActive && DateTime.now().isBefore(_onDemandUntil);
 
+  // The phone's own speaker reaches its own microphone, and the recognizer is
+  // grammar-constrained, so it force-matches our TTS back into trained
+  // phrases: "Bottle on your right" can come back as a directional query, and
+  // the app answers its own voice. The dedupe in main.dart caught the exact
+  // repeats; it cannot catch a phrase that force-matches into a DIFFERENT
+  // command. So the recognizer is ignored while we are talking, plus a short
+  // tail for the room's reverberation and the plugin's own latency.
+  static const Duration _echoTail = Duration(milliseconds: 900);
+  DateTime _quietUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _speaking = false;
+
+  /// True while our own voice could still be reaching the microphone.
+  /// [VoiceListener] drops recognizer results during this window.
+  bool get isEchoing => _speaking || DateTime.now().isBefore(_quietUntil);
+
+  void _finished() {
+    _onDemandActive = false;
+    _speaking = false;
+    _quietUntil = DateTime.now().add(_echoTail);
+  }
+
   Future<void> init() async {
     await _tts.setLanguage('en-US');
     await _tts.setSpeechRate(0.55); // plugin scale ~0..1; ≈175 wpm feel
     await _tts.setVolume(1.0);
     await _tts.awaitSpeakCompletion(false); // say() must never block
-    _tts.setCompletionHandler(() => _onDemandActive = false);
-    _tts.setCancelHandler(() => _onDemandActive = false);
+    _tts.setCompletionHandler(_finished);
+    _tts.setCancelHandler(_finished);
   }
 
   /// Speak [message], cutting off anything currently being spoken.
@@ -43,18 +64,24 @@ class Speaker {
     if (_onDemandPlaying && !onDemand && !urgent) return; // drop, don't queue
     await _tts.stop(); // latest wins — never finish stale guidance
     _onDemandActive = onDemand;
+    _speaking = true;
+    // Belt and braces: if the platform never fires a handler, the echo guard
+    // must still lift, or the app would stop hearing anything at all.
+    final secs = (message.length / 15).clamp(2, 30).toDouble();
+    _quietUntil = DateTime.now()
+        .add(Duration(milliseconds: (secs * 1000).round()) + _echoTail);
     if (onDemand) {
       // rough speaking-time estimate at ~15 chars/s, clamped 3-30 s
-      final secs = (message.length / 15).clamp(3, 30).toDouble();
-      _onDemandUntil =
-          DateTime.now().add(Duration(milliseconds: (secs * 1000).round()));
+      final onDemandSecs = (message.length / 15).clamp(3, 30).toDouble();
+      _onDemandUntil = DateTime.now()
+          .add(Duration(milliseconds: (onDemandSecs * 1000).round()));
     }
     await _tts.speak(message);
   }
 
   /// Voice "stop": halt whatever is being said right now.
   Future<void> stop() async {
-    _onDemandActive = false;
+    _finished();
     await _tts.stop();
   }
 

@@ -109,8 +109,25 @@ def _freer_side(chosen, infos):
 
 def _spoken_name(info):
     """The class name, or "obstacle" when the label is not trustworthy enough
-    to say out loud (see NAME_CONFIDENCE / TRUSTED_NAME_CLASSES)."""
-    if info.name in TRUSTED_NAME_CLASSES or info.confidence >= NAME_CONFIDENCE:
+    to say out loud (see NAME_CONFIDENCE / TRUSTED_NAME_CLASSES).
+
+    Three ways a name earns the right to be spoken, in order of evidence:
+
+    1. `info.trusted_name` — the embedding naming head committed a rename, or
+       the detection came from the dedicated door/dustbin model. This is the
+       STRONGEST signal and the only calibrated one: a rename had to beat every
+       competing label by MIN_MARGIN and survive hysteresis.
+    2. `TRUSTED_NAME_CLASSES` — a class with no COCO lookalike to confuse.
+    3. `confidence >= NAME_CONFIDENCE` — the legacy gate, kept for un-renamed
+       COCO detections only. Its stated basis is FALSIFIED (EVALUATION.md
+       section 6.2): misnames and correct names occupy overlapping confidence
+       bands, so no threshold separates them. It survives because it is still a
+       weak prior against speaking a low-confidence guess by name, not because
+       the number means what the original probe claimed.
+    """
+    if (info.trusted_name
+            or info.name in TRUSTED_NAME_CLASSES
+            or info.confidence >= NAME_CONFIDENCE):
         return info.name
     return "obstacle"
 

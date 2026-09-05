@@ -143,4 +143,28 @@ void main() {
       expect(parseCommand('find bottles'), (action: 'find', target: 'bottle'));
     });
   });
+
+  group('photo', () {
+    // The photo goes to the phone GALLERY: the user cannot review it and the
+    // point is handing it to a sighted person.
+    test('the spoken forms parse', () {
+      for (final t in [
+        'take a picture',
+        'take a photo',
+        'photo',
+        'please take a picture',
+      ]) {
+        expect(parseCommand(t)?.action, 'photo', reason: t);
+      }
+    });
+
+    test('it does not steal an object query', () {
+      expect(parseCommand('find the bottle')?.action, 'find');
+      expect(parseCommand('take a picture of the chair')?.action, 'photo');
+    });
+
+    test('read still wins over photo', () {
+      expect(parseCommand('read the text in the picture')?.action, 'read');
+    });
+  });
 }

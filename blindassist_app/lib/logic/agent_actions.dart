@@ -67,6 +67,9 @@ const List<ToolSpec> kTools = [
         'anything on my right'
       ]),
   ToolSpec('read', examples: ['read', 'read text']),
+  // A photo is for someone ELSE to look at — the user cannot review it — so it
+  // must land in the phone's gallery, not app-private storage.
+  ToolSpec('photo', examples: ['take a picture', 'take a photo', 'photo']),
   ToolSpec('clock', examples: ['clock mode']),
   ToolSpec('zones', examples: ['zone mode']),
   ToolSpec('sonar', arg: 'onoff', examples: ['sonar', 'sonar on', 'sonar off']),

@@ -41,6 +41,15 @@ SYNONYMS = {
     "table": "dining table", "sofa": "couch",
     "fridge": "refrigerator", "television": "tv", "plant": "potted plant",
     "bag": "backpack", "man": "person", "woman": "person",
+    # wardrobe/window are namer-only classes (see position.py). "almirah" is
+    # the everyday Indian-English word for a wardrobe and is what this user
+    # actually says.
+    "cupboard": "wardrobe", "almirah": "wardrobe", "closet": "wardrobe",
+    # "basket" alone is safe — no other class contains the word. Listed longer
+    # forms too because _match_object takes the LONGEST match, so "laundry
+    # bag" resolves to the basket and never to the generic "bag" -> backpack.
+    "laundry": "laundry basket", "basket": "laundry basket",
+    "hamper": "laundry basket", "laundry bag": "laundry basket",
 }
 
 
@@ -142,6 +151,10 @@ def parse_command(text):
         return ("path", None)  # clear-path finder: "which way is clear"
     if "read" in words:
         return ("read", None)  # OCR: read printed text aloud
+    # Photo. Checked BEFORE the object queries so "take a picture" never gets
+    # dragged into find/count by a stray class word later in the utterance.
+    if "picture" in words or "photo" in words:
+        return ("photo", None)
     if "how" in words and "many" in words:  # count query: "how many chairs"
         obj = _match_object(" ".join(words[words.index("many") + 1:]))
         if obj:

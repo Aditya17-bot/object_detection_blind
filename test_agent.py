@@ -199,6 +199,72 @@ class RouterTierZeroTest(unittest.TestCase):
         self.assertEqual(result.actions, [Action("find", "bottle")])
 
 
+class ArgumentGroundingTest(unittest.TestCase):
+    """The model may CHOOSE a capability. It may not INVENT its argument.
+
+    Every rejected case here is taken verbatim from the 2026-08-02 field walk
+    log, where llama3.2:3b turned bare nouns into directional queries and the
+    user heard "Nothing on your left" having said no such thing. Tool-name and
+    enum validation cannot catch these: `left` IS a valid direction and `check`
+    IS a real capability, so the action is well-formed. What is wrong with it
+    is its PROVENANCE.
+    """
+
+    def check(self, direction):
+        return {"tool": "check", "args": {"value": direction}}
+
+    def test_a_direction_the_user_never_said_is_rejected(self):
+        for utterance, direction in [("door", "left"), ("the cup", "left"),
+                                     ("bag", "left"), ("the person", "right"),
+                                     ("cup phones", "ahead")]:
+            self.assertIsNone(validate_action(self.check(direction), utterance),
+                              f"{utterance!r} -> check({direction})")
+
+    def test_a_direction_the_user_did_say_survives(self):
+        self.assertEqual(validate_action(self.check("left"), "the on my left"),
+                         Action("check", "left"))
+        self.assertEqual(validate_action(self.check("ahead"), "door ahead"),
+                         Action("check", "ahead"))
+
+    def test_direction_synonyms_count_as_having_been_said(self):
+        for word in ("front", "forward"):
+            self.assertEqual(
+                validate_action(self.check("ahead"), f"anything in {word}"),
+                Action("check", "ahead"))
+
+    def test_class_arguments_are_NOT_grounded_because_paraphrase_is_the_point(self):
+        # "the exit" means the door; requiring the class name verbatim would
+        # delete the capability tier 1 exists to provide
+        self.assertEqual(
+            validate_action({"tool": "find", "args": {"value": "door"}},
+                            "get me to the exit"),
+            Action("find", "door"))
+        self.assertEqual(
+            validate_action({"tool": "find", "args": {"value": "bottle"}},
+                            "i need something to drink"),
+            Action("find", "bottle"))
+
+    def test_an_invented_OPTIONAL_argument_drops_to_the_capability(self):
+        # sonar's argument is optional, so an ungrounded "off" becomes a plain
+        # toggle rather than a silent, unrequested state change
+        self.assertEqual(
+            validate_action({"tool": "sonar", "args": {"value": "off"}},
+                            "the beeping"),
+            Action("sonar"))
+
+    def test_a_grounded_state_argument_survives(self):
+        self.assertEqual(
+            validate_action({"tool": "sonar", "args": {"value": "on"}},
+                            "beeps on"),
+            Action("sonar", "on"))
+
+    def test_no_utterance_means_no_grounding_check(self):
+        # validate_action is also called without context (manifest checks,
+        # replay tools); grounding must not fire on an absent utterance
+        self.assertEqual(validate_action(self.check("left")),
+                         Action("check", "left"))
+
+
 class RouterTierOneTest(unittest.TestCase):
     def test_valid_tool_call_is_used(self):
         llm = FakeLLM({"actions": [{"tool": "find",

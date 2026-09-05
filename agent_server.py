@@ -77,6 +77,17 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
         }
         if execute is not None:
             body["spoken"] = execute(result)
+        # Log the utterance and what it became. The 2026-08-02 field walk could
+        # not be diagnosed from the server log: it showed 26 POSTs and not one
+        # word of what had been heard, so there was no way to tell a paraphrase
+        # from a door closing. This line is the difference between a bug report
+        # and a guess.
+        acted = ", ".join(f"{a.tool}({a.arg})" if a.arg else a.tool
+                          for a in result.actions) or "-"
+        print(f"/agent [{result.source}] {text!r} -> {acted}"
+              f"{' ask=' + result.ask if result.ask else ''}"
+              f"{' say=' + repr(result.say) if result.say else ''}"
+              f" ({result.latency_ms:.0f} ms)", flush=True)
         return jsonify(body)
 
     return app

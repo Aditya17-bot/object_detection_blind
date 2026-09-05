@@ -123,5 +123,27 @@ class TestParseCommand(unittest.TestCase):
             self.assertIsNotNone(parse_command(p), p)
 
 
+
+class PhotoCommandTest(unittest.TestCase):
+    """"take a picture" — the photo goes to the phone GALLERY, because the
+    user cannot review it and the point is handing it to a sighted person."""
+
+    def test_the_spoken_forms_parse(self):
+        for text in ("take a picture", "take a photo", "photo",
+                     "please take a picture"):
+            self.assertEqual(parse_command(text), ("photo", None), text)
+
+    def test_it_does_not_steal_an_object_query(self):
+        # "picture" is checked before find/count, so a stray class word later
+        # in the utterance must not drag it away — but a real find still wins
+        self.assertEqual(parse_command("find the bottle"), ("find", "bottle"))
+        self.assertEqual(parse_command("take a picture of the chair"),
+                         ("photo", None))
+
+    def test_read_still_wins_over_photo(self):
+        # OCR is checked first: "read the text in the picture" is a read
+        self.assertEqual(parse_command("read the text in the picture"),
+                         ("read", None))
+
 if __name__ == "__main__":
     unittest.main()

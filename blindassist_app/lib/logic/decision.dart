@@ -111,11 +111,24 @@ String _freerSide(ObjectInfo chosen, List<ObjectInfo> infos) {
 /// Spoken warning for the chosen obstacle. Short on purpose; vertical zone is
 /// irrelevant for walking, so only left/ahead/right (or the clock bearing when
 /// useClock) is spoken.
-String _spokenName(ObjectInfo info) =>
-    (trustedNameClasses.contains(info.name) ||
-            info.confidence >= nameConfidence)
-        ? info.name
-        : 'obstacle';
+/// Three ways a name earns the right to be spoken, in order of evidence:
+///
+/// 1. [ObjectInfo.trustedName] — the embedding naming head committed a rename,
+///    or the detection came from the dedicated door/dustbin model. The
+///    strongest signal and the only calibrated one: a rename had to beat every
+///    competing label by MIN_MARGIN and survive hysteresis.
+/// 2. [trustedNameClasses] — a class with no COCO lookalike to confuse.
+/// 3. confidence >= [nameConfidence] — the legacy gate, for un-renamed COCO
+///    detections only. Its stated basis is FALSIFIED (EVALUATION.md 6.2):
+///    misnames and correct names occupy overlapping confidence bands, so no
+///    threshold separates them. Kept as a weak prior against speaking a
+///    low-confidence guess by name, not because the number means what the
+///    original probe claimed.
+String _spokenName(ObjectInfo info) => (info.trustedName ||
+        trustedNameClasses.contains(info.name) ||
+        info.confidence >= nameConfidence)
+    ? info.name
+    : 'obstacle';
 
 String walkMessage(ObjectInfo info,
     [List<ObjectInfo> allInfos = const [], bool useClock = false]) {
@@ -310,7 +323,7 @@ String summarizeScene(List<ObjectInfo> infos) {
   final groups = <String, List<num>>{};
   final keyName = <String, String>{}, keyZone = <String, String>{};
   for (final i in infos) {
-    final key = '${i.name} ${i.hZone}';
+    final key = '${i.name}|${i.hZone}';
     keyName[key] = i.name;
     keyZone[key] = i.hZone;
     final entry = groups.putIfAbsent(key, () => [0, 0.0]);

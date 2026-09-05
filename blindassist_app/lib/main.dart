@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
+import 'package:gal/gal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
@@ -27,6 +28,7 @@ import 'remote_detector.dart';
 import 'logic/agent_actions.dart';
 import 'logic/decision.dart';
 import 'logic/position.dart';
+import 'logic/speech_policy.dart';
 import 'logic/voice_commands.dart';
 import 'ocr.dart';
 import 'sonar.dart';
@@ -76,6 +78,10 @@ class _AssistantScreenState extends State<AssistantScreen>
   FrameDetector? _detector;
   final GuidanceEngine _engine = GuidanceEngine();
   final Speaker _speaker = Speaker();
+  // Which task owns the speech channel. Without it every capability spoke the
+  // moment it fired, so an unrequested read-out could land in the middle of a
+  // find the user had just asked for.
+  final SpeechPolicy _policy = SpeechPolicy();
   final Sonar _sonar = Sonar();
   final OcrReader _ocr = OcrReader();
   // Tier 1: only utterances the local grammar could not parse go here, and
@@ -107,7 +113,10 @@ class _AssistantScreenState extends State<AssistantScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _voice = VoiceListener(onCommand: _onVoiceCommand, onUnmatched: _askAgent);
+    _voice = VoiceListener(
+        onCommand: _onVoiceCommand,
+        onUnmatched: _onUnmatchedSpeech,
+        echoing: () => _speaker.isEchoing);
     _init();
   }
 
@@ -288,19 +297,18 @@ class _AssistantScreenState extends State<AssistantScreen>
         _failStreak++;
         if (_failStreak == _failStreakToAnnounce) {
           _lastFailReminder = _now();
-          _speaker.say('Connection lost, guidance paused');
+          _say('Connection lost, guidance paused', kSafety, 'link');
           _sonar.update(0, 0); // stale beeps would keep implying an obstacle
           setState(() => _banner = 'Connection lost…');
         } else if (_failStreak > _failStreakToAnnounce &&
             _now() - _lastFailReminder > 10) {
           _lastFailReminder = _now();
-          _speaker.say('Still no connection');
+          _say('Still no connection', kSafety, 'link');
         }
         return; // skip engine/sonar/haptics — no data is not an empty room
       }
       if (_failStreak >= _failStreakToAnnounce) {
-        _speaker.say('Guidance restored');
-        setState(() => _banner = 'Walk mode');
+        _say('Guidance restored', kSafety, 'link');
       }
       _failStreak = 0;
       _frameLog++;
@@ -313,13 +321,36 @@ class _AssistantScreenState extends State<AssistantScreen>
       }
       final infos = [
         for (final d in detections)
-          analyzeBox(d.name, d.confidence, d.x1, d.y1, d.x2, d.y2, 1, 1)
+          analyzeBox(d.name, d.confidence, d.x1, d.y1, d.x2, d.y2, 1, 1,
+              trustedName: d.trustedName)
       ];
+      final wasFinding = _engine.mode == 'find';
+      final findTag = wasFinding ? 'find:${_engine.target}' : null;
       final msg = _engine.update(infos, _now());
-      // routine guidance is droppable while an on-demand read-out plays;
-      // a "very close" escalation is safety and always cuts through
       if (msg != null) {
-        _speaker.say(msg, urgent: msg.contains('very close'));
+        if (msg.contains('very close')) {
+          // safety: never gated, never delayed, whatever else is happening
+          _say(msg, kSafety, 'walk');
+        } else if (wasFinding) {
+          // In find mode the engine's output IS the answer to the request the
+          // user made, so it speaks under the find task's own focus.
+          //
+          // The engine auto-returns to walk the moment it announces the
+          // target. Ending the hold on that transition released the channel
+          // BEFORE the sentence had been spoken, and the next frame's warning
+          // cut it off mid-word — the bug the user reported as "it finds it
+          // but the voice gets interrupted and it goes away". So the
+          // open-ended search hold is replaced by one that covers the
+          // announcement, and expires on its own afterwards.
+          final resolved = _engine.mode != 'find';
+          if (resolved) _policy.begin(findTag!, _now(), seconds: 0.1);
+          _say(msg, kResponse, findTag!);
+        } else {
+          _say(msg, kRoutine, 'walk');
+        }
+      } else if (wasFinding && _engine.mode != 'find') {
+        // resolved without anything to say (mode change only)
+        _policy.end(findTag!, _now());
       }
 
       // sonar tracks the walking obstacle — or the searched object in find
@@ -397,9 +428,40 @@ class _AssistantScreenState extends State<AssistantScreen>
     // reaches the mic and the grammar force-matches it back into "find
     // person", repeating forever. Dropping identical commands within a few
     // seconds breaks the loop while real repeated requests still work.
+    // (Speaker.isEchoing now stops most of this at the microphone; this stays
+    // as the guard for an echo that arrives after the tail has expired.)
     final key = '${command.action}:${command.target}';
     if (_repeatedTooSoon(key)) return;
     _dispatch(command);
+  }
+
+  /// Heard, but the deterministic parser made nothing of it.
+  ///
+  /// This is where the 2026-08-02 walk went wrong. The recognizer is
+  /// GRAMMAR-CONSTRAINED: it cannot return "I did not understand", only its
+  /// best match over the trained phrases, for any audio at all — a passing
+  /// conversation, a door closing, our own TTS. Every one of those used to be
+  /// posted to the router (26 round trips in 2.5 minutes), and the router,
+  /// whose measured out-of-scope over-trigger rate is 55%, turned some of them
+  /// into spoken actions and the rest into a spoken "I can't do that" the user
+  /// had not asked for.
+  ///
+  /// Two rules now. Unparseable audio must clear a plausibility floor before
+  /// the router is consulted at all, and whatever comes back is UNSOLICITED:
+  /// it may run a capability, but it may never speak an abstention. Silence is
+  /// the right answer to a question nobody asked.
+  double _lastUnsolicited = -100;
+  static const double _unsolicitedGap = 3.0;
+
+  void _onUnmatchedSpeech(String heard) {
+    if (!isPlausibleRequest(heard, classWords: targetClasses)) return;
+    // Rate limit, on top of the plausibility floor. The walk that exposed this
+    // sent 26 requests in 2.5 minutes; a burst of near-identical noise costs a
+    // ~1.5 s model call each time and can only end in an abstention.
+    final now = _now();
+    if (now - _lastUnsolicited < _unsolicitedGap) return;
+    _lastUnsolicited = now;
+    unawaited(_askAgent(heard, solicited: false));
   }
 
   /// True when this exact request arrived again within a few seconds — see the
@@ -422,6 +484,7 @@ class _AssistantScreenState extends State<AssistantScreen>
   Future<void> _startDictation() async {
     // 'Yes?' is a fixed template, not a written reply — the same rule that
     // keeps the router out of the speech channel.
+    _releaseFocus(); // a deliberate question outranks whatever was running
     await _speaker.say(askTemplates['listening']!, onDemand: true);
     if (mounted) setState(() => _banner = 'Listening…');
     final heard = await _voice.dictate();
@@ -447,26 +510,36 @@ class _AssistantScreenState extends State<AssistantScreen>
       // phrase, this one has to be answered — with the truth.
       _speaker.say(askTemplates['unknown']!, onDemand: true);
     } else {
-      await _askAgent(heard);
+      await _askAgent(heard, solicited: true);
     }
   }
 
-  /// Heard, but the local grammar made nothing of it. Ask the laptop's router,
-  /// which has the same capability registry plus (optionally) a local LLM.
+  /// Ask the laptop's router, which has the same capability registry plus
+  /// (optionally) a local LLM.
   ///
-  /// Silence is the correct outcome when there is no server: the phone has
-  /// already tried everything it can do offline, and a spoken "I can't do that"
-  /// on every stray noise the recognizer half-hears would be worse than
-  /// nothing. When the server DOES answer an abstention, that is a real answer
-  /// to a real question and it is spoken.
-  Future<void> _askAgent(String heard) async {
+  /// [solicited] is the whole safety argument. True when the user deliberately
+  /// opened a dictation window with the trigger word: they asked a question, so
+  /// an abstention is a real answer and gets spoken. False when this came from
+  /// audio the grammar recognizer produced unbidden: then the router's answer
+  /// may RUN a capability but must never speak, because "I can't do that" in
+  /// reply to a door closing is the failure the user reported.
+  Future<void> _askAgent(String heard, {required bool solicited}) async {
     final agent = _agent;
     if (agent == null) return;
+    // A single force-matched token is never a request, on ANY path in. The
+    // 2026-08-02 walk sent bare "door", "is", "bed" and "tv" to the router,
+    // which obligingly invented a capability for each. Tier 0 would already
+    // have parsed a real one-word command, so nothing useful is lost.
+    if (heard.trim().split(RegExp(r'\s+')).length < 2) {
+      if (solicited) _speaker.say(askTemplates['not_understood']!, onDemand: true);
+      return;
+    }
     if (_repeatedTooSoon('ask:$heard')) return;
     final result =
         await agent.route(heard, state: _engine.stateSummary(_infos, _now()));
     if (!mounted || result == null) return; // null = no data, never a guess
     if (result.actions.isEmpty) {
+      if (!solicited) return; // nobody asked — say nothing
       final message = result.message;
       if (message != null) {
         _speaker.say(message, onDemand: true);
@@ -475,13 +548,29 @@ class _AssistantScreenState extends State<AssistantScreen>
       return;
     }
     for (final action in result.actions) {
-      _dispatch(action.toVoiceCommand());
+      _dispatch(action.toVoiceCommand(), solicited: solicited);
     }
   }
 
   /// The one place a capability is invoked, whichever tier chose it.
-  void _dispatch(VoiceCommand command) {
-    switch (command.action) {
+  ///
+  /// [solicited] false means the dialogue layer guessed at audio the user may
+  /// not have spoken; such a guess never interrupts a task in progress.
+  void _dispatch(VoiceCommand command, {bool solicited = true}) {
+    final action = command.action;
+    if (!_policy.allowCommand(action, _now(), solicited: solicited)) {
+      // ignore: avoid_print
+      print('BlindAssist policy: dropped "$action" '
+          '(focus=${_policy.activeTag(_now())}, solicited=$solicited)');
+      return;
+    }
+    // An informational read-out owns the channel briefly so the next routine
+    // warning does not tread on its last word. Find takes an open-ended hold:
+    // it runs until the target is located, not until it has spoken once.
+    if (kInformational.contains(action)) {
+      _policy.begin(action, _now(), seconds: _policy.focusSeconds);
+    }
+    switch (action) {
       case 'ask':
         unawaited(_startDictation()); // trigger word: open the speech window
       case 'describe':
@@ -500,14 +589,17 @@ class _AssistantScreenState extends State<AssistantScreen>
         _checkDirection(command.target!);
       case 'read':
         _readText();
+      case 'photo':
+        _takePhoto();
       case 'count':
         _countClass(command.target!);
       case 'recall':
         _recall(command.target!);
       case 'stop':
-        _speaker.stop(); // halt a long read-out without issuing a new command
+        _releaseFocus(); // "stop" ends the task as well as the sentence
+        _speaker.stop();
       case 'repeat':
-        _speaker.say(_banner, onDemand: true);
+        _say(_banner, kResponse, 'repeat');
       case 'sonar':
         if (command.target == 'on') {
           if (!_sonar.enabled) _toggleSonar();
@@ -523,31 +615,65 @@ class _AssistantScreenState extends State<AssistantScreen>
     }
   }
 
+  /// Every spoken message goes through here, so the ordering rules live in one
+  /// place instead of being re-derived at each call site.
+  void _say(String message, int priority, String tag, {bool solicited = true}) {
+    final now = _now();
+    if (!_policy.allowSpeech(priority, tag, now, solicited: solicited)) {
+      return; // dropped, never queued: stale guidance spoken late is worse
+    }
+    // An answer to the user holds the channel for as long as it takes to SAY,
+    // not just until its state change is done. Without this the find
+    // announcement was cut off mid-word: the engine auto-returns to walk the
+    // instant it announces the target, so the channel went free before the
+    // user had heard the answer. Safety is exempt — it must never be delayed
+    // by, nor delay, anything.
+    if (priority == kResponse) {
+      if (_policy.activeTag(now) == tag) {
+        _policy.extend(tag, now, _speakSeconds(message));
+      } else {
+        _policy.begin(tag, now, seconds: _speakSeconds(message));
+      }
+    }
+    _speaker.say(message,
+        onDemand: priority >= kResponse, urgent: priority >= kSafety);
+    if (mounted) setState(() => _banner = message);
+  }
+
+  /// Rough time to speak [message] at the configured rate (~15 chars/s), with
+  /// a floor so a two-word answer still gets the last word in.
+  double _speakSeconds(String message) =>
+      (message.length / 15).clamp(2.5, 30).toDouble();
+
+  /// Release whatever task holds the channel. Called when a task completes and
+  /// by "stop", which the user means as "that's enough".
+  void _releaseFocus() {
+    final tag = _policy.activeTag(_now());
+    if (tag != null) _policy.end(tag, _now());
+  }
+
   // Directional query: "is there anything on my left?". Answered on-device
   // from the current detections — no server, no model, no invention.
   void _checkDirection(String direction) {
     final msg = _engine.check(_infos, direction, _now());
     if (msg == null) {
       // a direction we do not have (nothing behind the camera): say so
-      _speaker.say(askTemplates['not_understood']!, onDemand: true);
+      _say(askTemplates['not_understood']!, kResponse, 'check');
       return;
     }
-    _speaker.say(msg, onDemand: true);
-    setState(() => _banner = msg);
+    _say(msg, kResponse, 'check');
   }
 
   // Clear-path finder: speak the most open walking direction, on demand.
   void _clearPath() {
     final msg = _engine.path(_infos, _now());
-    _speaker.say(msg, onDemand: true);
-    setState(() => _banner = msg);
+    _say(msg, kResponse, 'path');
   }
 
   // Count query: "how many chairs" -> spoken count of that class.
   void _countClass(String target) {
     final msg = _engine.count(_infos, target, _now());
-    _speaker.say(msg, onDemand: true);
-    setState(() => _banner = msg);
+    _say(msg, kResponse, 'count');
   }
 
   // OCR: capture a still and read any printed text aloud. Pauses the detection
@@ -556,7 +682,7 @@ class _AssistantScreenState extends State<AssistantScreen>
   Future<void> _readText() async {
     if (_reading || _camera == null) return;
     _reading = true;
-    _speaker.say('Reading', onDemand: true);
+    _say('Reading', kConfirm, 'read');
     // the control row that used to show "Reading…" is gone, so the banner is
     // now the only visual sign the capture is in progress
     setState(() => _banner = 'Reading…');
@@ -568,36 +694,88 @@ class _AssistantScreenState extends State<AssistantScreen>
       final shot = await _camera!.takePicture();
       final text = await _ocr.readFile(shot.path);
       final msg = text.isEmpty ? 'No text found' : text;
-      _speaker.say(msg, onDemand: true);
-      setState(() => _banner = msg);
+      // Through _say, NOT _speaker.say: this is what extends the 'read' focus
+      // to cover the time the text takes to SPEAK. _dispatch opened the hold
+      // for the default 6 s, which a page of OCR text outlasts easily — after
+      // which routine walk chatter was free to cut in mid-sentence. That, plus
+      // the stream resuming below, is the "read stops before reading fully"
+      // the user reported.
+      _say(msg, kResponse, 'read');
     } catch (e) {
-      _speaker.say('Could not read text', onDemand: true);
+      _say('Could not read text', kResponse, 'read');
     } finally {
-      // resume the live detection loop
+      // Resume the live detection loop. Deliberately NOT deferred until the
+      // speech ends: a very-close obstacle while the user stands reading is
+      // still worth interrupting for, and going blind for the length of a page
+      // of text would be worse than a cut-off sentence. Safety may interrupt;
+      // routine guidance may not, and now it cannot — the focus hold above
+      // outlives the read.
       try {
         if (_camera != null) await _camera!.startImageStream(_onFrame);
       } catch (_) {}
       _reading = false;
+      // The hold is NOT released here. It was released the instant OCR
+      // finished, which is before the user has heard a word of the result;
+      // it now expires on its own once the sentence has been spoken.
+    }
+  }
+
+  // Photo: capture a still and put it in the phone's GALLERY.
+  //
+  // The user cannot review it, so app-private storage would make the feature
+  // pointless — the whole purpose is handing the picture to a sighted person,
+  // which means it has to appear where every other photo on the phone appears.
+  // Same pause/capture/resume dance as _readText: the detection stream and a
+  // still capture cannot both own the camera.
+  bool _capturing = false;
+  Future<void> _takePhoto() async {
+    if (_capturing || _reading || _camera == null) return;
+    _capturing = true;
+    _say('Taking a picture', kResponse, 'photo');
+    try {
+      await _camera!.stopImageStream();
+      // beeps during a capture imply an obstacle is approaching while the user
+      // is deliberately holding still
+      _sonar.update(0, 0);
+      final shot = await _camera!.takePicture();
+      await Gal.putImage(shot.path, album: 'BlindAssist');
+      _say('Photo saved', kResponse, 'photo');
+    } on GalException catch (e) {
+      // most often the gallery permission was refused — say which, because a
+      // user who cannot see the dialog has no other way to find out
+      _say(e.type == GalExceptionType.accessDenied
+              ? 'Photo not saved, permission denied'
+              : 'Could not save the photo',
+          kResponse, 'photo');
+    } catch (_) {
+      _say('Could not take the picture', kResponse, 'photo');
+    } finally {
+      try {
+        if (_camera != null) await _camera!.startImageStream(_onFrame);
+      } catch (_) {}
+      _capturing = false;
+      _policy.end('photo', _now());
     }
   }
 
   void _setClock(bool on) {
     _engine.setClock(on);
-    _speaker.say(on ? 'Clock mode' : 'Zone mode');
+    // Through _say so this confirmation obeys the same ordering rules as every
+    // other utterance; _speaker.say bypassed the policy entirely and could
+    // land in the middle of a task the user had asked for.
+    _say(on ? 'Clock mode' : 'Zone mode', kConfirm, 'clock');
     setState(() {});
   }
 
   // Object memory: speak where a class was last seen, on demand.
   void _recall(String target) {
     final msg = _engine.recall(target, _now());
-    _speaker.say(msg, onDemand: true);
-    setState(() => _banner = msg);
+    _say(msg, kResponse, 'recall');
   }
 
   void _describe() {
     final summary = _engine.describe(_infos, _now());
-    _speaker.say(summary, onDemand: true);
-    setState(() => _banner = summary);
+    _say(summary, kResponse, 'describe');
   }
 
   void _toggleSonar() {
@@ -607,15 +785,20 @@ class _AssistantScreenState extends State<AssistantScreen>
   }
 
   void _setWalk() {
+    _releaseFocus(); // whatever task was running, the user has moved on
     _engine.setMode('walk');
-    _speaker.say('Walk mode');
-    setState(() => _banner = 'Walk mode');
+    _say('Walk mode', kConfirm, 'walk');
   }
 
   void _setFind(String target) {
+    // An OPEN-ENDED hold, not a timed one: find runs until the target is
+    // located, and the user's complaint was precisely that other things spoke
+    // during the search. The hold is released in _onFrame when the engine
+    // auto-returns to walk, by _setWalk, by "stop", and by the 90 s cap.
+    _releaseFocus();
+    _policy.begin('find:$target', _now());
     _engine.setMode('find', target);
-    _speaker.say('Finding $target');
-    setState(() => _banner = 'Finding $target');
+    _say('Finding $target', kConfirm, 'find:$target');
   }
 
   void _toggleMute() {

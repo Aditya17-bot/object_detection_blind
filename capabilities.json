@@ -22,6 +22,7 @@
       "door",
       "dustbin",
       "laptop",
+      "laundry basket",
       "person",
       "potted plant",
       "refrigerator",
@@ -29,7 +30,9 @@
       "suitcase",
       "toilet",
       "toothbrush",
-      "tv"
+      "tv",
+      "wardrobe",
+      "window"
     ],
     "direction": [
       "left",
@@ -128,6 +131,17 @@
       ],
       "internal": false,
       "name": "read",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
+        "take a picture",
+        "take a photo",
+        "photo"
+      ],
+      "internal": false,
+      "name": "photo",
       "required": false
     },
     {

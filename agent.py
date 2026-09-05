@@ -108,6 +108,11 @@ TOOLS = (
                        "anything on my right")),
     ToolSpec("read", "read printed text aloud from the camera",
              examples=("read", "read text")),
+    # A photo is for someone ELSE to look at — the user cannot review it. It
+    # exists so a blind user can capture something and hand it to a sighted
+    # person, so it must land in the phone's gallery, not app-private storage.
+    ToolSpec("photo", "take a photo and save it to the phone's gallery",
+             examples=("take a picture", "take a photo", "photo")),
     ToolSpec("clock", "speak directions as clock bearings, e.g. 2 o'clock",
              examples=("clock mode",)),
     ToolSpec("zones", "speak directions as left, ahead and right",
@@ -158,7 +163,7 @@ _ARG_KEYS = ("object", "value", "target", "class", "arg", "name", "template",
 # Tools whose effect lives OUTSIDE the guidance engine and therefore needs a
 # hook. If the host does not supply one, the capability is genuinely absent and
 # we say so instead of silently doing nothing (the bug this table replaces).
-_HOOK_TOOLS = {"sonar", "mute", "stop", "repeat", "read", "ask"}
+_HOOK_TOOLS = {"sonar", "mute", "stop", "repeat", "read", "photo", "ask"}
 
 
 @dataclass(frozen=True)
@@ -268,14 +273,60 @@ def capabilities_manifest():
 # Validation — the authority boundary
 # --------------------------------------------------------------------------
 
-def validate_action(raw):
+def argument_is_grounded(spec, arg, utterance):
+    """Did the user actually say this argument?
+
+    The model may CHOOSE a capability. It may not INVENT the capability's
+    argument. Measured on the 2026-08-02 field walk, `llama3.2:3b` given the
+    single word "door" emitted `check(left)` — a direction that appears nowhere
+    in the input — and did the same for "the cup", "bag" and "the person". The
+    user heard "Nothing on your left" repeatedly and had said no such thing.
+
+    Tool-name and enum validation cannot catch this: `left` IS a valid
+    direction and `check` IS a real capability, so the action is well-formed.
+    What is wrong with it is not its shape but its PROVENANCE — it is a fact
+    about the user's request that came from the model rather than the user.
+    That is the same boundary §4.7 draws around perceptual claims, applied to
+    the argument slot.
+
+    Deliberately applied to DIRECTION and STATE arguments only, NOT to class
+    names, and the asymmetry is the whole design:
+
+      * A direction argument is drawn from {left, right, ahead} and those are
+        also the words a person says. There is no paraphrase of "left" that
+        is not the word "left", so if the utterance contains no direction, the
+        model did not infer one — it made one up.
+      * A class argument is exactly where paraphrase lives: "the exit" means
+        the door, "my water bottle" means the bottle, "the fridge" means the
+        refrigerator. Requiring the class name to appear verbatim would delete
+        the capability tier 1 exists to provide (paraphrase accuracy 0% -> 47%
+        in the frozen evaluation). Class names stay guarded by vocabulary
+        membership instead, which is what stops them naming something the
+        detector cannot see.
+
+    Free-text arguments (a spoken template) are exempt: they have no
+    counterpart in the utterance by construction.
+    """
+    if not utterance or spec.arg is None or arg is None:
+        return True
+    words = utterance.lower().split()
+    if spec.arg == "direction":
+        return any(_DIRECTION_ALIASES.get(w, w) == arg for w in words)
+    if spec.arg == "onoff":
+        return arg in words
+    return True                       # class names, templates, free-form slots
+
+
+def validate_action(raw, utterance=None):
     """One raw model action -> Action, or None if it must be rejected.
 
     Rejects: non-objects, unknown tool names, internal tools (the model may not
     drive the dictation window), missing required arguments, class names the
-    detector does not know, and anything outside an argument's enum. Synonyms
-    and plurals are resolved through the PARSER's own vocabulary, so tier 1
-    cannot accept an object name that tier 0 would refuse."""
+    detector does not know, anything outside an argument's enum, and — when
+    `utterance` is supplied — any argument the user did not actually say (see
+    `argument_is_grounded`). Synonyms and plurals are resolved through the
+    PARSER's own vocabulary, so tier 1 cannot accept an object name that tier 0
+    would refuse."""
     if not isinstance(raw, dict):
         return None
     name = raw.get("tool") or raw.get("name") or raw.get("function")
@@ -314,6 +365,14 @@ def validate_action(raw):
             arg = DEFAULT_ASK          # clamped, never spoken as chosen
         if arg not in ARG_ENUMS[spec.arg]:
             return None
+    if not argument_is_grounded(spec, arg, utterance):
+        # Required argument invented -> the action is unusable, reject it.
+        # Optional one invented -> keep the capability, drop the invention
+        # (an ungrounded "sonar off" becomes a plain toggle rather than a
+        # silent, unrequested state change).
+        if spec.required:
+            return None
+        return Action(spec.name)
     return Action(spec.name, arg)
 
 
@@ -383,7 +442,10 @@ def render_state(state):
 # Longest model-authored reply we will speak. A blind user cannot skim, cannot
 # skip ahead, and cannot see that a monologue is coming — length is a usability
 # property here, not a formatting preference. Overruns are cut at a sentence.
-MAX_SAY_CHARS = 240
+# Raised 240 -> 400 on 2026-08-03 when open conversation was enabled: "what can
+# this app do" has a genuinely longer honest answer than a guidance phrase, and
+# "stop" already exists for a reply the user does not want to sit through.
+MAX_SAY_CHARS = 400
 # Shorter than this WITHOUT terminal punctuation reads as a truncation, not a
 # reply. "Yes." and "No." are fine; "I don" is not.
 MIN_SAY_CHARS = 12
@@ -529,7 +591,9 @@ class AgentRouter:
 
         actions = []
         for item in raw[:self.max_actions]:
-            action = validate_action(item)
+            # `text` is passed so an argument the user never said is rejected:
+            # the model chooses the capability, the user supplies its argument.
+            action = validate_action(item, text)
             if action is None:
                 return done(ask=DEFAULT_ASK, error=f"rejected action {item!r}")
             if action.tool == "abstain":
@@ -558,12 +622,14 @@ class Hooks:
     stop: object = None           # () -> None
     repeat: object = None         # () -> str | None  (the text to say again)
     read_text: object = None      # () -> str | None
+    take_photo: object = None     # () -> str | None  (what to say afterwards)
     dictate: object = None        # () -> None; opens the dictation window
 
     def get(self, tool):
         return {"sonar": self.set_sonar, "mute": self.set_mute,
                 "stop": self.stop, "repeat": self.repeat,
-                "read": self.read_text, "ask": self.dictate}.get(tool)
+                "read": self.read_text, "photo": self.take_photo,
+                "ask": self.dictate}.get(tool)
 
 
 def execute_action(action, engine, infos, now, hooks=None):
@@ -657,21 +723,45 @@ To run tools, reply exactly:
 To answer a question or make conversation, reply exactly:
 {{"say": "one short sentence"}}
 
+About the app, so you can explain it when asked:
+BlindAssist is an offline camera assistant for blind and low-vision users. The
+phone camera streams to a small object detector; the app speaks short guidance
+like "chair on your right, close". Walk mode warns only about things close
+enough to matter. Find mode searches for one object and reports where it is.
+It can also describe a scene, count objects, remember where something was last
+seen, say which way is clearest, read printed text aloud, take a photo, and
+give stereo beeps that get faster as an obstacle gets nearer. Everything runs
+without an internet connection, and it never sends pictures anywhere.
+
 Rules:
-- Prefer a tool whenever one matches. Talking is the fallback, not the default.
-- Greetings and small talk get a short "say" reply, never a tool and never an
-  abstention.
+- Prefer a tool whenever one matches. A tool is always better than talking
+  about what the tool would do.
 - At most two actions, in the order the user asked for them.
 - Use only the tool names and object names listed above.
-- The STATE block is the ONLY thing you know about the world. Never state that
-  an object is present, absent, near or far unless the state block says so. If
-  you are asked about something the state block does not cover, say you cannot
-  see that.
-- Never give walking, crossing, or safety instructions in a "say" reply — route
-  those to the path or check tool instead.
-- One sentence. The user hears this out loud and cannot skim it.
-- If the request is not something these tools do and is not a question you can
-  answer from the state block, reply
+- ANYTHING ELSE — greetings, small talk, general knowledge, questions about
+  yourself or the app, jokes — gets a {{"say": "..."}} reply. Answer it
+  normally and helpfully, the way any assistant would. Do not abstain just
+  because a question is off-topic; off-topic conversation is allowed and
+  expected.
+- General knowledge is FINE and you should just answer it, in full, from what
+  you know — history, geography, maths, cooking, sport, definitions, jokes,
+  advice — exactly as any assistant would. Examples of correct replies:
+  {{"say": "Paris."}} / {{"say": "France won it in 1998."}} /
+  {{"say": "Ninety-six."}}
+  The camera limit below is ONLY about the room around the user. It never
+  applies to a question about the wider world, and "I cannot see that" is
+  never the right answer to one.
+- TWO HARD LIMITS on a "say" reply, and only two:
+  1. Never claim anything about the user's SURROUNDINGS — what is in the room,
+     where an object is, how far away it is, whether something is there. The
+     STATE block is the only thing you know about that; if it does not cover
+     what was asked, say you cannot see that and offer the matching tool.
+  2. Never give walking, crossing, or safety instructions — route those to
+     the path or check tool instead.
+- Keep it to one or two short sentences. The user hears this out loud and
+  cannot skim it.
+- Only abstain when the user clearly wanted an ACTION you have no tool for
+  (making a call, sending a message, playing music), reply
   {{"actions": [{{"tool": "abstain", "args": {{"value": "unknown"}}}}]}}."""
 
 

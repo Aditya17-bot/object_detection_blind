@@ -377,10 +377,64 @@ on seven recorded phone clips, which between them produced 31 announcements.
 Every announcement saves an annotated keyframe and all 31 were reviewed against
 the image. Direction was right on 31 of 31 and no announcement was made for
 something that was not there, while 6 of the 31 used a wrong class name and
-still gave the correct warning, which is the pattern behind saying the generic
-word ``obstacle'' when confidence is below threshold. These are small numbers
-reviewed by one of us, so we report them as a sanity check on the deterministic
-core and not as a perception result.
+still gave the correct warning. These are small numbers reviewed by one of us,
+so we report them as a sanity check on the deterministic core and not as a
+perception result.
+
+The system's answer to those wrong names was a confidence gate: speak the
+generic word ``obstacle'' when detection confidence falls below a threshold. We
+report it as a negative result, because it does not work and because the reason
+is the sharpest evidence we have for C1. The threshold came from a probe placing
+misnames at 0.65--0.75 and correct names at 0.85 and above. Re-measured on the
+same clips, the dustbin is labelled ``toilet'' at a peak confidence of 0.94 and
+the wardrobe ``refrigerator'' at 0.82, against 0.92 for a correctly named chair;
+the distributions overlap and no threshold separates them. The failure is
+structural rather than a matter of calibration. Detection confidence reports how
+sure the detector is that a box holds one of its eighty classes, and that
+vocabulary contains no word for a wardrobe, so a forced choice among the
+available words can be made with complete certainty and still be wrong. This is
+exactly the failure C1 predicts: an abstention criterion borrowed from a
+neighbouring layer instead of derived from the failure mode of the layer it
+guards. Its replacement moves the naming decision onto the distance between an
+embedding of the detected crop and a small set of user-labelled examples,
+abstaining when the nearest example is not clearly closer than the next
+competing label. The user labelled 280 crops harvested from their own clips into
+17 classes in a single 30-minute pass; the detector's own backbone supplies the
+embedding, so there is no second model and no training run.
+
+That criterion is separable where confidence was not. A leave-one-out sweep
+finds an operating point naming 49 of 280 crops with \textbf{49/49 correct and
+zero wrong names}, against 10 errors at the untuned default. Two properties of
+the sweep matter more than the headline. The discriminating quantity is the
+\emph{margin over the runner-up label}, not the absolute distance --- the
+similarity floor is inert anywhere in $0.50$--$0.65$, so what separates a correct
+rename from a wrong one is how much better the winning label is than its nearest
+competitor, not how good it is alone. And the selected point is deliberately
+low-coverage, declining to name 82\% of crops, which is the intended shape for a
+mechanism whose output is spoken as fact.
+
+On the recorded clips the mechanism performs 105 renames across eight distinct
+patterns; we inspected every pattern and 104 are correct. Five of the eight are
+errors our own earlier evaluation had recorded as unfixable consequences of
+COCO's label set, including the dustbin and the wardrobe. One is of a different
+kind: on four frames the detector reports a \emph{person} where a blanket is
+draped over a chair, and the naming head corrects it to \emph{chair} --- a
+hallucinated pedestrian is a materially worse error for a blind traveller than a
+mislabelled bin, and it is removed without touching the detector. The single
+arguable rename is a box containing a bench with a suitcase on it, named
+\emph{suitcase}; both are obstacle classes, so the warning is unchanged in kind.
+On the two clips containing none of the labelled objects the mechanism makes no
+renames at all. The labelled examples and the clips come from the same rooms and
+the renames were adjudicated by the author; a calibrated evaluation on held-out
+rooms remains future work.
+
+One methodological point generalises beyond this component. Our first
+leave-one-out report scored a predicted \emph{do-not-name} label as a wrong name,
+when at runtime that prediction is an abstention, and consequently reported that
+no zero-error operating point existed --- the exact opposite of the truth. An
+evaluation harness for an abstaining component must mirror the runtime decision
+function exactly; if it misprices abstention it selects the wrong operating point
+and does so silently. We now assert that equality in a test.
 
 The protocol and a set of 200 labelled utterances were frozen and committed
 before the router was written, so that the router could not be tuned against its

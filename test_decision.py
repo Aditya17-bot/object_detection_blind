@@ -235,17 +235,21 @@ class TestFindMessage(unittest.TestCase):
 
 
 class TestClockBearings(unittest.TestCase):
-    # info() maps left->0.15, center->0.5, right->0.85 => 10, 12, 2 o'clock
+    # info() maps left->0.15, center->0.5, right->0.85. At the corrected
+    # 65-degree field of view those are -22.8, 0.0 and +22.8 degrees, i.e.
+    # 11, 12 and 1 o'clock. The old expectations (10 / 12 / 2) came from a
+    # mapping that spread 120 degrees across a 65-degree camera and so
+    # roughly doubled every bearing — see test_position.TestClockHour.
     def test_find_message_clock(self):
         bottle = info("bottle", "right", v_zone="top", proximity="close",
                       area=0.02)
         self.assertEqual(find_message(bottle, "bottle", use_clock=True),
-                         "Bottle at 2 o'clock, close")
+                         "Bottle at 1 o'clock, close")
 
     def test_walk_message_clock(self):
         chair = info("chair", "left", proximity="close")
         self.assertEqual(walk_message(chair, use_clock=True),
-                         "Chair at 10 o'clock, close")
+                         "Chair at 11 o'clock, close")
 
     def test_walk_message_clock_center_ahead(self):
         person = info("person", "center", proximity="close")
@@ -257,7 +261,7 @@ class TestClockBearings(unittest.TestCase):
         e = GuidanceEngine("walk")
         chair = info("chair", "right", proximity="close")
         e.update([chair], 0.0)
-        self.assertEqual(e.update([chair], 0.1), "Chair at 2 o'clock, close")
+        self.assertEqual(e.update([chair], 0.1), "Chair at 1 o'clock, close")
 
     def test_engine_toggle_switches_wording(self):
         e = GuidanceEngine("walk", use_clock=False)
@@ -266,7 +270,7 @@ class TestClockBearings(unittest.TestCase):
         self.assertEqual(e.update([chair], 0.1), "Chair on right, close")
         e.set_clock(True)
         # same obstacle, new phrasing -> not a repeat, speaks immediately
-        self.assertEqual(e.update([chair], 2.0), "Chair at 2 o'clock, close")
+        self.assertEqual(e.update([chair], 2.0), "Chair at 1 o'clock, close")
 
 
 class TestObjectMemory(unittest.TestCase):
@@ -278,7 +282,7 @@ class TestObjectMemory(unittest.TestCase):
     def test_recall_message_clock(self):
         cup = info("cup", "left", proximity="close", area=0.02)
         self.assertEqual(recall_message(cup, 1, "cup", use_clock=True),
-                         "Cup last seen at 10 o'clock, a moment ago")
+                         "Cup last seen at 11 o'clock, a moment ago")
 
     def test_recall_no_memory(self):
         self.assertEqual(recall_message(None, 0, "apple"),
@@ -467,6 +471,50 @@ class TestCheckDirection(unittest.TestCase):
         self.assertEqual(e.check([info("chair", "left")], "left", 0.0),
                          "A chair close on your left")
         self.assertIsNone(e.check([info("chair")], "behind", 1.0))
+
+
+
+
+class TestTrustedName(unittest.TestCase):
+    """A name vouched for by the naming head must be SPOKEN, not swallowed.
+
+    The NAME_CONFIDENCE gate replaces a class name with the generic word
+    "obstacle" below 0.8. Its stated basis is falsified (EVALUATION.md 6.2:
+    a dustbin called "toilet" peaks at 0.94 while a correct "chair" sits at
+    0.92 — overlapping bands), so it cannot be allowed to override the one
+    signal that IS calibrated: an embedding rename that beat every competing
+    label by MIN_MARGIN. Before this, the app identified a wardrobe correctly
+    and then announced "Obstacle on left, close".
+    """
+
+    def _chair(self, conf, trusted):
+        return ObjectInfo(name="wardrobe", confidence=conf, h_zone="left",
+                          v_zone="middle", proximity="close", area=0.2,
+                          center_x=0.15, phrase="left", trusted_name=trusted)
+
+    def test_untrusted_low_confidence_says_obstacle(self):
+        msg = walk_message(self._chair(0.72, False))
+        self.assertIn("obstacle", msg.lower())
+        self.assertNotIn("wardrobe", msg.lower())
+
+    def test_trusted_low_confidence_says_the_name(self):
+        msg = walk_message(self._chair(0.72, True))
+        self.assertIn("wardrobe", msg.lower())
+        self.assertNotIn("obstacle", msg.lower())
+
+    def test_trust_does_not_depend_on_confidence_at_all(self):
+        """The whole point: the flag, not the number, decides the word."""
+        for conf in (0.30, 0.55, 0.72, 0.99):
+            self.assertIn("wardrobe",
+                          walk_message(self._chair(conf, True)).lower())
+
+    def test_high_confidence_still_speaks_without_the_flag(self):
+        self.assertIn("wardrobe", walk_message(self._chair(0.95, False)).lower())
+
+    def test_default_is_untrusted(self):
+        """A caller that forgets the flag gets the old, safe behaviour."""
+        info = analyze_box("wardrobe", 0.72, 0, 0, 100, 100, 1000, 1000)
+        self.assertFalse(info.trusted_name)
 
 
 if __name__ == "__main__":

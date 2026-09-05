@@ -20,6 +20,18 @@ const Map<String, String> synonyms = {
   'bag': 'backpack',
   'man': 'person',
   'woman': 'person',
+  // wardrobe/window are namer-only classes (see position.dart). 'almirah' is
+  // the everyday Indian-English word for a wardrobe.
+  'cupboard': 'wardrobe',
+  'almirah': 'wardrobe',
+  'closet': 'wardrobe',
+  // 'basket' alone is safe — no other class contains the word. Longer forms
+  // are listed too because matching takes the LONGEST phrase, so 'laundry bag'
+  // resolves to the basket and never to the generic 'bag' -> backpack.
+  'laundry': 'laundry basket',
+  'basket': 'laundry basket',
+  'hamper': 'laundry basket',
+  'laundry bag': 'laundry basket',
 };
 
 /// Naive English plural of the LAST word ('cell phone' -> 'cell phones').
@@ -154,6 +166,11 @@ VoiceCommand? parseCommand(String text) {
   if (words.contains('read')) {
     return (action: 'read', target: null); // OCR: read printed text aloud
   }
+  // Photo. Checked BEFORE the object queries so "take a picture" never gets
+  // dragged into find/count by a stray class word later in the utterance.
+  if (words.contains('picture') || words.contains('photo')) {
+    return (action: 'photo', target: null);
+  }
   final manyIdx = words.indexOf('many'); // count query: "how many chairs"
   if (words.contains('how') && manyIdx >= 0) {
     final obj = _matchObject(words.sublist(manyIdx + 1).join(' '));
@@ -187,6 +204,7 @@ VoiceCommand? parseCommand(String text) {
 List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
     'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
+    'take a picture', 'take a photo', 'photo',
     'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
     'mute', 'unmute', ...triggerWords];
   for (final spoken in ['on my left', 'on my right', 'in front of me',

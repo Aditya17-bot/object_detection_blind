@@ -243,15 +243,19 @@ void main() {
   });
 
   group('clock bearings', () {
-    // info() maps left->0.15, center->0.5, right->0.85 => 10, 12, 2 o'clock
+    // info() maps left->0.15, center->0.5, right->0.85. At the corrected
+    // 65-degree field of view those are -22.8, 0.0 and +22.8 degrees, i.e.
+    // 11, 12 and 1 o'clock. The old expectations (10 / 12 / 2) came from a
+    // mapping that spread 120 degrees across a 65-degree camera and so
+    // roughly doubled every bearing — see position_test 'clock hour'.
     test('find message clock', () {
       final bottle = info('bottle',
           hZone: 'right', vZone: 'top', proximity: 'close', area: 0.02);
-      expect(findMessage(bottle, 'bottle', true), "Bottle at 2 o'clock, close");
+      expect(findMessage(bottle, 'bottle', true), "Bottle at 1 o'clock, close");
     });
     test('walk message clock', () {
       final chair = info('chair', hZone: 'left', proximity: 'close');
-      expect(walkMessage(chair, const [], true), "Chair at 10 o'clock, close");
+      expect(walkMessage(chair, const [], true), "Chair at 11 o'clock, close");
     });
     test('walk message clock center ahead', () {
       final person = info('person', proximity: 'close');
@@ -262,7 +266,7 @@ void main() {
       final e = GuidanceEngine(mode: 'walk');
       final chair = info('chair', hZone: 'right', proximity: 'close');
       e.update([chair], 0.0);
-      expect(e.update([chair], 0.1), "Chair at 2 o'clock, close");
+      expect(e.update([chair], 0.1), "Chair at 1 o'clock, close");
     });
     test('engine toggle switches wording', () {
       final e = GuidanceEngine(mode: 'walk', useClock: false);
@@ -270,7 +274,7 @@ void main() {
       e.update([chair], 0.0);
       expect(e.update([chair], 0.1), 'Chair on right, close');
       e.setClock(true);
-      expect(e.update([chair], 2.0), "Chair at 2 o'clock, close");
+      expect(e.update([chair], 2.0), "Chair at 1 o'clock, close");
     });
   });
 
@@ -283,7 +287,7 @@ void main() {
     test('recall message clock', () {
       final cup = info('cup', hZone: 'left', proximity: 'close', area: 0.02);
       expect(recallMessage(cup, 1, 'cup', true),
-          "Cup last seen at 10 o'clock, a moment ago");
+          "Cup last seen at 11 o'clock, a moment ago");
     });
     test('recall no memory', () {
       expect(recallMessage(null, 0, 'apple'), 'No memory of an apple');

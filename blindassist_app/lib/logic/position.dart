@@ -16,13 +16,25 @@ const Set<String> obstacleClasses = {
   'toilet', 'sink', 'refrigerator', 'tv', 'potted plant',
   'suitcase', 'backpack',
   'door', 'dustbin',
+  // 'wardrobe' is not a COCO class and no model detects it: it exists so the
+  // server's embedding naming head can replace YOLO's forced choice
+  // ('refrigerator' at 0.84 for the user's white wardrobe) with the right word.
+  'wardrobe',
+  // 'laundry basket' is likewise namer-only. COCO's nearest words are
+  // 'handbag' (not a target class, so invisible today) or 'suitcase' (warned,
+  // wrong word). An obstacle because it is a waist-high object that lives on
+  // the floor. User dimensions 2026-08-02: 0.85 m tall, 0.3 m wide.
+  'laundry basket',
 };
 
 /// Small items a user searches for → Find Mode only, never obstacle warnings.
 /// "toothbrush" is COCO class 79 (already in the model) — added so it can be a
 /// Find / favorites-beacon target; small + often edge-clipped, so best-effort.
+/// 'window' is likewise namer-only (YOLO calls one 'tv'). Deliberately a find
+/// class, not an obstacle: a window is a landmark worth asking for, but
+/// walking "into" one is not the hazard walk warnings exist for.
 const Set<String> findClasses = {
-  'bottle', 'cup', 'laptop', 'cell phone', 'book', 'toothbrush',
+  'bottle', 'cup', 'laptop', 'cell phone', 'book', 'toothbrush', 'window',
 };
 
 final Set<String> targetClasses = {...obstacleClasses, ...findClasses};
@@ -51,6 +63,12 @@ const Map<String, List<double>> _areaThresholds = {
   // custom-model classes
   'door':         [0.40, 0.20, 0.08],
   'dustbin':      [0.25, 0.10, 0.03],
+  // namer-only classes (no detector emits these; the server's index assigns
+  // them, and RemoteDetector passes server names through verbatim)
+  'wardrobe':     [0.40, 0.20, 0.08],
+  'window':       [0.30, 0.12, 0.04],
+  // taller than a suitcase but narrower, so a similar box area
+  'laundry basket': [0.25, 0.10, 0.03],
   // small find-items
   'bottle':       [0.05, 0.015, 0.004],
   'cup':          [0.03, 0.010, 0.003],
@@ -77,7 +95,9 @@ const Map<String, double> _realHeights = {
   'person': 1.7, 'chair': 0.9, 'couch': 0.8, 'dining table': 0.75,
   'bench': 0.85, 'toilet': 0.7, 'sink': 0.85, 'refrigerator': 1.7,
   'tv': 0.6, 'potted plant': 0.6, 'suitcase': 0.7, 'backpack': 0.5,
-  'door': 2.0, 'dustbin': 0.6, 'bottle': 0.25, 'cup': 0.1,
+  'door': 2.0, 'dustbin': 0.6, 'wardrobe': 2.0, 'window': 1.2,
+  'laundry basket': 0.85,
+  'bottle': 0.25, 'cup': 0.1,
   'laptop': 0.20, 'book': 0.24, 'cell phone': 0.14, 'toothbrush': 0.19,
 };
 
@@ -104,6 +124,12 @@ class ObjectInfo {
   final String phrase;    // human-friendly location, e.g. "top right"
   final double? distanceM; // rough meters (pinhole), null if not estimable
 
+  /// True when the NAME is independently vouched for — a dedicated-model class
+  /// (door/dustbin) or a committed rename from the embedding naming head. Such
+  /// a name bypasses [nameConfidence], whose premise (that detector confidence
+  /// predicts whether the WORD is right) is measurably false.
+  final bool trustedName;
+
   const ObjectInfo({
     required this.name,
     required this.confidence,
@@ -114,6 +140,7 @@ class ObjectInfo {
     required this.centerX,
     required this.phrase,
     this.distanceM,
+    this.trustedName = false,
   });
 }
 
@@ -135,15 +162,29 @@ String directionPhrase(String hZone, String vZone) {
 
 /// Clock-face bearing. Orientation & Mobility instructors teach blind
 /// travelers to locate things by clock position ("your cup is at 2 o'clock"),
-/// so speaking bearings this way matches training people already have. A
-/// forward phone camera sees ~60-70 degrees, so the frame width maps to 10
-/// through 2 o'clock, 12 straight ahead. Derived from centerX on demand.
-const List<int> _clockHours = [10, 11, 12, 1, 2];
+/// so speaking bearings this way matches training people already have.
+///
+/// CORRECTED 2026-09-05 — mirror of position.py. The old mapping spread the
+/// frame over 10-11-12-1-2, four hours = 120 degrees, across a camera that
+/// sees ~65. Every bearing came out roughly DOUBLE the true angle: the right
+/// frame edge sits at about +32 deg and was announced as "2 o'clock" (+60).
+/// Clock mode is the default, so an O&M-trained traveller was being
+/// systematically over-rotated.
+///
+/// The hour is now DERIVED from the field of view: one clock hour is 30
+/// degrees, the frame spans [cameraFovDeg], 12 o'clock is dead ahead. At 65
+/// deg that yields 11-12-1 and nothing wider — so clock bearings CANNOT be
+/// finer than left/center/right at this FOV. The value is the VOCABULARY, not
+/// extra angular resolution.
+const double cameraFovDeg = 65.0;
+const double _degreesPerHour = 30.0;
 
-/// Horizontal position (0..1) -> clock hour in {10, 11, 12, 1, 2}.
+/// Horizontal position (0..1) -> clock hour, 12 = straight ahead.
 int clockHour(double centerX) {
-  final idx = (centerX * _clockHours.length).floor();
-  return _clockHours[idx.clamp(0, _clockHours.length - 1)];
+  final bearing = (centerX.clamp(0.0, 1.0) - 0.5) * cameraFovDeg;
+  final hour = (bearing / _degreesPerHour).round();
+  if (hour == 0) return 12;
+  return hour > 0 ? hour : 12 + hour;
 }
 
 /// Spoken bearing, e.g. "at 2 o'clock".
@@ -159,7 +200,8 @@ String proximityBucket(String name, double area) {
 
 /// Convert one detection box (pixel coords) into an [ObjectInfo].
 ObjectInfo analyzeBox(String name, double confidence, double x1, double y1,
-    double x2, double y2, double frameW, double frameH) {
+    double x2, double y2, double frameW, double frameH,
+    {bool trustedName = false}) {
   final cx = (x1 + x2) / 2 / frameW;
   final cy = (y1 + y2) / 2 / frameH;
   final area = ((x2 - x1) * (y2 - y1)) / (frameW * frameH);
@@ -178,5 +220,6 @@ ObjectInfo analyzeBox(String name, double confidence, double x1, double y1,
     centerX: cx,
     phrase: directionPhrase(hZone, vZone),
     distanceM: distanceMeters(name, (y2 - y1) / frameH, clipped: clipped),
+    trustedName: trustedName,
   );
 }

@@ -24,6 +24,48 @@ import 'package:vosk_flutter/vosk_flutter.dart';
 
 import 'logic/voice_commands.dart';
 
+/// Fraction of a result that may be `[unk]` before it is treated as noise
+/// rather than speech. At 0.5 a result must be at least half recognised
+/// words: "find the bottle" with one unplaceable filler survives, while
+/// "[unk] [unk] clock mode" does not.
+const double kMaxUnknownRatio = 0.5;
+
+/// One recognizer result: the words it placed in the grammar, and how many
+/// tokens it could not place at all.
+class Recognition {
+  final String text;
+  final int unknownCount;
+  const Recognition(this.text, this.unknownCount);
+
+  int get wordCount =>
+      text.isEmpty ? 0 : text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+
+  /// 0.0 = every token was a grammar word, 1.0 = nothing was placed.
+  double get unknownRatio {
+    final total = wordCount + unknownCount;
+    return total == 0 ? 1.0 : unknownCount / total;
+  }
+}
+
+/// Parse one Vosk result into placed words and unplaceable tokens.
+///
+/// Pure and public so the noise floor can be tested without a microphone.
+Recognition parseRecognizerResult(String resultJson) {
+  try {
+    final raw = (jsonDecode(resultJson)['text'] as String? ?? '');
+    final tokens = raw.split(RegExp(r'\s+'))..removeWhere((t) => t.isEmpty);
+    final unknown = tokens.where((t) => t == '[unk]').length;
+    final words = tokens.where((t) => t != '[unk]');
+    return Recognition(words.join(' '), unknown);
+  } catch (_) {
+    return const Recognition('', 0);
+  }
+}
+
+/// Should this recognizer result be acted on at all?
+bool recognitionIsUsable(Recognition r) =>
+    r.text.isNotEmpty && r.unknownRatio < kMaxUnknownRatio;
+
 class VoiceListener {
   final void Function(VoiceCommand command, String heard) onCommand;
 
@@ -32,7 +74,30 @@ class VoiceListener {
   /// never skipped to get here, so trained phrases keep routing on-device.
   final void Function(String heard)? onUnmatched;
 
-  VoiceListener({required this.onCommand, this.onUnmatched});
+  /// True while the app's own voice could still be reaching the microphone.
+  /// Results that arrive then are dropped: the recognizer is grammar-
+  /// constrained, so it force-matches our TTS back into trained phrases and
+  /// the app ends up answering itself. Injected rather than read from Speaker
+  /// so this class stays testable without a TTS plugin.
+  final bool Function()? echoing;
+
+  VoiceListener({required this.onCommand, this.onUnmatched, this.echoing});
+
+  /// Every non-empty transcript the recognizer produced, newest last, capped.
+  /// The 2026-08-02 field walk could not be diagnosed because nothing recorded
+  /// what was actually heard — only that 26 requests had been sent. Kept in
+  /// memory only; the features page shows it.
+  final List<String> transcripts = [];
+  static const int _transcriptCap = 40;
+
+  /// Transcripts dropped by the echo guard, counted so a suspiciously high
+  /// number is visible rather than silently helpful.
+  int echoDropped = 0;
+
+  /// Results rejected because the recognizer could not place most of the
+  /// audio (see [kMaxUnknownRatio]). Counted, not silent: a high number
+  /// means the room is noisy, not that voice control is broken.
+  int noiseDropped = 0;
 
   Model? _model;
   Recognizer? _recognizer;
@@ -96,21 +161,40 @@ class VoiceListener {
     _speech = null;
   }
 
-  String _clean(String resultJson) {
-    try {
-      return (jsonDecode(resultJson)['text'] as String? ?? '')
-          .replaceAll('[unk]', '')
-          .trim();
-    } catch (_) {
-      return '';
-    }
-  }
+  /// One recognizer result, split into what it placed and what it could not.
+  ///
+  /// The grammar carries an explicit `[unk]` token, which is how Vosk says "I
+  /// heard sound here that is not in your phrases". [_clean] used to delete
+  /// those markers and keep the remainder, so a result like
+  /// `"[unk] [unk] clock mode"` — mostly unplaceable noise with two words that
+  /// happened to land on a trained phrase — arrived indistinguishable from a
+  /// user deliberately saying "clock mode". That is the "randomly says clock
+  /// mode" the field walk reported. The markers are EVIDENCE, and they are now
+  /// kept and weighed.
+  Recognition _clean(String resultJson) => parseRecognizerResult(resultJson);
 
   void _handleResult(String resultJson) {
-    final text = _clean(resultJson);
+    final heard = _clean(resultJson);
+    final text = heard.text;
     if (text.isEmpty) return;
-    final command = parseCommand(text);
+    if (echoing?.call() ?? false) {
+      // our own TTS coming back through the mic — not a request
+      echoDropped++;
+      return;
+    }
+    // A result the recognizer could mostly not place is not a request. This is
+    // the floor the GRAMMAR path never had: unmatched speech already faced a
+    // plausibility check and a rate limit before reaching the router, but a
+    // MATCHED command went straight to execution — and with a grammar-
+    // constrained recognizer a match is not evidence that anyone spoke.
+    if (!recognitionIsUsable(heard)) {
+      noiseDropped++;
+      return;
+    }
     lastHeard = text;
+    transcripts.add(text);
+    if (transcripts.length > _transcriptCap) transcripts.removeAt(0);
+    final command = parseCommand(text);
     if (command != null) {
       onCommand(command, text);
     } else {
@@ -140,7 +224,9 @@ class VoiceListener {
       open = await VoskFlutterPlugin.instance()
           .createRecognizer(model: _model!, sampleRate: 16000); // no grammar
       _speech = await _startService(open, (json) {
-        final text = _clean(json);
+        // No grammar here, so there are no `[unk]` markers to weigh — the open
+        // recognizer transcribes whatever it hears and the text is all of it.
+        final text = _clean(json).text;
         // Vosk emits a result on every silence boundary, including empty ones
         // at the start of the window; the first real words end the capture.
         if (text.isNotEmpty && !done.isCompleted) done.complete(text);

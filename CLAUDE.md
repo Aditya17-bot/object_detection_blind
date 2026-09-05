@@ -1013,3 +1013,456 @@ never reaches it.
   `agent_server.py:42` and `infer_server.py:217`, the phone just never uses it),
   the never-run server-kill drill in `FIELD_TEST.md`, battery/thermal never
   measured, stairs still disabled, and no blind user has ever used the app.
+
+## Embedding naming head — BUILT, awaiting the user's labelling (2026-08-02)
+
+Implementation of `.claude/plans/federated-painting-seal.md`. Keeps YOLO for
+*where* and re-decides *what* from an embedding of the crop matched against
+user-labelled examples. **All code is done and tested; the production index does
+not exist yet because the labelling is a manual step only the user can do.**
+
+- **`name_index.py`** — the runtime piece. `NameIndex` (nearest neighbour over
+  L2-normalised `YOLO.embed()` vectors), `NameSmoother` (hysteresis), `Namer`
+  (the thing the servers hold; `apply(frame, dets)` rewrites `d["name"]` in
+  place and records the original under `d["yolo_name"]`). Embedder is injected,
+  so `test_name_index.py` (30 tests) needs no weights and no images.
+  Four abstention rules, all of which earned their place:
+  • `MIN_SIM` / `MIN_MARGIN` — a rename needs the nearest labelled crop to be
+    close AND clearly closer than the best competing label. Margin is the
+    discriminating axis; min_sim barely matters in the sweep.
+  • `IGNORE_LABEL = "_ignore"` is a real label IN the index, not a discard pile
+    — junk crops are what make a junk query fail the margin test instead of
+    snapping to the nearest real class.
+  • `TRUSTED_KEY` — detections from the custom door/dustbin model are **never**
+    renamed. Their classes exist because COCO had no word for them, so there is
+    no forced choice to fix. Found empirically: without it the namer relabelled
+    a real door "wardrobe" 3x on eval_a.
+  • vocabulary containment — a label outside `TARGET_CLASSES` is refused at the
+    decision point, because downstream it fails SILENTLY (person-sized
+    proximity, no metres, never walk-warned).
+- **Hysteresis tracks are keyed by the DETECTOR's word, not just IoU.** Two
+  models over one frame give near-identical boxes for one object (COCO
+  "refrigerator" + custom "door" on the wardrobe), and greedy IoU matching let
+  one steal the other's track — silently swallowing every rename on eval_a until
+  keys were added. Pinned by
+  `test_overlapping_boxes_from_two_models_keep_separate_tracks`.
+- **`harvest_crops.py`** — samples the 8 clips, detects at conf 0.25 with NO
+  class filter, crops from `frame.copy()` taken BEFORE annotation (every JPEG
+  already in `test_output/` has boxes and grid burned into the pixels), dedupes
+  by embedding similarity, then farthest-point-samples to `--max-per-name` 15.
+  665 raw crops -> 280 to label, in 31 folders named by YOLO's guess.
+- **`build_name_index.py`** — folders become labels, writes `name_index.npz`,
+  and prints a **leave-one-out report + threshold sweep**. The sweep is the
+  point: it looks for a setting with zero wrong names and says so in words if
+  there isn't one.
+- **`verify_namer.py`** — runs clips through the real pipeline and reports what
+  changed. Keep `--stride` SMALL: at stride 10 the tracker loses boxes between
+  samples (eval_a gives 34 renames at stride 1 and 1 at stride 10 — a sampling
+  artifact, not a namer failure).
+- **Wiring:** `infer_server.py` (`--name-index`, auto-loads if present) and
+  `webapp.py` (same flag). `phase2_detect.py` was split into `collect_dets` /
+  `apply_namer` / `infos_from_dets` / `draw_dets` so naming happens ONCE over
+  the merged detections of both models — per-model calls would clobber the
+  smoother's tracks. `annotate()` keeps its old signature for phase2/3/4.
+  Class filtering moved to AFTER naming (a dustbin YOLO calls "vase" has to
+  reach the namer). Phone needs no Dart change.
+- **Vocabulary expanded**: `wardrobe` (obstacle) and `window` (find-only) added
+  to `position.py` + `position.dart` + both threshold/height tables, voice
+  synonyms cupboard/almirah/closet -> wardrobe in `voice.py` +
+  `voice_commands.dart`, `capabilities.json` regenerated. No detector emits
+  these — they exist so the namer has a correct word to use.
+  **`laundry basket` added the same day** during the user's labelling pass
+  (0.85 m tall, 0.3 m wide, obstacle, thresholds copied from suitcase, real
+  height 0.85, synonyms laundry/basket/hamper/"laundry bag"). Note the failure
+  mode it fixes: YOLO calls one "handbag", which is NOT in TARGET_CLASSES, so
+  today the app drops it entirely — a waist-high floor obstacle it never warns
+  about. Expect more of these as labelling continues; the recipe is
+  position.py + position.dart (class + `_AREA_THRESHOLDS` + `_REAL_HEIGHTS`),
+  voice.py + voice_commands.dart synonyms, `agent.py --write-manifest`.
+
+**Two defects from 2026-08-02 are now resolved in the docs:**
+`EVALUATION.md` §6.2 is corrected in place (confidence gate RETRACTED with the
+measured overlap table), the paper reports it as a negative result in all three
+duplicated sources (`PAPER.md` §7, `main.tex` §6, `build_docx.py`), and
+`PATENT_RESEARCH.md` gains **§4.9** plus a change-log entry. **Defect 2 (clock
+bearings ~2x off) is still OPEN and untouched.**
+
+## Naming head: real index built and verified (2026-08-02, later)
+
+User labelled all 280 crops. `name_index.npz` is built, tuned and committed —
+**17 labels, 280 crops** (_ignore 72, chair 40, bed 24, suitcase 19, dining
+table 18, backpack 17, wardrobe 16, bottle 16, potted plant 12, person 11,
+laundry basket 9, book 8, laptop 6, dustbin 5, door 3, couch 2, window 2).
+Report: `test_output/name_index_report.md`.
+
+**Thresholds tuned from the sweep: `MIN_MARGIN` 0.05 -> `0.15`** (`MIN_SIM`
+stays 0.62). That is the highest-coverage row with **zero wrong names**:
+leave-one-out names 49/280 with **49/49 correct**, versus 10 errors at 0.05.
+The sweep also shows `MIN_SIM` is inert anywhere in 0.50-0.65 — **margin does
+all the separating**, similarity almost none. Do not carry these numbers to a
+differently-labelled index; re-run the sweep.
+
+**Clip verification at stride 1** (`verify_namer.py --stride 1`, 8 clips,
+~2000 frames): **105 renames, 8 distinct patterns, every one inspected by eye.
+104 correct, 1 arguable.** Five of them are defects previously recorded in
+`EVALUATION.md` as unfixable COCO-vocabulary errors:
+
+| rename | count | verdict |
+|---|---|---|
+| refrigerator -> wardrobe | 31 | correct (defect #1) |
+| laptop -> book | 28 | correct — the paper notebook EVALUATION.md §3 flags |
+| toilet -> dustbin | 23 | correct (defect #2) |
+| cell phone -> suitcase | 11 | correct — the maroon suitcase from the dark clip |
+| person -> chair | 4 | correct — a **blanket draped over a chair**; YOLO hallucinated a person |
+| toilet -> chair | 3 | correct — the cream plastic stool |
+| keyboard -> book | 3 | correct — a hardcover notebook |
+| chair -> laundry basket | 1 | correct — the new class earning its keep on day one |
+| bench -> suitcase | 1 | ARGUABLE: box is a bench with a suitcase on it. Both are obstacle classes, so the warning is unchanged in kind |
+
+**Zero renames on the 2 clips containing none of the labelled objects** — the
+false-positive bar the stairs class failed. Abstention dominates everywhere:
+`ambiguous` is the most common reason by far, `trusted source` next (the custom
+door/dustbin model is never renamed), and `matched _ignore` fires in the
+hundreds on the cluttered clips — the junk label is doing real work.
+
+### Two bugs the labelling pass exposed (both fixed, both now pinned by tests)
+
+1. **`harvest_crops.py` filenames were not globally unique.** The suffix was
+   `int(conf * 100)`, so two boxes in one frame that rounded to the same
+   confidence got the same name in different guess-folders. Labelling flattens
+   those folders, and **Explorer replaces silently on a same-name move** — 3
+   crops were destroyed, one of them a dustbin (a 5-example class). Filename is
+   now `<clip>_f<frame>_<record index>_<class>.jpg`. The 3 lost crops were
+   regenerated from `manifest.csv` (which carries clip + frame + box) and
+   re-placed. `test_harvest_crops.py` = 7 tests.
+2. **`build_name_index.leave_one_out` scored a predicted `_ignore` as a WRONG
+   NAME.** At runtime matching `_ignore` is an abstention — the detection keeps
+   YOLO's word — so the report was charging the model for its safest outcome
+   and reported "**No setting reaches zero errors**" when a clean setting
+   existed. Now mirrors `NameIndex.classify_vectors` exactly, and a test
+   asserts decision-for-decision equality across three threshold settings.
+   The reverse direction (a crop the user put in `_ignore` matching a real
+   class) still counts as wrong — that one does put a word in the user's ear.
+
+Also fixed during the audit: 2 crops the user had **copied instead of moved**
+(same bytes under two contradictory labels — they were full-frame crops holding
+a stool AND a suitcase AND a bench, so both went to `_ignore`), and 1 pair of
+byte-identical crops of one object detected as both `sink` and `toilet`.
+
+## Speech ordering: focus arbitration + input floor (2026-08-02, night)
+
+First walk with the naming index. User's report: *"it randomly says I can't do
+that when I don't ask it anything"*, in find mode *"it does find the bottle but
+immediately says nothing to your right"*, and *"it's still a cluster ... when I
+ask find bottle it should find bottle and not do anything else for some time"*.
+
+**Both symptoms reproduced deterministically** by POSTing glue-word soup to the
+running server:
+
+```
+/agent [abstain] 'the is my on' -> - ask=unknown (1907 ms)
+   error: rejected action {'tool': 'check', 'args': {'left': 'on'}}
+```
+
+Three compounding faults, all now fixed:
+
+1. **The router was being fed noise.** `voice_listener.dart` sent EVERY
+   unparseable recognizer result to `/agent` — 26 round trips in 2.5 min on the
+   walk. Vosk is grammar-constrained: it cannot return "I didn't understand",
+   only its best match over the trained phrases, for any audio at all. Ambient
+   speech, a door closing, and the app's own TTS all arrive as word-soup. The
+   router (measured **55% out-of-scope over-trigger**, paper §7) turned some
+   into `check(...)` and the rest into a spoken abstention nobody asked for.
+2. **No echo gate.** The phone's speaker reaches its own mic. `_repeatedTooSoon`
+   caught exact repeats but not a phrase that force-matches into a DIFFERENT
+   command — which is how "Bottle on your right" became a directional query.
+3. **No ordering.** `Speaker` had preemption (on-demand cannot be cut by
+   routine, "very close" cuts through) but nothing about *order*, so any
+   capability spoke the instant it fired.
+
+### What was added
+
+- **`speech_policy.py` / `lib/logic/speech_policy.dart`** (new, mirrored, pure
+  logic). Four priorities — `SAFETY > RESPONSE > CONFIRM > ROUTINE` — plus
+  **FOCUS**: a task the user asked for owns the speech channel until it
+  finishes. While focused, routine guidance is DROPPED (never queued: stale
+  guidance spoken late is worse), informational read-outs wait whoever
+  triggered them, the user's own steering commands still go through (being
+  unable to interrupt is how an assistive device becomes frightening), and
+  safety speech is never gated. `find` takes an OPEN-ENDED hold — it runs until
+  the target is located — released by the engine's auto-return to walk, by
+  `walk`/`stop`, or by the 90 s cap. Every hold expires; one that never
+  released would silence the app.
+- **`is_plausible_request()`** — the floor before the router is consulted: ≥2
+  words AND ≥1 capability keyword or object name. `"the is my on"` never leaves
+  the phone now.
+- **`Speaker.isEchoing`** — recognizer results are dropped while the app is
+  speaking plus a 900 ms tail. Belt-and-braces expiry so a missing TTS callback
+  cannot deafen the app permanently.
+- **`solicited` flag threaded through `_dispatch`/`_askAgent`.** True only when
+  the user deliberately opened a dictation window with the trigger word. An
+  unsolicited route may RUN a capability but **may never speak an abstention** —
+  silence is the right answer to a question nobody asked. Also gates commands,
+  not just speech: `read` pauses the camera stream and `find` changes mode, so
+  a spurious trigger costs more than a spurious sentence.
+- **3 s minimum gap** between unsolicited router calls.
+- **`/agent` now logs the utterance and what it became.** The walk could not be
+  diagnosed from the old log — 26 POSTs, not one word of what was heard.
+  `VoiceListener.transcripts` keeps the last 40 on-device, `echoDropped`
+  counts what the gate ate.
+
+Tests: `test_speech_policy.py` (22) + `test/speech_policy_test.dart` (23,
+including a table-parity assertion against the Python categories).
+**294 Python / 183 Dart**, `flutter analyze` clean apart from the 3 pre-existing
+`avoid_print` infos.
+
+### Second walk, same night — the log named the real culprit
+
+Symptoms after the first fix: *"better, but again issue with find mode, it finds
+it but the voice gets interrupted by something else and it goes away"*, *"it
+keeps saying nothing at left for some reason"*, and *"it randomly started
+finding phone"*. This time `/agent` logging existed, and it settled the question
+in one screen — **31 calls, and the model was inventing arguments nobody said**:
+
+```
+'door'        -> check(left)      <- the "nothing at left"
+'the cup'     -> check(left)
+'bag'         -> check(left)
+'the person'  -> check(right)
+'cup phones'  -> check(ahead)
+'the mobiles' -> find(cell phone) <- the "randomly started finding phone"
+'is'          -> describe   'bed' -> recall(bed)   'tv' -> recall(tv)
+```
+
+**FIX A — argument grounding (`agent.argument_is_grounded`).** The authority
+boundary validated the tool name and the enum, so `check(left)` was *well
+formed*; what was wrong with it was its **provenance**. New rule: the model may
+CHOOSE a capability, it may not INVENT the capability's argument.
+- Applied to **direction** and **onoff** args, NOT to class names, and the
+  asymmetry is the design. `left/right/ahead` ARE the words a person says —
+  there is no paraphrase of "left" that is not "left", so an ungrounded
+  direction is fabrication. A class argument is exactly where paraphrase lives
+  ("the exit" -> door, "my water bottle" -> bottle); grounding those verbatim
+  would delete the capability tier 1 exists for (paraphrase 0% -> 47%).
+- Required arg ungrounded -> reject the action. Optional arg ungrounded -> keep
+  the capability, drop the invention (an unrequested "sonar off" degrades to a
+  toggle).
+- Verified live: `'door'` and `'the cup'` now abstain; `'anything on my left'`
+  still routes. `test_agent.ArgumentGroundingTest` pins every field utterance.
+
+**FIX B — focus must cover the SENTENCE, not the state change.** The find
+announcement was cut off mid-word because `GuidanceEngine` auto-returns to walk
+the instant it announces the target, and the code released focus on that
+transition — freeing the channel before the user had heard the answer.
+`SpeechPolicy.extend()` (mirrored) pushes a hold out to cover the estimated
+speaking time and never shortens one; `_say` extends on every `kResponse`.
+
+**FIX C** — a single force-matched token is never a request, on **any** path in
+(`_askAgent` guards the dictation path too, which had no floor — that is how
+bare `'door'`/`'is'`/`'bed'` reached the router at all).
+
+⚠ **The frozen eval is now stale.** Argument grounding changes what the router
+accepts, so `paper/` T3-T6 no longer describe the shipped code. Expect
+over-trigger to IMPROVE (grounding rejects exactly the fabricated-argument
+class). Re-run all four configs and record it in `EVAL_PROTOCOL.md` §8 as a
+post-freeze amendment before quoting those tables again.
+
+⚠ **Known residual risk, deliberately not designed away:** ambient human speech
+that happens to contain a content word still clears the floor and can reach the
+router. The trigger word exists precisely so free speech is deliberate; the
+unsolicited path is a convenience the eval says over-triggers. It is kept
+because it is what makes an unrehearsed paraphrase work with no server round
+trip in the user's head — but the next walk's log will show whether it earns
+its place, and that is now decidable from evidence rather than argument.
+
+## Photo capability + open conversation (2026-08-03)
+
+User decision: the paper is **submitted**, so evaluation drift is no longer a
+constraint — "we can explore more things and revert if it doesn't work".
+
+**`photo` capability.** Voice "take a picture" / "take a photo" / "photo", or
+the features page (generated from `kTools`, so it appears there for free).
+`main.dart._takePhoto()` uses the same pause/capture/resume dance as
+`_readText()` — the detection stream and a still capture cannot both own the
+camera — and saves via **`gal ^2.3.3`** (new dep) into a *BlindAssist* album in
+the phone's **gallery**. Gallery, not app-private storage, is the whole point:
+the user cannot review the photo, so its only purpose is handing it to a
+sighted person, and it must appear where every other photo does. Permission
+refusal is spoken ("Photo not saved, permission denied") — a user who cannot
+see the dialog has no other way to find out. Registered in `agent.TOOLS` +
+`Hooks.take_photo`; parsed in both `voice.py` / `voice_commands.dart` BEFORE
+the object queries so "take a picture of the chair" is not dragged into find,
+and AFTER `read` so "read the text in the picture" is still OCR. `photo` is
+`INFORMATIONAL` in both speech policies.
+
+**Open conversation (`_SYSTEM` rewritten).** Before, `"hello how are you"`,
+`"what is the capital of france"` and `"who won the world cup in 1998"` all
+returned **abstain** — the prompt clamped the model to the state block, so
+anything off-topic became "Sorry, I can't do that". Now general knowledge,
+small talk, jokes and questions about the app are answered normally, and the
+prompt carries an **app description** so "what can this app do" gets a real
+answer. `MAX_SAY_CHARS` 240 -> 400 (that question has a longer honest answer;
+"stop" already exists for a reply the user does not want to sit through).
+
+**The two hard limits were kept, and they are what makes allowing the rest
+safe.** The model may talk about the world; it may never (1) claim anything
+about the user's SURROUNDINGS — the state block stays the only source for what
+is in the room — or (2) give walking, crossing or safety instructions, which
+route to `path`/`check`. Guidance strings still originate in decision.py.
+
+Measured after the rewrite (`llama3.2:3b`):
+
+| utterance | result |
+|---|---|
+| hello how are you | chat, sensible greeting |
+| who wrote romeo and juliet | "William Shakespeare." |
+| what is 12 times 8 | "Ninety-six." |
+| tell me something interesting | real trivia, correct |
+| what can this app do | accurate app description |
+| which way should i cross the road | routes to `path` — the safety rule holds |
+| where is the eiffel tower / how far is the moon | "I cannot see that" |
+| what is the capital of france | fails; "capital city of japan" answers fine |
+
+**Known and accepted:** *spatial phrasing* ("where is...", "how far is...") is
+deflected by the surroundings rule. That is the correct trade — the model
+cannot reliably separate "where is the Eiffel Tower" from "where is my cup",
+and the cup MUST stay a recall query. The France miss is 3B smallness, not
+prompt logic; a bigger local model fixes it at ~6 s/query (gemma2, measured
+2026-08-01), which is not worth the latency.
+
+⚠ Chat replies are only ever SPOKEN on the solicited path — say "assistant"
+first. Ambient recognizer noise still cannot make the phone talk; that is what
+the 2026-08-02 arbitration work bought and it is unchanged.
+
+Test counts: **307 Python / 189 Dart**, all passing.
+
+### Still open
+
+- **START HERE NEXT SESSION: `flutter install` has NOT been run for the photo +
+  conversation build.** Everything is coded, tested and analyzed clean, but the
+  phone dropped off USB before the install completed, so the handset is still
+  running the 2026-08-02 arbitration build (focus/echo gate/grounding — that
+  one IS installed and was walked). Steps: connect the phone, `flutter devices`
+  to confirm `RZCR906FDTD`, then
+  `cd blindassist_app && flutter install -d RZCR906FDTD`. Start the server
+  first — see the note below about how.
+- **Run the server DETACHED, not as a Claude background job.** Two background
+  jobs were reaped mid-session, killing the server while the user was walking.
+  What works:
+  `Start-Process -FilePath C:di\object_detection_blindenv-gpu\Scripts\python.exe`
+  `-ArgumentList '-u','infer_server.py','--agent-model','llama3.2:3b'`
+  `-WorkingDirectory C:di\object_detection_blind -RedirectStandardOutput <log>`
+  `-RedirectStandardError <errlog> -WindowStyle Hidden`.
+  Always `venv-gpu`, never `venv` (CPU torch = ~750 ms/frame).
+- **Then verify on the handset, in this order:** "take a picture" lands in the
+  gallery (and the permission prompt is handled); say "assistant" then a
+  general question and confirm it answers instead of abstaining; re-check the
+  2026-08-02 fixes still hold (find announcement not clipped, no unrequested
+  "nothing on your left"); and confirm the naming index gives stable names
+  rather than flickering ones.
+- The hotspot IP changes between sessions (10.250.253.247 -> 172.17.77.158 in
+  one evening). UDP discovery handles it; only the baked fallback in
+  `config.dart` goes stale.
+- The webapp worker-loop refactor still has no runtime smoke test (unit tests
+  cover its parts, not the loop).
+- Nothing has been committed for two sessions — the naming head, the speech
+  policy, argument grounding, photo and open conversation are all uncommitted.
+- ⚠ **The labelled crops live under `test_output/`, which is gitignored** — the
+  user's manual work has no backup. `name_index.npz` IS tracked (repo root), so
+  the *product* is safe; the raw crops are not. Un-ignoring
+  `test_output/crops/` is the user's call: photos of their own rooms, and the
+  GitHub remote's visibility was never confirmed.
+
+Test counts at the end of 2026-08-03: **307 Python / 189 Dart**, all passing;
+`flutter analyze` clean apart from the 3 pre-existing `avoid_print` infos in
+detector.dart.
+
+## Production-readiness pass: five defects from the first real walk (2026-09-05)
+
+User walked the 08-03 build and reported: read mode cut off mid-page, obstacles
+"weirdly said", no memory of the door, "randomly says clock mode", and the
+agent underperforming. All five reproduced and fixed; **317 Python / 203 Dart
+tests pass**, `flutter analyze` clean apart from the 3 pre-existing
+`avoid_print` infos. APK rebuilt and installed on RZCR906FDTD.
+
+**The one that caused three of the symptoms — raw frames were breaking
+perception.** The app POSTed uncompressed YUV420: **506 KB/frame**, measured on
+the hotspot at **320-510 ms to upload** against ~171 ms for both models plus the
+namer, under the 1.2 s timeout. logcat was full of `BlindAssist remote infer
+timeout`. A dropped frame breaks `GuidanceEngine._streaks` two-frame
+persistence — hence erratic announcements AND the door never accumulating
+enough sightings to be remembered. `recall()` was never broken.
+- Fix: `MainActivity.kt` gains a `blindassist/frame` method channel doing
+  hardware `YuvImage.compressToJpeg`; `lib/frame_codec.dart` calls it and
+  **falls back to raw planes permanently after one failure** (retrying per
+  frame would pay the channel round trip forever to rediscover a broken
+  encoder). `infer_server.py` accepts a `jpeg` part or the old `y`/`u`/`v`, and
+  logs which — so a silent fallback is visible. Measured **506 KB -> 26 KB**.
+- Profiling script pattern worth reusing: synthesise the phone's YUV planes
+  from a clip frame and time each stage separately. That is what showed the
+  models were never the problem.
+
+**`trusted_name` now travels end to end.** `Namer.apply` renamed
+refrigerator->wardrobe but never marked the detection trusted, so
+`_spoken_name` re-gated it on YOLO confidence — the signal EVALUATION.md 6.2
+already records as falsified — and said "Obstacle" for an object the index had
+identified correctly. Flag now flows namer -> server JSON -> `Detection` ->
+`ObjectInfo` -> spoken word. Legacy 0.8 gate kept for UN-renamed COCO
+detections only, with its falsified status documented at both definitions.
+
+**Clock bearings were ~2x off (the long-open Defect 2), in the DEFAULT config.**
+`_CLOCK_HOURS = (10,11,12,1,2)` spans 120 deg across a ~65 deg camera. Now
+derived from `CAMERA_FOV_DEG = 65.0` / `cameraFovDeg`, giving 11-12-1.
+⚠ Consequence to keep stated: at this FOV clock bearings CANNOT be finer than
+left/center/right. The value is the O&M vocabulary, not resolution.
+
+**`[unk]` was being thrown away — the "randomly says clock mode" cause.** The
+Vosk grammar carries an explicit `[unk]` token (the recognizer saying "I could
+not place this sound") and `_clean()` **stripped the markers and kept the
+rest**, so `"[unk] [unk] clock mode"` looked exactly like a deliberate command.
+The grammar path had no floor at all while the free-speech path had three.
+Now `parseRecognizerResult` / `recognitionIsUsable` weigh the ratio
+(`kMaxUnknownRatio` 0.5) — public and pure, so it is unit-testable without a
+mic (`test/voice_noise_test.dart`).
+
+**`_readText` bypassed the speech policy entirely.** Called `_speaker.say`
+directly, so it never took the `read` focus, then `finally` released a hold it
+had not taken — and since `say()` does not await completion, the camera stream
+resumed while the text was still being read. Now goes through `_say(...,
+kResponse, 'read')`, which extends focus to cover the speaking time. The stream
+still resumes immediately ON PURPOSE: a very-close obstacle while the user
+stands reading is worth interrupting for; going blind for a page of text is
+worse than a cut sentence. `_setClock` had the same bypass, also fixed.
+
+**Also:** a NUL byte at `decision.dart:313` (a composite map-key separator) made
+grep/ripgrep treat the whole file as BINARY and return nothing — it produced
+false negatives during this very investigation. Replaced with `|`.
+
+### Room-walk evaluation (`test_output/room_walk_20260905.mp4`, 1080x1920, 42.5 s)
+
+Pulled off the phone over adb. 424 frames sampled through the real pipeline:
+72% carried a detection, 15 walk announcements, door dominant (158 frames — the
+custom model is the star), object memory correct for bed/bottle/chair/couch.
+
+⚠ **The naming head made 0 renames on this room.** It abstained everywhere,
+nearly always `ambiguous`: similarities were high (0.75-0.90) but margins tiny
+(0.005-0.11) against `MIN_MARGIN` 0.15. The index was labelled from the eight
+OLDER clips; this is a new room, so the crops are out of distribution. That is
+the DESIGNED behaviour (the stairs precedent — decline rather than guess), but
+it means **§4.9's benefit is room-specific until labelled**. To get correct
+names in this room, run `harvest_crops.py` over
+`test_output/room_walk_20260905.mp4` and repeat the labelling pass. This is the
+single highest-value next step for perceived quality.
+
+### Still open after this session
+
+- **Not committed.** This session plus the previous two are all uncommitted.
+- The agent quality complaint is NOT addressed — `llama3.2:3b` still measures
+  55% out-of-scope over-trigger. Argument grounding helped; the frozen eval
+  tables still do not describe the shipped router (see the 08-02 warning).
+- The JPEG path is verified against the server by direct POST (26 KB, HTTP 200,
+  `trusted_name` present) but **NOT yet on the handset** — proof will be
+  `/infer ... jpeg ->` in the server log rather than `raw`.
+- Server must be started detached from `venv-gpu` (see the 08-03 note); two
+  background jobs were reaped mid-session once before.
+
