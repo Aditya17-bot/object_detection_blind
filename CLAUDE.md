@@ -648,8 +648,18 @@ regenerate from `test_output/gpu_bench.md`'s header for exact conditions.
   from scratch 2026-07-11 — if imports fail again, recreate with
   `py -3.9 -m venv venv` + pip install the four deps.
 - Repo: dedicated git repo in this folder, remote
-  `github.com/Aditya17-bot/object_detection_blind` (branch `main`). Large
-  model/export binaries are gitignored (see `.gitignore`) — regenerate locally.
+  `github.com/Aditya17-bot/object_detection_blind`. Large model/export
+  binaries are gitignored (see `.gitignore`) — regenerate locally.
+- **WORK ON `main`** (user decision 2026-09-05). Do not create feature
+  branches, and do not keep committing to whatever branch happens to be
+  checked out — check `git branch --show-current` before the FIRST commit
+  of a session and move to `main` if it is not already there. This rule
+  exists because a session started on `agent-layer-and-paper` (a branch
+  created for the paper) and five commits of app work landed there before
+  anyone noticed; `main` turned out to have been stranded at 2026-07-16,
+  missing the agent layer, the embedding naming head and every field fix,
+  on a PUBLIC repo days before a project review. Merged back at `fe0995d`.
+  If a branch is genuinely warranted, ask first.
 
 ## Storage / backup (updated 2026-07-15 — user decision)
 
