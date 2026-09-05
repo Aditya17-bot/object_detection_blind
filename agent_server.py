@@ -23,6 +23,7 @@ tool, not an afterthought.
 from flask import jsonify, request
 
 from memory_phrasing import build_record, phrase_memory
+from text_summary import summarise
 
 
 def register_agent_routes(app, router, transcriber=None, execute=None,
@@ -126,5 +127,31 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
         # fallback coming home again, which is what makes this auditable in
         # the field rather than only in tests.
         return jsonify(text=text, source=how)
+
+    # POST /summarise — one photographed page, summarised.
+    #
+    # The phone does the OCR (offline, on-device) and posts only the TEXT, so
+    # no image leaves the handset. No retrieval: a page is under a thousand
+    # tokens and fits in any context window, so an embedding store would buy
+    # latency for a problem that does not exist.
+    #
+    # Every number in the summary must appear in the source. A summary of a
+    # bill or a medical letter that invents an amount or a date is not a
+    # quality problem, and that class of error is the one that is mechanically
+    # checkable. Prose that mischaracterises the document is not caught, which
+    # is why every answer ends by offering the full text.
+    @app.post("/summarise")
+    def summarise_endpoint():
+        payload = request.get_json(silent=True) or {}
+        text = payload.get("text")
+        if not isinstance(text, str):
+            return jsonify(error="text is required"), 400
+        llm = getattr(router, "llm", None)
+        caller = (lambda p: llm.complete(p, num_predict=160)) \
+            if llm is not None else None
+        message, how = summarise(text, llm=caller)
+        print(f"/summarise {len(text)} chars -> [{how}] {message[:80]!r}",
+              flush=True)
+        return jsonify(text=message, source=how)
 
     return app

@@ -226,7 +226,7 @@ void main() {
         'ask',
       });
       expect(kInformational, {
-        'colour', 'light',
+        'colour', 'light', 'summarise',
         'describe', 'check', 'path', 'count', 'recall', 'read', 'photo',
       });
     });

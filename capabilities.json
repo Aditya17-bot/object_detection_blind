@@ -147,6 +147,17 @@
     {
       "arg": null,
       "examples": [
+        "summarise this",
+        "summarize this",
+        "summarise"
+      ],
+      "internal": false,
+      "name": "summarise",
+      "required": false
+    },
+    {
+      "arg": null,
+      "examples": [
         "what colour is this",
         "what color is this",
         "colour"

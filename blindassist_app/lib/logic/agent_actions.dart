@@ -70,6 +70,11 @@ const List<ToolSpec> kTools = [
   // A photo is for someone ELSE to look at — the user cannot review it — so it
   // must land in the phone's gallery, not app-private storage.
   ToolSpec('photo', examples: ['take a picture', 'take a photo', 'photo']),
+  // Summarising is a separate capability from `read` on purpose: reading a
+  // full letter aloud takes minutes, and most of the time the user only needs
+  // to know whether it is worth hearing.
+  ToolSpec('summarise',
+      examples: ['summarise this', 'summarize this', 'summarise']),
   // No model, no network: both are computed from the camera's own pixels on
   // the phone, so they answer with the laptop off. Matching clothes and
   // knowing whether a room is lit are ordinary daily problems that object

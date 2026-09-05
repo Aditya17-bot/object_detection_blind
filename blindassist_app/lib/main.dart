@@ -714,6 +714,8 @@ class _AssistantScreenState extends State<AssistantScreen>
         _sayLight();
       case 'read':
         _readText();
+      case 'summarise':
+        _readText(summarise: true);
       case 'photo':
         _takePhoto();
       case 'count':
@@ -820,13 +822,20 @@ class _AssistantScreenState extends State<AssistantScreen>
   // OCR: capture a still and read any printed text aloud. Pauses the detection
   // stream for the one-shot capture, then resumes it.
   bool _reading = false;
-  Future<void> _readText() async {
+
+  /// Capture a still, OCR it, and either read it out or summarise it.
+  ///
+  /// One method rather than two because the pause/focus/capture/resume dance
+  /// is fiddly and a duplicate of it would drift. The two differ only in what
+  /// happens to the text afterwards.
+  Future<void> _readText({bool summarise = false}) async {
     if (_reading || _camera == null) return;
     _reading = true;
-    _say('Reading', kConfirm, 'read');
+    final tag = summarise ? 'summarise' : 'read';
+    _say(summarise ? 'Summarising' : 'Reading', kConfirm, tag);
     // the control row that used to show "Reading…" is gone, so the banner is
     // now the only visual sign the capture is in progress
-    setState(() => _banner = 'Reading…');
+    setState(() => _banner = summarise ? 'Summarising…' : 'Reading…');
     try {
       await _camera!.stopImageStream();
       // the stream is paused but the last obstacle's beeps would keep
@@ -848,16 +857,29 @@ class _AssistantScreenState extends State<AssistantScreen>
       // ignore: avoid_print
       print('BlindAssist OCR: ${_camera!.value.previewSize} '
           '-> ${text.length} chars');
-      final msg = text.isEmpty ? 'No text found' : text;
+      final String msg;
+      if (text.isEmpty) {
+        msg = 'No text found';
+      } else if (summarise) {
+        // Only the TEXT goes to the laptop; the OCR was done here, so no
+        // image leaves the phone. A null reply means the laptop was
+        // unreachable, and the user must be told that rather than left with
+        // silence after asking for a summary.
+        final short = await _agent?.summarise(text);
+        msg = short ?? 'I could not reach the laptop to summarise it. '
+            'Say read for the full text.';
+      } else {
+        msg = text;
+      }
       // Through _say, NOT _speaker.say: this is what extends the 'read' focus
       // to cover the time the text takes to SPEAK. _dispatch opened the hold
       // for the default 6 s, which a page of OCR text outlasts easily — after
       // which routine walk chatter was free to cut in mid-sentence. That, plus
       // the stream resuming below, is the "read stops before reading fully"
       // the user reported.
-      _say(msg, kResponse, 'read');
+      _say(msg, kResponse, tag);
     } catch (e) {
-      _say('Could not read text', kResponse, 'read');
+      _say('Could not read text', kResponse, tag);
     } finally {
       // Resume the live detection loop. Deliberately NOT deferred until the
       // speech ends: a very-close obstacle while the user stands reading is

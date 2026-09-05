@@ -163,6 +163,12 @@ VoiceCommand? parseCommand(String text) {
       (words.contains('which') && words.contains('way'))) {
     return (action: 'path', target: null); // clear-path finder
   }
+  // Summarise BEFORE read, so "summarise this" is not swallowed by a stray
+  // "read". "summary" alone stays with describe, which has owned it since the
+  // scene-summary feature and is what users already say for it.
+  if (words.contains('summarise') || words.contains('summarize')) {
+    return (action: 'summarise', target: null);
+  }
   if (words.contains('read')) {
     return (action: 'read', target: null); // OCR: read printed text aloud
   }

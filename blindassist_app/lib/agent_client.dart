@@ -37,10 +37,12 @@ class AgentClient {
   AgentClient(String host, int port, {http.Client? client})
       : _uri = Uri.parse('http://$host:$port/agent'),
         _phraseUri = Uri.parse('http://$host:$port/phrase'),
+        _summariseUri = Uri.parse('http://$host:$port/summarise'),
         _client = client ?? http.Client();
 
   final Uri _uri;
   final Uri _phraseUri;
+  final Uri _summariseUri;
   final http.Client _client;
 
   /// Utterance -> route result, or null when the server produced NO data.
@@ -117,6 +119,34 @@ class AgentClient {
       return text is String && text.trim().isNotEmpty ? text.trim() : null;
     } catch (_) {
       // never throws: this runs on the speech path
+      return null;
+    }
+  }
+
+  /// Summarise OCR'd page text on the laptop.
+  ///
+  /// Only the TEXT is sent: the OCR happens on the phone, offline, so no image
+  /// leaves the handset. The server refuses any summary stating a figure the
+  /// page does not contain and says so, which the caller speaks verbatim --
+  /// there is no silent degradation here, because a user who asked to have a
+  /// letter summarised needs to know if it could not be done.
+  ///
+  /// Longer timeout than [phrase]: this is a deliberate, stationary request
+  /// and the camera stream is paused for it, so the model is not competing
+  /// with detection for the GPU. Null means the laptop could not be reached.
+  Future<String?> summarise(String text) async {
+    try {
+      final r = await _client
+          .post(_summariseUri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'text': text}))
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) return null;
+      final body = jsonDecode(r.body);
+      if (body is! Map) return null;
+      final out = body['text'];
+      return out is String && out.trim().isNotEmpty ? out.trim() : null;
+    } catch (_) {
       return null;
     }
   }

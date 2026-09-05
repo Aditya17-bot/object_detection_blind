@@ -113,6 +113,12 @@ TOOLS = (
     # person, so it must land in the phone's gallery, not app-private storage.
     ToolSpec("photo", "take a photo and save it to the phone's gallery",
              examples=("take a picture", "take a photo", "photo")),
+    # Summarising is a separate capability from `read` on purpose: reading a
+    # full letter aloud takes minutes, and most of the time the user only needs
+    # to know whether it is worth hearing. The summary always ends by offering
+    # the full text, so it is a triage aid rather than a substitute.
+    ToolSpec("summarise", "briefly say what a document or page is about",
+             examples=("summarise this", "summarize this", "summarise")),
     # No model, no network: both are computed from the camera's own pixels on
     # the phone, so they answer with the laptop off. Matching clothes and
     # knowing whether a room is lit are ordinary daily problems that object

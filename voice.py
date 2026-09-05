@@ -149,6 +149,11 @@ def parse_command(text):
         return ("zones", None)
     if "path" in words or ("which" in words and "way" in words):
         return ("path", None)  # clear-path finder: "which way is clear"
+    # Summarise BEFORE read, so "summarise this" is not swallowed by a stray
+    # "read". "summary" alone stays with describe, which has owned it since
+    # the scene-summary feature and is what users already say for it.
+    if "summarise" in words or "summarize" in words:
+        return ("summarise", None)
     if "read" in words:
         return ("read", None)  # OCR: read printed text aloud
     # Colour and brightness, both BEFORE the object queries so "what colour is
