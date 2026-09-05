@@ -931,7 +931,32 @@ class _AssistantScreenState extends State<AssistantScreen>
   // keys" means hours ago, and the engine's memory is deliberately short
   // because it serves find mode's "it just left the frame" hint.
   void _recall(String target) {
-    _say(_memory.recall(target, _wallClock()), kResponse, 'recall');
+    final now = _wallClock();
+    final fallback = _memory.recall(target, now);
+    final sighting = _memory.get(target, now);
+    final agent = _agent;
+
+    // Speak the deterministic sentence unless the laptop returns a VERIFIED
+    // better one. The server checks every object and number in the model's
+    // reply against the record and returns this same fallback when anything
+    // fails, so the model can only ever improve the wording -- it can never
+    // change what is claimed, and it can never delay the answer past its own
+    // short timeout.
+    if (agent == null || sighting == null || sighting.near.isEmpty) {
+      _say(fallback, kResponse, 'recall');
+      return;
+    }
+    unawaited(() async {
+      final better = await agent.phrase(
+        object: target,
+        near: sighting.near,
+        context: sighting.context,
+        agoPhrase: agoPhrase(now - sighting.at),
+        fallback: fallback,
+      );
+      if (!mounted) return;
+      _say(better ?? fallback, kResponse, 'recall');
+    }());
   }
 
   void _describe() {

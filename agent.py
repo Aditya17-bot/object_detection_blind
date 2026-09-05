@@ -821,6 +821,35 @@ class OllamaRouter:
             self.error = f"ollama unavailable ({exc})"
             return False
 
+    def complete(self, prompt, num_predict=60, temperature=0.3):
+        """One free-form completion, for callers that do their own validation.
+
+        Used by the memory phrasing path, which hands the model a structured
+        record and then CHECKS every fact in the reply against it. Separate
+        from route() because it returns prose rather than a tool call, and
+        because nothing it produces is trusted without verification.
+
+        Returns None on any failure: the caller always has a deterministic
+        sentence to fall back to, so an unavailable model must degrade rather
+        than raise.
+        """
+        try:
+            body = self._post("/api/generate", {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "think": False,
+                "keep_alive": self.keep_alive,
+                "options": {"temperature": temperature,
+                            "num_predict": num_predict},
+            })
+        except Exception:                # noqa: BLE001 - never break the caller
+            return None
+        if not isinstance(body, dict):
+            return None
+        text = body.get("response")
+        return text if isinstance(text, str) else None
+
     def route(self, text, state_text, tool_list):
         """Utterance -> raw action list. Raises on transport failure; the
         AgentRouter converts that to an abstention."""

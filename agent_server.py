@@ -22,6 +22,8 @@ tool, not an afterthought.
 
 from flask import jsonify, request
 
+from memory_phrasing import build_record, phrase_memory
+
 
 def register_agent_routes(app, router, transcriber=None, execute=None,
                           get_state=None):
@@ -89,5 +91,40 @@ def register_agent_routes(app, router, transcriber=None, execute=None,
               f"{' say=' + repr(result.say) if result.say else ''}"
               f" ({result.latency_ms:.0f} ms)", flush=True)
         return jsonify(body)
+
+    # POST /phrase — turn one remembered sighting into a natural sentence.
+    #
+    # The phone owns the memory (it is the only party that was there), so it
+    # ships the structured record and its own deterministic sentence. The model
+    # only rewords; every object and every number in the reply is checked
+    # against the record, and a reply that fails goes in the bin. The phone
+    # already holds the fallback, so a rejection, a timeout or an absent model
+    # all cost nothing but a stiffer sentence.
+    #
+    # This is the memory-layer instance of the rule argument grounding applies
+    # to tool calls: the model may choose the WORDS, never the FACTS.
+    @app.post("/phrase")
+    def phrase_endpoint():
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("object")
+        fallback = payload.get("fallback") or ""
+        if not isinstance(name, str) or not name.strip():
+            return jsonify(error="object is required"), 400
+
+        record = build_record(
+            name.strip(),
+            {"near": payload.get("near") or [],
+             "context": payload.get("context") or []},
+            payload.get("ago_phrase") or "",
+            fallback,
+        )
+        llm = getattr(router, "llm", None)
+        caller = (lambda p: llm.complete(p)) if llm is not None else None
+        text, how = phrase_memory(record, llm=caller)
+        print(f"/phrase {name!r} -> [{how}] {text!r}", flush=True)
+        # `how` travels back so the phone can tell a rewording from its own
+        # fallback coming home again, which is what makes this auditable in
+        # the field rather than only in tests.
+        return jsonify(text=text, source=how)
 
     return app

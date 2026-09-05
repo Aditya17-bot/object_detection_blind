@@ -36,9 +36,11 @@ class AgentClient {
   /// [client] is injectable for tests (package:http/testing MockClient).
   AgentClient(String host, int port, {http.Client? client})
       : _uri = Uri.parse('http://$host:$port/agent'),
+        _phraseUri = Uri.parse('http://$host:$port/phrase'),
         _client = client ?? http.Client();
 
   final Uri _uri;
+  final Uri _phraseUri;
   final http.Client _client;
 
   /// Utterance -> route result, or null when the server produced NO data.
@@ -76,4 +78,46 @@ class AgentClient {
   }
 
   void close() => _client.close();
+
+  /// Ask the laptop to reword one remembered sighting.
+  ///
+  /// The phone owns the memory and composes [fallback] itself, so this is
+  /// pure polish: the server verifies every object and number in the model's
+  /// reply against the record and returns the fallback when anything fails.
+  /// Returns null on no data, and the caller then speaks its own sentence —
+  /// so an absent laptop, a slow model and a hallucination are all the same
+  /// outcome, which is the point.
+  ///
+  /// The timeout is short on purpose. This is a spoken answer to a question
+  /// the user just asked; waiting seconds for nicer wording is a worse answer
+  /// than plain wording now.
+  Future<String?> phrase({
+    required String object,
+    required List<String> near,
+    required List<String> context,
+    required String agoPhrase,
+    required String fallback,
+  }) async {
+    try {
+      final r = await _client
+          .post(_phraseUri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'object': object,
+                'near': near,
+                'context': context,
+                'ago_phrase': agoPhrase,
+                'fallback': fallback,
+              }))
+          .timeout(const Duration(milliseconds: 1500));
+      if (r.statusCode != 200) return null;
+      final body = jsonDecode(r.body);
+      if (body is! Map) return null;
+      final text = body['text'];
+      return text is String && text.trim().isNotEmpty ? text.trim() : null;
+    } catch (_) {
+      // never throws: this runs on the speech path
+      return null;
+    }
+  }
 }
