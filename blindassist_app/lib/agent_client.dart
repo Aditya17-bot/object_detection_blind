@@ -24,7 +24,13 @@ import 'logic/agent_actions.dart';
 /// so this can be longer than the frame timeout — a local LLM route costs 1-2 s
 /// on the laptop. It still has to end well before the user assumes the app is
 /// dead and repeats themselves.
-const Duration _agentTimeout = Duration(seconds: 5);
+/// Raised from 5 s on 2026-09-05. Tier 1 measures ~0.5-1.1 s with the GPU
+/// idle, but 6.8-8.0 s while frames are streaming: the router model and the
+/// two YOLO models share 4 GB of VRAM. At 5 s every real question the user
+/// asked mid-walk timed out, which is indistinguishable from a broken app.
+/// The wait is still poor and the real fix is not to make both fight for one
+/// GPU -- see the notes in CLAUDE.md -- but a slow answer beats none.
+const Duration _agentTimeout = Duration(seconds: 12);
 
 class AgentClient {
   /// [client] is injectable for tests (package:http/testing MockClient).

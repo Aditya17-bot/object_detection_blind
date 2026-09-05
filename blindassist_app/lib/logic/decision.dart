@@ -360,18 +360,43 @@ class GuidanceEngine {
   final double repeatCooldown; // s before repeating same message
   final double minGap;         // s between any two messages
   final int persistence;       // frames a class must persist
+
+  /// Find mode is DELIBERATELY more eager than walk mode, because the errors
+  /// are not symmetric. The user ASKED for this object: announcing a
+  /// misdetection costs them one wasted look, while staying silent about an
+  /// object that is on screen reads as "the app is broken" - and a blind user
+  /// cannot glance at the screen to find out which it was. Measured on the
+  /// 2026-09-05 room walk: at the phone's real 2 FPS the person was detected
+  /// in runs of [1,1,1,1,2,2] frames, so requiring two CONSECUTIVE frames
+  /// missed four of six sightings and announced "not visible" with the person
+  /// in frame.
+  final int findPersistence;
+
+  /// ...and the reverse claim needs MORE evidence, not less. Saying "not
+  /// visible" about something visible is the expensive error, so absence is
+  /// measured in SECONDS of continuous non-detection rather than in frames,
+  /// which also stops the threshold meaning different things on a 2 FPS phone
+  /// and a 6 FPS laptop.
+  final double absenceGrace;
+
+  /// Evidence DECAYS, it is not erased. A single missed frame used to reset a
+  /// streak to zero, so an object detected on alternate frames never
+  /// accumulated anything. A lone misdetection still decays away without ever
+  /// reaching [persistence], so this does not make false positives likelier.
+  final double missDecay;
+
   final double reminderInterval; // s between "still looking" reminders
   final double memoryTtl;      // s before a sighting goes stale
 
   bool useClock;               // clock bearings vs left/center/right
 
-  Map<String, int> _streaks = {};
+  Map<String, double> _streaks = {};
   final Map<String, (ObjectInfo, double)> _memory = {}; // name -> (info, time)
   String? _lastMsg;
   double? _lastTime;
   String? _lastObstacleName; // of last walk warning
   int? _lastObstacleRank;
-  int _absent = 0;           // find mode: consecutive frames w/o target
+  double? _absentSince;      // find mode: when the target went missing
   bool _saidNotVisible = false;
   double? _notVisibleTime;   // when "not visible"/reminder last said
 
@@ -384,6 +409,9 @@ class GuidanceEngine {
     this.repeatCooldown = 3.0,
     this.minGap = 1.5,
     this.persistence = 2,
+    this.findPersistence = 1,
+    this.absenceGrace = 2.5,
+    this.missDecay = 0.5,
     this.reminderInterval = 10.0,
     this.memoryTtl = 30.0,
     this.useClock = true,
@@ -408,7 +436,7 @@ class GuidanceEngine {
     _lastMsg = null;
     _lastObstacleName = null;
     _lastObstacleRank = null;
-    _absent = 0;
+    _absentSince = null;
     _saidNotVisible = false;
     _notVisibleTime = null;
   }
@@ -456,9 +484,16 @@ class GuidanceEngine {
     // persistence is tracked per class name (not per zone) so an object keeps
     // its streak while the user walks and it drifts across zones; one-frame
     // misdetections never reach `persistence` and stay silent.
-    final next = <String, int>{};
-    for (final i in infos) {
-      next[i.name] = (_streaks[i.name] ?? 0) + 1;
+    final seen = infos.map((i) => i.name).toSet();
+    final cap = (persistence > findPersistence ? persistence : findPersistence)
+        .toDouble() + 1.0;
+    final next = <String, double>{};
+    for (final name in {..._streaks.keys, ...seen}) {
+      final prev = _streaks[name] ?? 0.0;
+      final score = seen.contains(name)
+          ? (prev + 1.0 < cap ? prev + 1.0 : cap)
+          : prev - missDecay;
+      if (score > 0) next[name] = score;
     }
     _streaks = next;
     _remember(infos, now);
@@ -489,8 +524,12 @@ class GuidanceEngine {
   String? _updateFind(List<ObjectInfo> infos, double now) {
     final match = findTarget(infos, target!);
     if (match == null) {
-      _absent += 1;
-      if (_absent < persistence) return null; // flicker, not really gone
+      _absentSince ??= now;
+      // Not "gone" until it has been continuously missing for a while. One
+      // dropped frame - or one flicker in the detector - is not evidence of
+      // absence, and calling it absence is what made the app announce
+      // "Person not visible" with the person on screen.
+      if (now - _absentSince! < absenceGrace) return null;
       if (_saidNotVisible) {
         // target still missing: remind periodically so long silence never
         // reads as "the app stopped working" (a blind user cannot glance
@@ -517,8 +556,8 @@ class GuidanceEngine {
       _notVisibleTime = now;
       return _speak(msg, now);
     }
-    _absent = 0;
-    if ((_streaks[target!] ?? 0) < persistence) return null;
+    _absentSince = null;
+    if ((_streaks[target!] ?? 0) < findPersistence) return null;
     _saidNotVisible = false;
     final msg = findMessage(match, target!, useClock);
     if (!_clearToSpeak(msg, now)) return null;

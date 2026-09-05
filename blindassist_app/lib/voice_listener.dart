@@ -25,10 +25,22 @@ import 'package:vosk_flutter/vosk_flutter.dart';
 import 'logic/voice_commands.dart';
 
 /// Fraction of a result that may be `[unk]` before it is treated as noise
-/// rather than speech. At 0.5 a result must be at least half recognised
-/// words: "find the bottle" with one unplaceable filler survives, while
-/// "[unk] [unk] clock mode" does not.
+/// rather than speech. Accepted while the ratio is at or BELOW this, so a
+/// one-word command with a single unplaceable neighbour ("[unk] read") still
+/// gets through — that leniency matters more than it looks, because "read",
+/// "walk", "stop" and "repeat" are all single words, and rejecting them on one
+/// stray token is what made the app feel deaf on the 2026-09-05 walk.
 const double kMaxUnknownRatio = 0.5;
+
+/// Commands whose spurious activation silently changes how the app BEHAVES,
+/// with nothing a blind user could notice until the behaviour surprises them.
+/// These demand a clean recognition — no unplaceable tokens at all.
+///
+/// Everything else is an action the user hears the result of immediately and
+/// can simply repeat, so the cost of a false accept is low and the cost of a
+/// false REJECT (an app that ignores you) is high. The floor is set per
+/// command for exactly that reason.
+const Set<String> kSettingCommands = {'clock', 'zones', 'sonar', 'mute'};
 
 /// One recognizer result: the words it placed in the grammar, and how many
 /// tokens it could not place at all.
@@ -63,8 +75,16 @@ Recognition parseRecognizerResult(String resultJson) {
 }
 
 /// Should this recognizer result be acted on at all?
-bool recognitionIsUsable(Recognition r) =>
-    r.text.isNotEmpty && r.unknownRatio < kMaxUnknownRatio;
+///
+/// [action] is what the parser made of it, or null if it made nothing. The
+/// threshold depends on it: see [kSettingCommands].
+bool recognitionIsUsable(Recognition r, {String? action}) {
+  if (r.text.isEmpty) return false;
+  if (action != null && kSettingCommands.contains(action)) {
+    return r.unknownCount == 0;
+  }
+  return r.unknownRatio <= kMaxUnknownRatio;
+}
 
 class VoiceListener {
   final void Function(VoiceCommand command, String heard) onCommand;
@@ -79,7 +99,10 @@ class VoiceListener {
   /// constrained, so it force-matches our TTS back into trained phrases and
   /// the app ends up answering itself. Injected rather than read from Speaker
   /// so this class stays testable without a TTS plugin.
-  final bool Function()? echoing;
+  /// Given the recognized text, is this our own TTS coming back through the
+  /// microphone? Content-aware, not merely time-based — see
+  /// `Speaker.couldBeEcho`.
+  final bool Function(String heard)? echoing;
 
   VoiceListener({required this.onCommand, this.onUnmatched, this.echoing});
 
@@ -177,24 +200,25 @@ class VoiceListener {
     final heard = _clean(resultJson);
     final text = heard.text;
     if (text.isEmpty) return;
-    if (echoing?.call() ?? false) {
+    if (echoing?.call(text) ?? false) {
       // our own TTS coming back through the mic — not a request
       echoDropped++;
       return;
     }
-    // A result the recognizer could mostly not place is not a request. This is
-    // the floor the GRAMMAR path never had: unmatched speech already faced a
+    // Parse FIRST, because the noise floor depends on what was asked for: a
+    // settings toggle must be heard cleanly, an action need not be. This is
+    // the floor the GRAMMAR path never had — unmatched speech already faced a
     // plausibility check and a rate limit before reaching the router, but a
-    // MATCHED command went straight to execution — and with a grammar-
+    // MATCHED command went straight to execution, and with a grammar-
     // constrained recognizer a match is not evidence that anyone spoke.
-    if (!recognitionIsUsable(heard)) {
+    final command = parseCommand(text);
+    if (!recognitionIsUsable(heard, action: command?.action)) {
       noiseDropped++;
       return;
     }
     lastHeard = text;
     transcripts.add(text);
     if (transcripts.length > _transcriptCap) transcripts.removeAt(0);
-    final command = parseCommand(text);
     if (command != null) {
       onCommand(command, text);
     } else {

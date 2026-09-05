@@ -116,7 +116,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     _voice = VoiceListener(
         onCommand: _onVoiceCommand,
         onUnmatched: _onUnmatchedSpeech,
-        echoing: () => _speaker.isEchoing);
+        echoing: (heard) => _speaker.couldBeEcho(heard));
     _init();
   }
 
@@ -454,6 +454,8 @@ class _AssistantScreenState extends State<AssistantScreen>
   static const double _unsolicitedGap = 3.0;
 
   void _onUnmatchedSpeech(String heard) {
+    // Off by default: see kRouteUnmatchedSpeech. The trigger word still works.
+    if (!kRouteUnmatchedSpeech) return;
     if (!isPlausibleRequest(heard, classWords: targetClasses)) return;
     // Rate limit, on top of the plausibility floor. The walk that exposed this
     // sent 26 requests in 2.5 minutes; a burst of near-identical noise costs a
@@ -754,7 +756,10 @@ class _AssistantScreenState extends State<AssistantScreen>
         if (_camera != null) await _camera!.startImageStream(_onFrame);
       } catch (_) {}
       _capturing = false;
-      _policy.end('photo', _now());
+      // The hold is NOT released here — same reason as _readText: _say above
+      // extended it to cover the confirmation, and ending it now would free
+      // the channel before the user has heard "Photo saved". It expires on
+      // its own.
     }
   }
 

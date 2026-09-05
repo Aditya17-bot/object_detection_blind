@@ -153,40 +153,75 @@ class TestEngineFind(unittest.TestCase):
         big = info("bottle", "right", area=0.04)
         self.assertIs(find_target([small, big], "bottle"), big)
 
-    def test_found_message(self):
+    def test_found_message_on_the_very_first_sighting(self):
+        """Find is EAGER: the user asked, so one solid detection is enough.
+
+        Requiring two consecutive frames cost four of six sightings at the
+        phone's real 2 FPS (measured 2026-09-05) - the app stayed silent with
+        the object on screen.
+        """
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "right", v_zone="top", proximity="close",
                       area=0.02)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle top right, close")
+        self.assertEqual(e.update([bottle], 0.0), "Bottle top right, close")
+
+    def test_a_flickering_target_is_never_called_absent(self):
+        """The regression the user reported: "I see the person on screen but
+        it just keeps saying it is still looking".
+
+        A detector that drops the object on alternate frames must not produce
+        "not visible" - saying that about something in frame is the expensive
+        error, and a blind user cannot check the screen to find out.
+        """
+        e = GuidanceEngine("find", "person", use_clock=False)
+        person = info("person", "center", proximity="medium", area=0.02)
+        said = []
+        # alternate seen/unseen at 2 FPS, the measured field pattern
+        for n in range(20):
+            msg = e.update([person] if n % 2 == 0 else [], n * 0.5)
+            if msg:
+                said.append(msg)
+            if e.mode != "find":       # announced and completed
+                break
+        self.assertTrue(said, "a visible target must be announced")
+        joined = " ".join(said).lower()
+        self.assertNotIn("not visible", joined)
+        self.assertNotIn("still looking", joined)
+
+    def test_absence_is_measured_in_seconds_not_frames(self):
+        """Absence needs MORE evidence than presence, and the threshold must
+        not mean different things at 2 FPS and 6 FPS."""
+        e = GuidanceEngine("find", "bottle")
+        self.assertIsNone(e.update([], 0.0))
+        self.assertIsNone(e.update([], 0.1), "0.1 s is not absence")
+        self.assertIsNone(e.update([], 2.0), "still inside the grace period")
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
 
     def test_not_visible_said_once_then_periodic_reminder(self):
         e = GuidanceEngine("find", "bottle")
-        self.assertIsNone(e.update([], 0.0))               # absence persistence
-        self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        self.assertIsNone(e.update([], 0.0))               # absence grace
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
         self.assertIsNone(e.update([], 5.0))               # not repeated...
         # ...but after reminder_interval the engine says it is still trying
-        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
+        self.assertEqual(e.update([], 12.7), "Still looking for bottle")
         self.assertIsNone(e.update([], 15.0))              # next one waits too
-        self.assertEqual(e.update([], 20.3), "Still looking for bottle")
+        self.assertEqual(e.update([], 22.8), "Still looking for bottle")
 
     def test_reminder_keeps_firing_until_target_found(self):
         e = GuidanceEngine("find", "bottle", use_clock=False)
         e.update([], 0.0)
-        self.assertEqual(e.update([], 0.1), "Bottle not visible")
+        self.assertEqual(e.update([], 2.6), "Bottle not visible")
         self.assertIsNone(e.update([], 5.0))
-        self.assertEqual(e.update([], 10.2), "Still looking for bottle")
+        self.assertEqual(e.update([], 12.7), "Still looking for bottle")
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 15.0)
-        self.assertEqual(e.update([bottle], 15.1), "Bottle left, medium")
+        self.assertEqual(e.update([bottle], 15.0), "Bottle left, medium")
 
     def test_found_completes_search(self):
         # user decision 2026-07-16: announcing the position once IS the find
-        # result — the engine must drop back to walk mode, not keep repeating
+        # result - the engine must drop back to walk mode, not keep repeating
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
+        self.assertEqual(e.update([bottle], 0.0), "Bottle left, medium")
         self.assertEqual(e.mode, "walk")
         # bottle is a FIND class -> silent in walk mode, no more repeats
         self.assertIsNone(e.update([bottle], 5.0))
@@ -195,13 +230,21 @@ class TestEngineFind(unittest.TestCase):
     def test_new_search_after_completion(self):
         e = GuidanceEngine("find", "bottle", use_clock=False)
         bottle = info("bottle", "left", proximity="medium", area=0.005)
-        e.update([bottle], 0.0)
-        self.assertEqual(e.update([bottle], 0.1), "Bottle left, medium")
-        # asking again starts a fresh search that reports again (the bottle's
-        # persistence streak is already met — it never left the frame)
+        self.assertEqual(e.update([bottle], 0.0), "Bottle left, medium")
+        # asking again starts a fresh search that reports again
         e.set_mode("find", "bottle")
         self.assertEqual(e.update([bottle], 5.0), "Bottle left, medium")
         self.assertEqual(e.mode, "walk")
+
+    def test_a_single_misdetection_still_never_warns_in_walk_mode(self):
+        """Decaying the streak must not make walk mode trigger-happy: one
+        stray frame still never reaches the walk persistence of 2."""
+        e = GuidanceEngine(use_clock=False)
+        chair = info("chair", "center", proximity="close", area=0.2)
+        self.assertIsNone(e.update([chair], 0.0))
+        for n in range(1, 8):
+            self.assertIsNone(e.update([], n * 0.5),
+                              "a one-frame ghost must decay away silently")
 
     def test_find_mode_requires_target(self):
         with self.assertRaises(ValueError):

@@ -10,6 +10,8 @@
 // always outranks convenience).
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'logic/speech_policy.dart';
+
 class Speaker {
   final FlutterTts _tts = FlutterTts();
   bool muted = false;
@@ -34,9 +36,26 @@ class Speaker {
   DateTime _quietUntil = DateTime.fromMillisecondsSinceEpoch(0);
   bool _speaking = false;
 
+  /// The last thing we said, lowercased. Used to tell our own echo apart from
+  /// the user talking over us — see [couldBeEcho].
+  String _lastSpoken = '';
+
   /// True while our own voice could still be reaching the microphone.
-  /// [VoiceListener] drops recognizer results during this window.
   bool get isEchoing => _speaking || DateTime.now().isBefore(_quietUntil);
+
+  /// Is [heard] plausibly our OWN voice coming back, rather than the user?
+  ///
+  /// A purely TIME-based gate makes the app deaf for the whole of every
+  /// announcement plus a tail. In walk mode that is most of the time, and it
+  /// is exactly when a user most wants to interrupt — which is why "read" and
+  /// "find" so often did nothing on the 2026-09-05 walk.
+  ///
+  /// Content settles it. Our own speech is guidance ("Door at 11 o'clock,
+  /// close"); it never contains a bare command word like "read". So inside the
+  /// echo window we reject only text whose every word we just said, and let
+  /// anything else through as genuinely new speech.
+  bool couldBeEcho(String heard) =>
+      isEchoing && isProbablyEcho(heard, _lastSpoken);
 
   void _finished() {
     _onDemandActive = false;
@@ -62,6 +81,7 @@ class Speaker {
       {bool onDemand = false, bool urgent = false}) async {
     if (muted) return;
     if (_onDemandPlaying && !onDemand && !urgent) return; // drop, don't queue
+    _lastSpoken = message.toLowerCase();
     await _tts.stop(); // latest wins — never finish stale guidance
     _onDemandActive = onDemand;
     _speaking = true;

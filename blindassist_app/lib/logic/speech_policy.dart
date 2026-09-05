@@ -154,3 +154,30 @@ bool isPlausibleRequest(String? text, {Iterable<String> classWords = const []}) 
   final content = {..._contentWords, ...classWords.map((w) => w.toLowerCase())};
   return words.any(content.contains);
 }
+
+// --- echo discrimination ----------------------------------------------------
+// The phone's speaker reaches the phone's own microphone, and the recognizer is
+// grammar-constrained, so it force-matches our own TTS back into trained
+// phrases: "Bottle on your right" came back as a directional query and the app
+// answered its own voice.
+//
+// A purely TIME-based guard (ignore the microphone while speaking, plus a tail)
+// is safe and far too blunt. In walk mode the app talks every few seconds, so
+// the microphone was deaf for most of the session - precisely when a user most
+// wants to interrupt. The user reported it as "it's not hearing me properly
+// when I say read, find" (2026-09-05).
+//
+// Content settles it. Our own speech is guidance ("Door at 11 o'clock, close");
+// it never contains a bare command word like "read". So within the echo window
+// reject only text whose every word we just said, and treat anything else as a
+// human talking over us.
+
+/// Is [heard] plausibly our own voice, given we just said [lastSpoken]?
+/// Callers apply this ONLY inside the echo window; outside it, nothing is echo.
+bool isProbablyEcho(String heard, String lastSpoken) {
+  final words = heard.toLowerCase().split(RegExp(r'\s+'))
+    ..removeWhere((w) => w.isEmpty);
+  if (words.isEmpty) return true; // nothing said = nothing to act on
+  final spoken = lastSpoken.toLowerCase();
+  return words.every(spoken.contains);
+}

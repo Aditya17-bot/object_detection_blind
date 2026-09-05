@@ -206,3 +206,28 @@ def is_plausible_request(text, class_words=()):
         return False
     content = _CONTENT_WORDS | {w.lower() for w in class_words}
     return any(w in content for w in words)
+
+
+# --- echo discrimination ----------------------------------------------------
+# Mirror of speech_policy.dart. The phone's speaker reaches its own microphone
+# and the recognizer is grammar-constrained, so our own TTS force-matches back
+# into trained phrases and the app answers its own voice.
+#
+# A purely TIME-based guard (ignore the microphone while speaking, plus a tail)
+# is safe and far too blunt: in walk mode the app talks every few seconds, so
+# the microphone is deaf for most of the session - exactly when a user most
+# wants to interrupt. Content settles it. Our own speech is guidance ("Door at
+# 11 o'clock, close") and never contains a bare command word like "read", so
+# inside the echo window we reject only text whose every word we just said.
+
+
+def is_probably_echo(heard, last_spoken):
+    """Is `heard` plausibly our own voice, given we just said `last_spoken`?
+
+    Callers apply this ONLY inside the echo window; outside it nothing is echo.
+    """
+    words = [w for w in (heard or "").lower().split() if w]
+    if not words:
+        return True          # nothing said = nothing to act on
+    spoken = (last_spoken or "").lower()
+    return all(w in spoken for w in words)

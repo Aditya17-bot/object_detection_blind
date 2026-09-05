@@ -150,8 +150,14 @@ class StateSummaryTest(unittest.TestCase):
         self.assertEqual(by_name["bottle"]["zone"], "right")
 
     def test_reports_engine_mode_and_memory(self):
-        engine = GuidanceEngine(mode="find", target="cup")
+        # The sighting is taken in WALK mode, then the search is started.
+        # Seeing the cup while already in find mode would announce it and drop
+        # straight back to walk -- find is eager by design (see
+        # test_decision.TestEngineFind) -- and this test is about what
+        # state_summary REPORTS, not about when find completes.
+        engine = GuidanceEngine(mode="walk")
         engine.update([box("cup")], 0.0)
+        engine.set_mode("find", "cup")
         state = state_summary([], engine, 1.0)
         self.assertEqual(state["mode"], "find")
         self.assertEqual(state["target"], "cup")

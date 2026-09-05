@@ -6,7 +6,8 @@ or a rule stated in the module docstring. Pure numbers: no audio, no TTS.
 import unittest
 
 from speech_policy import (CONFIRM, INFORMATIONAL, RESPONSE, ROUTINE, SAFETY,
-                           STEERING, SpeechPolicy, is_plausible_request)
+                           STEERING, SpeechPolicy, is_plausible_request,
+                           is_probably_echo)
 
 
 class FocusTest(unittest.TestCase):
@@ -166,6 +167,37 @@ class PlausibleRequestTest(unittest.TestCase):
 
     def test_case_is_ignored_on_both_sides(self):
         self.assertTrue(is_plausible_request("Find The BOTTLE", ("Bottle",)))
+
+
+class EchoDiscriminationTest(unittest.TestCase):
+    """Mirror of test/echo_gate_test.dart.
+
+    A purely TIME-based echo guard makes the app deaf for the whole of every
+    announcement - in walk mode, most of the session, and exactly when a user
+    most wants to interrupt. Content settles it: our guidance never contains a
+    bare command word like "read".
+    """
+
+    GUIDANCE = "Door at 11 o'clock, close"
+
+    def test_our_own_guidance_coming_back_is_rejected(self):
+        self.assertTrue(is_probably_echo("door", self.GUIDANCE))
+        self.assertTrue(is_probably_echo("door close", self.GUIDANCE))
+
+    def test_the_user_interrupting_is_not_rejected(self):
+        for said in ("read", "find door", "walk mode", "stop"):
+            self.assertFalse(is_probably_echo(said, self.GUIDANCE), said)
+
+    def test_every_single_word_command_survives_an_announcement(self):
+        for w in ("read", "walk", "stop", "repeat", "describe", "photo"):
+            self.assertFalse(is_probably_echo(w, self.GUIDANCE), w)
+
+    def test_empty_text_is_echo_not_a_request(self):
+        self.assertTrue(is_probably_echo("", self.GUIDANCE))
+        self.assertTrue(is_probably_echo("   ", self.GUIDANCE))
+
+    def test_nothing_spoken_means_nothing_can_be_echo(self):
+        self.assertFalse(is_probably_echo("read", ""))
 
 
 if __name__ == "__main__":

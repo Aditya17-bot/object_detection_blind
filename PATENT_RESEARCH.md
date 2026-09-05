@@ -1043,3 +1043,62 @@ rather than inventing a confident wrong word — but it means §4.9's benefit is
 **room-specific until labelled**, which is a real deployment limitation and
 should be stated in any filing or paper rather than discovered by a reviewer.
 
+### 2026-09-05 (later) — Asymmetric evidence, and two guards that were deaf in the direction that mattered
+
+The second field walk turned up three faults that share one shape: a threshold
+tuned for one cost was applied to a decision with the opposite cost.
+
+1. **Find mode demanded symmetric evidence for asymmetric claims.** Announcing
+   a target and denying one were both gated on `persistence = 2` consecutive
+   frames. Those two claims do not cost the same. The user ASKED for the object,
+   so a false "it is on your right" costs one wasted look; a false "not visible"
+   about something in frame tells a blind user the system is broken, and they
+   cannot check the screen to find out which happened. Measured on the user's
+   room at the phone's real 2 FPS, detection runs were `[1,1,1,1,2,2]` frames:
+   four of six sightings were never announced, and the engine said "not visible"
+   and "still looking" with the person on screen. First correct answer: 19.5 s.
+   Now presence needs ONE frame, absence needs 2.5 SECONDS of continuous
+   non-detection, and streaks DECAY (0.5/frame) rather than resetting — so
+   intermittent detection accumulates while a one-frame ghost still never
+   reaches the walk threshold. Result: 12/12 classes answered on the first
+   frame, zero false absences.
+   *This sharpens §4.3 and the §9 thesis: "say less, never mislead" is not a
+   single threshold. The evidence required should scale with the cost of the
+   particular claim, and for an assistive device the costs of the two directions
+   are rarely equal. Worth stating as a claim limitation: a persistence
+   parameter expressed in FRAMES silently changes meaning with frame rate, and
+   this system's frame rate is set by a network.*
+
+2. **A noise floor that made the device deaf to its shortest commands.** The
+   morning's fix rejected any recognizer result at least half composed of
+   `[unk]`. "read", "walk", "stop" and "repeat" are single words, so one stray
+   token put them exactly at the threshold. The floor is now set per command by
+   the cost of error: settings toggles, whose spurious activation silently
+   changes behaviour a blind user cannot observe, demand a clean recognition;
+   actions, whose result the user hears at once and can simply repeat, are
+   lenient. *Same principle as (1), applied to input rather than output.*
+
+3. **Echo suppression that was purely temporal.** Blocking the microphone for
+   the duration of every utterance plus a tail meant the device could not be
+   interrupted while speaking — in walk mode, most of the time. Replaced with a
+   content test: within the echo window, reject only text whose every word we
+   just said. Guidance never contains a bare command word, so "read" survives
+   while our own "Door at 11 o'clock" coming back does not. *Relevant to §4.10:
+   an arbitration layer that cannot be interrupted is not merely inconvenient,
+   it removes the user's authority over the device.*
+
+**A prior claim is now settled by evidence rather than argument.** §4.7's
+unsolicited routing path was retained on the explicit condition that the next
+field log decide it. That log: two unsolicited router calls, both noise the
+grammar had force-matched, both abstaining, both 6.8-8.0 s. It is disabled by
+default. The trigger-word path — where the user deliberately opens a dictation
+window — is untouched, which is the correct place for the capability to live and
+strengthens rather than weakens the §4.7 claim.
+
+**Measured constraint worth recording for any latency claim:** the router model
+and the detectors share one 4 GB GPU. Tier 1 measures 485-1140 ms with the GPU
+idle and **6766-8016 ms while frames stream**; detector compute rises from
+~171 ms to 266-468 ms over the same transition. Any latency figure for this
+architecture must state whether the dialogue and perception layers were
+contending for the same accelerator.
+

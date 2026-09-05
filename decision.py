@@ -344,10 +344,33 @@ class GuidanceEngine:
 
     def __init__(self, mode="walk", target=None,
                  repeat_cooldown=3.0, min_gap=1.5, persistence=2,
-                 reminder_interval=10.0, use_clock=True, memory_ttl=30.0):
+                 reminder_interval=10.0, use_clock=True, memory_ttl=30.0,
+                 find_persistence=1, absence_grace=2.5, miss_decay=0.5):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
         self.persistence = persistence          # frames a class must persist
+        # Find mode is DELIBERATELY more eager than walk mode, because the
+        # errors are not symmetric. The user ASKED for this object: announcing
+        # a misdetection costs them one wasted look, while staying silent about
+        # an object that is on screen reads as "the app is broken" — and a
+        # blind user cannot glance at the screen to find out which it was.
+        # Measured on the 2026-09-05 room walk: at the phone's real 2 FPS the
+        # person was detected in runs of [1,1,1,1,2,2] frames, so requiring two
+        # CONSECUTIVE frames missed four of six sightings and announced "not
+        # visible" while the person was in frame.
+        self.find_persistence = find_persistence
+        # ...and the reverse claim needs MORE evidence, not less. Saying "not
+        # visible" about something visible is the expensive error, so absence
+        # is measured in SECONDS of continuous non-detection rather than in
+        # frames, which also stops the threshold meaning different things on a
+        # 2 FPS phone and a 6 FPS laptop.
+        self.absence_grace = absence_grace
+        # Evidence DECAYS, it is not erased. A single missed frame used to
+        # reset a streak to zero, so an object detected on alternate frames
+        # never accumulated anything. A lone misdetection still decays away
+        # without ever reaching `persistence`, so false positives are not made
+        # more likely by this.
+        self.miss_decay = miss_decay
         self.reminder_interval = reminder_interval  # s between "still looking"
         self.use_clock = use_clock              # clock bearings vs left/right
         self.memory_ttl = memory_ttl            # s before a sighting goes stale
@@ -356,7 +379,7 @@ class GuidanceEngine:
         self._last_msg = None
         self._last_time = None
         self._last_obstacle = None  # (name, prox rank) of last walk warning
-        self._absent = 0            # find mode: consecutive frames w/o target
+        self._absent_since = None   # find mode: when the target went missing
         self._said_not_visible = False
         self._not_visible_time = None  # when "not visible"/reminder last said
         self.set_mode(mode, target)
@@ -376,7 +399,7 @@ class GuidanceEngine:
         self.target = target
         self._last_msg = None
         self._last_obstacle = None
-        self._absent = 0
+        self._absent_since = None
         self._said_not_visible = False
         self._not_visible_time = None
 
@@ -422,8 +445,15 @@ class GuidanceEngine:
         # persistence is tracked per class name (not per zone) so an object
         # keeps its streak while the user walks and it drifts across zones;
         # one-frame misdetections never reach `persistence` and stay silent.
-        self._streaks = {i.name: self._streaks.get(i.name, 0) + 1
-                         for i in infos}
+        seen = {i.name for i in infos}
+        cap = max(self.persistence, self.find_persistence) + 1.0
+        decayed = {}
+        for name in set(self._streaks) | seen:
+            prev = self._streaks.get(name, 0.0)
+            score = min(prev + 1.0, cap) if name in seen                 else prev - self.miss_decay
+            if score > 0:
+                decayed[name] = score
+        self._streaks = decayed
         self._remember(infos, now)
         if self.mode == "walk":
             return self._update_walk(infos, now)
@@ -451,8 +481,13 @@ class GuidanceEngine:
     def _update_find(self, infos, now):
         match = find_target(infos, self.target)
         if match is None:
-            self._absent += 1
-            if self._absent < self.persistence:  # flicker, not really gone
+            if self._absent_since is None:
+                self._absent_since = now
+            # Not "gone" until it has been continuously missing for a while.
+            # One dropped frame — or one flicker in the detector — is not
+            # evidence of absence, and calling it absence is what made the app
+            # announce "Person not visible" with the person on screen.
+            if now - self._absent_since < self.absence_grace:
                 return None
             if self._said_not_visible:
                 # target still missing: remind periodically so long silence
@@ -480,8 +515,8 @@ class GuidanceEngine:
             self._said_not_visible = True
             self._not_visible_time = now
             return self._speak(msg, now)
-        self._absent = 0
-        if self._streaks.get(self.target, 0) < self.persistence:
+        self._absent_since = None
+        if self._streaks.get(self.target, 0) < self.find_persistence:
             return None
         self._said_not_visible = False
         msg = find_message(match, self.target, self.use_clock)

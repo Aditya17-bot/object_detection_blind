@@ -158,42 +158,70 @@ void main() {
       final big = info('bottle', hZone: 'right', area: 0.04);
       expect(findTarget([small, big], 'bottle'), same(big));
     });
-    test('found message', () {
+    test('found message on the very first sighting', () {
+      // Find is EAGER: the user asked, so one solid detection is enough.
+      // Requiring two consecutive frames cost four of six sightings at the
+      // phone's real 2 FPS (measured 2026-09-05) - the app stayed silent with
+      // the object on screen.
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle = info('bottle',
           hZone: 'right', vZone: 'top', proximity: 'close', area: 0.02);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle top right, close');
+      expect(e.update([bottle], 0.0), 'Bottle top right, close');
+    });
+    test('a flickering target is never called absent', () {
+      // The regression the user reported: "I see the person on screen but it
+      // just keeps saying it is still looking". A detector that drops the
+      // object on alternate frames must not produce "not visible" - saying
+      // that about something in frame is the expensive error, and a blind
+      // user cannot check the screen to find out.
+      final e = GuidanceEngine(mode: 'find', target: 'person', useClock: false);
+      final person =
+          info('person', hZone: 'center', proximity: 'medium', area: 0.02);
+      final said = <String>[];
+      for (var n = 0; n < 20; n++) {
+        final msg = e.update(n % 2 == 0 ? [person] : [], n * 0.5);
+        if (msg != null) said.add(msg);
+        if (e.mode != 'find') break; // announced and completed
+      }
+      expect(said, isNotEmpty, reason: 'a visible target must be announced');
+      final joined = said.join(' ').toLowerCase();
+      expect(joined, isNot(contains('not visible')));
+      expect(joined, isNot(contains('still looking')));
+    });
+    test('absence is measured in seconds not frames', () {
+      final e = GuidanceEngine(mode: 'find', target: 'bottle');
+      expect(e.update([], 0.0), isNull);
+      expect(e.update([], 0.1), isNull, reason: '0.1 s is not absence');
+      expect(e.update([], 2.0), isNull, reason: 'still inside the grace');
+      expect(e.update([], 2.6), 'Bottle not visible');
     });
     test('not visible said once then periodic reminder', () {
       final e = GuidanceEngine(mode: 'find', target: 'bottle');
-      expect(e.update([], 0.0), isNull); // absence persistence
-      expect(e.update([], 0.1), 'Bottle not visible');
+      expect(e.update([], 0.0), isNull); // absence grace
+      expect(e.update([], 2.6), 'Bottle not visible');
       expect(e.update([], 5.0), isNull); // not repeated...
       // ...but after reminderInterval the engine says it is still trying
-      expect(e.update([], 10.2), 'Still looking for bottle');
+      expect(e.update([], 12.7), 'Still looking for bottle');
       expect(e.update([], 15.0), isNull); // next one waits too
-      expect(e.update([], 20.3), 'Still looking for bottle');
+      expect(e.update([], 22.8), 'Still looking for bottle');
     });
     test('reminder keeps firing until target found', () {
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       e.update([], 0.0);
-      expect(e.update([], 0.1), 'Bottle not visible');
+      expect(e.update([], 2.6), 'Bottle not visible');
       expect(e.update([], 5.0), isNull);
-      expect(e.update([], 10.2), 'Still looking for bottle');
+      expect(e.update([], 12.7), 'Still looking for bottle');
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 15.0);
-      expect(e.update([bottle], 15.1), 'Bottle left, medium');
+      expect(e.update([bottle], 15.0), 'Bottle left, medium');
     });
     test('found completes search', () {
       // user decision 2026-07-16: announcing the position once IS the find
-      // result — the engine must drop back to walk mode, not keep repeating
+      // result - the engine must drop back to walk mode, not keep repeating
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle left, medium');
+      expect(e.update([bottle], 0.0), 'Bottle left, medium');
       expect(e.mode, 'walk');
       // bottle is a FIND class -> silent in walk mode, no more repeats
       expect(e.update([bottle], 5.0), isNull);
@@ -203,13 +231,23 @@ void main() {
       final e = GuidanceEngine(mode: 'find', target: 'bottle', useClock: false);
       final bottle =
           info('bottle', hZone: 'left', proximity: 'medium', area: 0.005);
-      e.update([bottle], 0.0);
-      expect(e.update([bottle], 0.1), 'Bottle left, medium');
-      // asking again starts a fresh search that reports again (the bottle's
-      // persistence streak is already met — it never left the frame)
+      expect(e.update([bottle], 0.0), 'Bottle left, medium');
+      // asking again starts a fresh search that reports again
       e.setMode('find', 'bottle');
       expect(e.update([bottle], 5.0), 'Bottle left, medium');
       expect(e.mode, 'walk');
+    });
+    test('a single misdetection still never warns in walk mode', () {
+      // Decaying the streak must not make walk mode trigger-happy: one stray
+      // frame still never reaches the walk persistence of 2.
+      final e = GuidanceEngine(useClock: false);
+      final chair =
+          info('chair', hZone: 'center', proximity: 'close', area: 0.2);
+      expect(e.update([chair], 0.0), isNull);
+      for (var n = 1; n < 8; n++) {
+        expect(e.update([], n * 0.5), isNull,
+            reason: 'a one-frame ghost must decay away silently');
+      }
     });
     test('find mode requires target', () {
       expect(() => GuidanceEngine(mode: 'find'), throwsArgumentError);

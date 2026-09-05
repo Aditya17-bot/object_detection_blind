@@ -1466,3 +1466,102 @@ single highest-value next step for perceived quality.
 - Server must be started detached from `venv-gpu` (see the 08-03 note); two
   background jobs were reaped mid-session once before.
 
+## Second field walk: find was structurally broken, and voice input was deaf (2026-09-05, later)
+
+User walked the morning build: "not hearing me properly when I say read, find";
+"in find person I see on the screen it can see person but it's not telling, it
+just keeps saying finding person"; "walk mode is already mediocre at best, at
+least make read, find and the other features better".
+
+**JPEG transport is CONFIRMED on the handset** — 283 `/infer ... jpeg` frames,
+0 raw. But the walk exposed three deeper faults.
+
+### 1. Find required evidence it could never get
+
+`_update_find` needed `persistence = 2` CONSECUTIVE frames. That threshold was
+chosen on the laptop at ~6 FPS, where two frames is 0.3 s. The phone runs at
+**1.8-2.3 FPS**, so it demanded a full second of unbroken detection.
+
+Reproduced exactly by replaying the user's own room clip at 2 FPS: the person's
+detection runs were `[1,1,1,1,2,2]` frames, so **four of six sightings never
+announced**, and because `_absent` kept incrementing through the gaps the engine
+announced "Person not visible" and "Still looking for person" with the person on
+screen. First correct answer came at **19.5 s**.
+
+Fixed by making the evidence ASYMMETRIC, which is the real insight:
+- `find_persistence = 1` — the user ASKED; announcing a misdetection costs one
+  wasted look, while silence about a visible object reads as a broken app, and
+  a blind user cannot check the screen to tell which happened.
+- `absence_grace = 2.5` SECONDS, not frames — the claim "it is not there" needs
+  more evidence than "it is there", and a frame count means different things at
+  2 FPS and 6 FPS.
+- `miss_decay = 0.5` — streaks now DECAY instead of resetting to zero, so an
+  object detected on alternate frames accumulates. A one-frame ghost still
+  decays away without reaching walk's `persistence = 2`, so this does not make
+  false warnings likelier (pinned by a test).
+
+After: **12/12 classes in the user's room answer on the first frame, 0 false
+"not visible"**. Was 19.5 s and two wrong messages.
+
+### 2. Voice input: I over-corrected the noise floor that morning
+
+`kMaxUnknownRatio` rejected any result whose `[unk]` tokens were half or more.
+**"read", "walk", "stop" and "repeat" are single words**, so one stray token put
+them at exactly 0.5 and they were dropped. I had made the app deaf to precisely
+the commands the user needed.
+
+The floor is now set PER COMMAND by the cost of being wrong:
+- `kSettingCommands` {clock, zones, sonar, mute} require `unknownCount == 0` —
+  a spurious toggle silently changes behaviour a blind user cannot see.
+- Everything else accepts `unknownRatio <= 0.5` — the user hears the result
+  immediately and can repeat it, so a false REJECT is the worse error.
+
+### 3. The echo gate was time-based, so the app was deaf while talking
+
+`isEchoing` blocked the microphone for the whole of every announcement plus a
+900 ms tail. In walk mode that is most of the session — and it is exactly when a
+user wants to interrupt. Now content-aware: `isProbablyEcho(heard, lastSpoken)`
+(pure, mirrored in `speech_policy.py` / `speech_policy.dart`) rejects only text
+whose EVERY word we just said. Our guidance never contains a bare command word,
+so "read" gets through while our own "Door at 11 o'clock" coming back does not.
+
+### 4. Unsolicited routing is now OFF by default — on the project's own criterion
+
+CLAUDE.md said the unsolicited path was kept because "the next walk's log will
+show whether it earns its place, and that is now decidable from evidence rather
+than argument". The log: **two unsolicited calls, both grammar-forced noise
+("many plant", "my left"), both abstained, both 6.8-8.0 s.** It did not earn it.
+`kRouteUnmatchedSpeech = false` in config.dart. The trigger word ("assistant")
+is unaffected — that path is deliberate.
+
+### 5. `_takePhoto` had the same focus bug as `_readText`
+
+Both called `_say(..., kResponse, tag)` — which extends the hold to cover the
+sentence — and then released it in `finally`, freeing the channel before the
+user had heard the answer. Neither releases now; the hold expires on its own.
+
+### GPU contention is the real latency ceiling, and it is a user decision
+
+`llama3.2:3b` and the two YOLO models share 4 GB of VRAM:
+
+| | agent latency | server compute |
+|---|---|---|
+| GPU idle | 485-1140 ms | ~171 ms |
+| frames streaming | **6766-8016 ms** | **266-468 ms** |
+
+Every mid-walk question timed out at the old 5 s. Timeout raised to 12 s, but
+the honest fix is not to run both on one GPU. Options for the user: drop
+`--agent-model` (roughly doubles frame rate, loses paraphrase + chat), or try
+`llama3.2:1b` (already pulled, 1.3 GB).
+
+### Room-specific naming, restated
+
+Still 0 renames in this room; 48% of detections carry a trusted name, all of
+them from the custom door/dustbin model. The 2 remaining generic "obstacle"
+warnings and the stray `refrigerator`/`toilet` labels are exactly what
+harvesting and labelling crops from `room_walk_20260905.mp4` would fix. That
+remains the highest-value next step for perceived quality.
+
+Test counts: **325 Python / 215 Dart**, analyze clean apart from the 3
+pre-existing `avoid_print` infos.
+
