@@ -1,5 +1,16 @@
 # BlindAssist
 
+## Team Details
+
+This project was developed collaboratively by:
+
+- Aditya Sridhar
+- Goureesankar S Nair
+- Yuvan Raj Mathan
+
+We worked together to build an assistive object-detection system designed to help visually impaired users understand their surroundings.
+
+
 **A camera that says what matters.** Point a phone or webcam at a room; it detects obstacles, works out which way they are and how close, and decides — out loud — what is actually worth telling you.
 
 Everything runs on the machine. No cloud, no API keys, no account. Speech recognition, object detection and the language model that handles free-form questions are all local.
