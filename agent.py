@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from position import TARGET_CLASSES
 from voice import _hearable as _voice_hearable
 from voice import grammar_phrases as _voice_grammar_phrases
-from voice import parse_command, resolve_class
+from voice import named_classes, parse_command, resolve_class
 
 # --------------------------------------------------------------------------
 # Fixed spoken templates — the ONLY strings this module may put in the user's
@@ -107,7 +107,9 @@ TOOLS = (
              arg="direction", required=True,
              examples=("what is on my left", "is there anything in front of me",
                        "anything on my right")),
-    ToolSpec("read", "read printed text aloud from the camera",
+    ToolSpec("read",
+             "read printed text aloud from the camera — anything written on "
+             "a page, label, sign or screen the user is pointing at",
              examples=("read", "read text")),
     # A photo is for someone ELSE to look at — the user cannot review it. It
     # exists so a blind user can capture something and hand it to a sighted
@@ -158,6 +160,14 @@ TOOLS = (
 )
 
 BY_NAME = {spec.name: spec for spec in TOOLS}
+
+# Small models sometimes echo the tool's DESCRIPTION where the name belongs:
+# llama3.2:1b answered "switch to walking" with
+#     {"tool": "switch to continuous obstacle warnings while walking"}
+# which was rejected as an unknown tool, so a perfectly clear request abstained.
+# A description identifies exactly one tool, so resolving it invents nothing —
+# it is the same choice, spelled the long way.
+BY_DESCRIPTION = {spec.description.lower(): spec for spec in TOOLS}
 
 # The class enumeration is derived from the DETECTOR's own class list, so a
 # tool argument can never name something the pipeline cannot detect.
@@ -362,6 +372,40 @@ def argument_is_grounded(spec, arg, utterance):
     return True                       # class names, templates, free-form slots
 
 
+# `walk` is the tool a small model reaches for when it has understood nothing.
+# Measured 2026-09-08 with the shipped llama3.2:1b, four of five failures on a
+# 20-utterance probe were a fall back to walk: "the is my on", "many plant",
+# "my left" and "what is the capital of japan" all returned {"tool": "walk"}.
+# It speaks no perceptual claim, so the authority boundary held — but on the
+# handset it CANCELS a search the user is in the middle of, which is a real
+# cost paid for noise.
+#
+# Prompting did not fix it (a rule forbidding the fallback made 1b abstain on
+# "go back to normal mode" instead and left the junk cases unchanged), so it is
+# enforced here, where this project puts every other boundary. `walk` is a
+# no-argument STATE CHANGE, and unlike a paraphrasable request there is a small
+# closed set of ways to ask for it — so the utterance has to contain one.
+_WALK_GROUNDING = frozenset({
+    "walk", "walking", "walks", "normal", "back", "resume", "resuming",
+    "continue", "guide", "guidance", "mode", "again", "start", "go",
+    "regular", "usual", "default",
+})
+
+
+def capability_is_grounded(spec, utterance):
+    """Did the user say anything that asks for this capability at all?
+
+    Applied to `walk` only, and deliberately so. Tier 1 exists for paraphrase,
+    so demanding a shared word from every capability would delete the thing it
+    is for. `walk` is the exception on evidence, not on principle: it is the
+    model's dustbin for unintelligible input, and the set of ways to ask to go
+    back to normal is small and closed.
+    """
+    if spec.name != "walk" or not utterance:
+        return True
+    return any(w in _WALK_GROUNDING for w in utterance.lower().split())
+
+
 def validate_action(raw, utterance=None):
     """One raw model action -> Action, or None if it must be rejected.
 
@@ -379,8 +423,11 @@ def validate_action(raw, utterance=None):
         name = name.get("name")
     if not isinstance(name, str):
         return None
-    spec = BY_NAME.get(name.strip().lower())
+    key = name.strip().lower()
+    spec = BY_NAME.get(key) or BY_DESCRIPTION.get(key)
     if spec is None or spec.internal:
+        return None
+    if not capability_is_grounded(spec, utterance):
         return None
 
     value = raw.get("args") if isinstance(raw.get("args"), dict) else raw
@@ -528,6 +575,40 @@ def clean_say(raw):
     return text
 
 
+# Words that make an utterance a question about what the CAMERA can see. A
+# chat reply to one of these is a perceptual claim by definition, and the model
+# has no authority to make one — §4.7. Measured 2026-09-08: asked "tell me what
+# this page says", llama3.2:1b replied {"say": "Nothing on this page."}. That is
+# the app telling a blind user their page is blank, on no evidence at all; the
+# prompt already forbids it and the model did it anyway.
+#
+# The right answer to these is a TOOL (read, describe, check, colour, light) or
+# an abstention, never a sentence the model wrote.
+_PERCEPTION_WORDS = frozenset({
+    "see", "seeing", "look", "looking", "looks", "visible", "showing",
+    "page", "text", "written", "says", "read", "sign", "label", "screen",
+    "room", "around", "front", "ahead", "behind", "beside", "near", "nearby",
+    "here", "there", "colour", "color", "bright", "dark", "light",
+    "obstacle", "obstacles", "way", "path",
+})
+
+
+def chat_is_allowed(utterance):
+    """May the model ANSWER this in its own words, or must it use a tool?
+
+    False when the question is about the user's surroundings: that answer can
+    only come from the detector, and a fluent guess is exactly the failure this
+    project is built to avoid. Object names count too — "what is the bottle
+    doing there" is a question about the room.
+    """
+    if not utterance:
+        return True
+    words = set(utterance.lower().split())
+    if words & _PERCEPTION_WORDS:
+        return False
+    return not named_classes(utterance)
+
+
 # Tool names a model reaches for when it means "just answer". None of them is a
 # real capability, so validate_action would reject them — which would throw the
 # answer away instead of speaking it.
@@ -626,6 +707,14 @@ class AgentRouter:
         if said:
             if not self.allow_chat:
                 return done(ask=DEFAULT_ASK, error="chat disabled")
+            if not chat_is_allowed(text):
+                # A question about the room, answered in the model's own
+                # words. Abstaining loses a sentence; speaking it would state
+                # something about the user's surroundings that nothing
+                # measured. See chat_is_allowed.
+                return done(ask=DEFAULT_ASK,
+                            error=f"chat refused for a perceptual question "
+                                  f"({said!r})")
             return done(say=said, source="chat")
 
         if isinstance(raw, dict):

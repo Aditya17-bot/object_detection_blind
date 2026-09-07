@@ -455,13 +455,50 @@ class ChatModeTest(unittest.TestCase):
     hole exactly as wide as it was meant to be."""
 
     def test_say_reply_is_spoken(self):
-        llm = FakeLLM({"say": "I can see a chair on your left."})
-        result = AgentRouter(llm=llm).route("what does the room look like")
+        llm = FakeLLM({"say": "William Shakespeare."})
+        result = AgentRouter(llm=llm).route("who wrote romeo and juliet")
         self.assertEqual(result.source, "chat")
         self.assertEqual(result.actions, [])
-        self.assertEqual(result.message, "I can see a chair on your left.")
+        self.assertEqual(result.message, "William Shakespeare.")
         self.assertEqual(execute(result, GuidanceEngine(), [], 0.0),
-                         ["I can see a chair on your left."])
+                         ["William Shakespeare."])
+
+    def test_a_question_about_the_room_never_gets_a_written_answer(self):
+        """This case used to be the fixture for the test above, which made the
+        suite contradict itself: AuthorityBoundaryTest already asserts that
+        model prose describing the room reaches nobody's ear, while this
+        asserted that the same claim IS spoken when it arrives as a `say`.
+
+        The shape it arrives in is not what makes it dangerous. Measured
+        2026-09-08 on the shipped llama3.2:1b, "tell me what this page says"
+        returned {"say": "Nothing on this page."} — the app telling a blind
+        user their page is blank, on no evidence.
+        """
+        for question in ("what does the room look like",
+                         "tell me what this page says",
+                         "is my bottle nearby"):
+            llm = FakeLLM({"say": "I can see a chair on your left."})
+            result = AgentRouter(llm=llm).route(question)
+            self.assertIsNone(result.say, question)
+            self.assertEqual(result.ask, "unknown", question)
+            self.assertEqual(execute(result, GuidanceEngine(), [], 0.0),
+                             [ASK_TEMPLATES["unknown"]], question)
+
+    def test_a_perceptual_question_the_parser_knows_still_uses_its_tool(self):
+        # the guard only decides whether the MODEL may answer; tier 0 is
+        # untouched and still routes the canonical phrasing to its capability
+        llm = FakeLLM({"say": "I can see a chair on your left."})
+        result = AgentRouter(llm=llm).route("is there anything in front of me")
+        self.assertEqual(result.source, "grammar")
+        self.assertEqual([a.tool for a in result.actions], ["check"])
+
+    def test_general_knowledge_is_still_answered(self):
+        for question in ("who wrote romeo and juliet",
+                         "what is the capital of france",
+                         "hello how are you", "tell me a joke"):
+            llm = FakeLLM({"say": "Paris."})
+            self.assertEqual(AgentRouter(llm=llm).route(question).say, "Paris.",
+                             question)
 
     def test_actions_win_over_chat(self):
         """Doing the thing beats talking about it."""
@@ -680,3 +717,63 @@ class HelpTest(unittest.TestCase):
         engine = GuidanceEngine()
         said = agent.execute_action(Action("help", None), engine, [], 0.0)
         self.assertEqual(said, agent.help_message())
+
+
+class CapabilityGroundingTest(unittest.TestCase):
+    """`walk` is the tool a small model reaches for when it understood nothing.
+
+    Measured 2026-09-08 with the shipped llama3.2:1b: four of five failures on
+    a 20-utterance probe were a fall back to walk — "the is my on", "many
+    plant", "my left" and "what is the capital of japan" all returned
+    {"tool": "walk"}. That speaks no perceptual claim, so the authority
+    boundary held, but on the handset it CANCELS a search the user is in the
+    middle of. Prompting did not fix it; this does.
+    """
+
+    FIELD_JUNK = ["the is my on", "many plant", "my left",
+                  "what is the capital of japan", "cup phones"]
+    # "start walking again" is deliberately absent: "again" is a trained
+    # synonym for , which tier 0 claims first. That precedence predates
+    # this guard and is left alone — "again" far more often means repeat.
+    REAL = ["walk mode", "walk", "go back to normal mode", "switch to walking",
+            "resume guidance", "back to normal"]
+
+    def test_junk_cannot_become_walk(self):
+        for text in self.FIELD_JUNK:
+            llm = FakeLLM({"actions": [{"tool": "walk"}]})
+            result = AgentRouter(llm=llm).route(text)
+            self.assertEqual(result.actions, [], text)
+
+    def test_every_real_way_of_asking_still_works(self):
+        for text in self.REAL:
+            llm = FakeLLM({"actions": [{"tool": "walk"}]})
+            result = AgentRouter(llm=llm).route(text)
+            self.assertEqual([a.tool for a in result.actions], ["walk"], text)
+
+    def test_only_walk_is_grounded_this_way(self):
+        # tier 1 exists FOR paraphrase, so no other capability may demand a
+        # shared word — "is the way clear" names neither "path" nor "clear
+        # path" and must still route
+        llm = FakeLLM({"actions": [{"tool": "path"}]})
+        self.assertEqual(
+            [a.tool for a in AgentRouter(llm=llm).route("am i blocked").actions],
+            ["path"])
+
+
+class DescriptionAsToolNameTest(unittest.TestCase):
+    """llama3.2:1b answers some requests with the tool's DESCRIPTION in the
+    name slot. It was rejected as an unknown tool, so a perfectly clear
+    request abstained ("switch to walking", measured 2026-09-08). A
+    description identifies exactly one tool, so accepting it invents nothing.
+    """
+
+    def test_the_description_resolves_to_its_tool(self):
+        llm = FakeLLM({"actions": [{
+            "tool": "switch to continuous obstacle warnings while walking"}]})
+        result = AgentRouter(llm=llm).route("go back to normal mode")
+        self.assertEqual([a.tool for a in result.actions], ["walk"])
+
+    def test_an_unknown_description_is_still_rejected(self):
+        llm = FakeLLM({"actions": [{"tool": "call the user's mother"}]})
+        self.assertEqual(AgentRouter(llm=llm).route("call my mother").actions,
+                         [])
