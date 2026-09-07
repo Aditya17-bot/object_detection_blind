@@ -19,6 +19,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:blindassist/logic/voice_commands.dart';
 import 'package:blindassist/voice_listener.dart';
+import 'package:blindassist/logic/agent_actions.dart';
 
 String result(String text) => '{"text": "$text"}';
 
@@ -206,6 +207,78 @@ void _oneRequestFloor() {
 
     test('a direction is not a second capability', () {
       expect(namedCapabilities('find the door on my left'), {'find'});
+    });
+  });
+
+  group('setting deliberateness', () {
+    // A setting must have been ASKED for, not merely present in the noise.
+    //
+    // The grammar is closed, so ambient speech does not fail to match - it
+    // matches the nearest trained phrase and is CERTAIN about it. Replaying
+    // the 2026-09-07 walk audio through the shipped grammar, the room produced
+    // 'is mute womans': no unknown tokens, one capability, three words, and it
+    // muted the app. Muting is the worst case because a blind user has no way
+    // to see that it happened; the previous field walk lost every command
+    // after one for exactly that reason.
+    const fieldNoise = [
+      'is mute womans', // observed, 2026-09-07 walk audio
+      'the sonar bottle',
+      'clock the many',
+      'wardrobe zone plant',
+    ];
+    const real = [
+      'mute', 'mute it', 'please mute', 'voice on', 'sound on', 'speak',
+      'sonar on', 'sonar off', 'turn off sonar', 'turn the sonar on',
+      'clock mode', 'zone mode',
+    ];
+
+    test('field noise cannot flip a setting', () {
+      for (final text in fieldNoise) {
+        final parsed = parseCommand(text);
+        if (parsed == null || !kSettingActions.contains(parsed.action)) {
+          continue; // already rejected earlier in the chain
+        }
+        expect(settingIsDeliberate(parsed.action, text), isFalse,
+            reason: '$text would flip ${parsed.action}');
+      }
+    });
+
+    test('real phrasings still work', () {
+      for (final text in real) {
+        final parsed = parseCommand(text);
+        expect(parsed, isNotNull, reason: text);
+        expect(settingIsDeliberate(parsed!.action, text), isTrue, reason: text);
+      }
+    });
+
+    test('every grammar phrase for a setting survives', () {
+      for (final phrase in agentGrammarPhrases()) {
+        final parsed = parseCommand(phrase);
+        if (parsed != null && kSettingActions.contains(parsed.action)) {
+          expect(settingIsDeliberate(parsed.action, phrase), isTrue,
+              reason: phrase);
+        }
+      }
+    });
+
+    test('non settings are untouched', () {
+      // everything else answers out loud, so the user hears a false accept
+      // immediately and can correct it; a false REJECT is the costly error
+      for (final text in [
+        'read', 'read the text', 'describe', 'find the bottle',
+        'how many chairs', 'is there anything in front of me',
+      ]) {
+        final parsed = parseCommand(text);
+        expect(parsed, isNotNull, reason: text);
+        expect(settingIsDeliberate(parsed!.action, text), isTrue, reason: text);
+      }
+    });
+
+    test('the recognizer gate rejects a setting hidden in noise', () {
+      const heard = Recognition('is mute womans', 0);
+      expect(recognitionIsUsable(heard, action: 'mute'), isFalse);
+      expect(recognitionIsUsable(const Recognition('mute it', 0),
+          action: 'mute'), isTrue);
     });
   });
 }

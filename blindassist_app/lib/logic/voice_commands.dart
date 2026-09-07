@@ -345,6 +345,51 @@ bool looksLikeOneRequest(String text) {
 /// True when [text] names two or more different classes — see [namedClasses].
 bool namesMultipleObjects(String text) => namedClasses(text).length > 1;
 
+/// Settings are the one class of command whose cost is asymmetric in the
+/// dangerous direction. Everything else answers out loud, so a spurious
+/// trigger is a sentence the user can ignore and correct. Mute, sonar, clock
+/// and zones change behaviour PERSISTENTLY and leave no trace a blind user can
+/// check — and the app has already been silently muted in the field once
+/// (2026-09-07: "mute it", then every later command ran without a voice).
+///
+/// The grammar is closed, so ambient speech does not fail to match: it matches
+/// the nearest trained phrase and is CERTAIN about it. Replaying the
+/// 2026-09-07 walk audio through the shipped grammar, the room produced
+/// 'is mute womans' — which contains "mute", and muted the app. No
+/// unknown-token test can see that; there were no unknown tokens.
+///
+/// So a setting command must BE a setting phrase, not merely contain one.
+/// Mirror of voice.setting_is_deliberate.
+const Set<String> kSettingActions = {'mute', 'sonar', 'clock', 'zones'};
+
+const Map<String, Set<String>> _settingVocab = {
+  'mute': {'mute', 'unmute', 'voice', 'sound', 'speak', 'on', 'off', 'mode'},
+  'sonar': {'sonar', 'on', 'off', 'mode'},
+  'clock': {'clock', 'mode', 'on', 'off'},
+  'zones': {'zone', 'zones', 'mode', 'on', 'off'},
+};
+
+/// Politeness and articles a person really does put around a bare command.
+/// Deliberately short: every word here is a word ambient speech may contain
+/// while still flipping a setting. "is" is NOT in it, which is what rejects
+/// 'is mute womans'.
+const Set<String> _settingFiller = {
+  'please', 'the', 'a', 'an', 'it', 'to', 'turn', 'switch', 'put', 'go',
+  'back', 'now', 'my', 'and', 'can', 'you', "let's", 'lets',
+};
+
+/// True when [text] is a plain request for [action] and nothing else.
+///
+/// Only applies to [kSettingActions]; every other action returns true, because
+/// for those the user hears the result immediately.
+bool settingIsDeliberate(String action, String text) {
+  if (!kSettingActions.contains(action)) return true;
+  final allowed = {..._settingVocab[action]!, ..._settingFiller};
+  final words = text.toLowerCase().split(RegExp(r'\s+'))
+    ..removeWhere((w) => w.isEmpty);
+  return words.isNotEmpty && words.every(allowed.contains);
+}
+
 /// Words the shipped Vosk model has no pronunciation for. Vosk drops them from
 /// the grammar with a warning nobody reads, so a phrase built from one is not
 /// misheard — it is UNHEARABLE, exactly like one that was never added.

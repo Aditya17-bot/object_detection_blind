@@ -186,6 +186,55 @@ def names_multiple_objects(text):
     return len(named_classes(text)) > 1
 
 
+# Settings are the one class of command whose cost is asymmetric in the
+# dangerous direction. Everything else answers out loud, so a spurious trigger
+# is a sentence the user can ignore and correct. Mute, sonar, clock and zones
+# change behaviour PERSISTENTLY and leave no trace a blind user can check —
+# and the app has already been silently muted in the field once
+# (2026-09-07: "mute it", then every later command ran without a voice).
+#
+# The recognizer's grammar is closed, so ambient speech does not fail to
+# match — it matches the nearest trained phrase and is CERTAIN about it. On
+# the 2026-09-07 walk audio, replayed through the shipped grammar, the room
+# produced 'is mute womans', which contains "mute" and therefore muted the
+# app. No unknown-token test can see this: there were no unknown tokens.
+#
+# So a setting command must BE a setting phrase, not merely contain one: every
+# word has to come from that command's own vocabulary or this filler list.
+SETTING_ACTIONS = frozenset({"mute", "sonar", "clock", "zones"})
+
+_SETTING_VOCAB = {
+    "mute": frozenset({"mute", "unmute", "voice", "sound", "speak", "on",
+                       "off", "mode"}),
+    "sonar": frozenset({"sonar", "on", "off", "mode"}),
+    "clock": frozenset({"clock", "mode", "on", "off"}),
+    "zones": frozenset({"zone", "zones", "mode", "on", "off"}),
+}
+
+# Politeness and articles a person really does put around a bare command.
+# Deliberately short: every word added here is a word ambient speech is
+# allowed to contain while still flipping a setting. "is" is NOT in it, which
+# is what rejects 'is mute womans'.
+_SETTING_FILLER = frozenset({
+    "please", "the", "a", "an", "it", "to", "turn", "switch", "put", "go",
+    "back", "now", "my", "and", "can", "you", "let's", "lets",
+})
+
+
+def setting_is_deliberate(action, text):
+    """True when `text` is a plain request for `action` and nothing else.
+
+    Only applies to SETTING_ACTIONS; every other action returns True, because
+    for those the user hears the result immediately. Mirror of
+    voice_commands.dart.
+    """
+    if action not in SETTING_ACTIONS:
+        return True
+    allowed = _SETTING_VOCAB[action] | _SETTING_FILLER
+    words = text.lower().split()
+    return bool(words) and all(w in allowed for w in words)
+
+
 def resolve_class(text):
     """Spoken words -> COCO class name, or None. Handles synonyms and plurals
     ('sofas' -> 'couch'). Public so the agent layer can validate a tool
@@ -442,6 +491,10 @@ class VoiceListener:
                         continue
                     command = parse_command(text)
                     if not command:
+                        continue
+                    # A setting must have been ASKED for, not merely contained
+                    # in the noise — see setting_is_deliberate.
+                    if not setting_is_deliberate(command[0], text):
                         continue
                     self.last_heard = text
                     self._on_command(command)

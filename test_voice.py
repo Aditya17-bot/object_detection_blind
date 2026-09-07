@@ -293,3 +293,61 @@ class VocabularyTest(unittest.TestCase):
         grammar = set(grammar_phrases())
         back = [p for p in grammar if parse_command(p) == ("mute", "off")]
         self.assertTrue(back, "no hearable phrase un-mutes the app")
+
+
+class SettingDeliberatenessTest(unittest.TestCase):
+    """A setting must have been ASKED for, not merely present in the noise.
+
+    The recognizer's grammar is closed, so ambient speech does not fail to
+    match — it matches the nearest trained phrase and is CERTAIN about it.
+    Replaying the 2026-09-07 walk audio through the shipped grammar, the room
+    produced 'is mute womans': no unknown tokens, one capability, three words,
+    and it muted the app. Muting is the worst case because a blind user has no
+    way to see that it happened; the previous field walk lost every command
+    after one for exactly that reason.
+    """
+
+    FIELD_NOISE = [
+        "is mute womans",          # observed, 2026-09-07 walk audio
+        "the sonar bottle",
+        "clock the many",
+        "wardrobe zone plant",
+    ]
+
+    REAL = [
+        "mute", "mute it", "please mute", "voice on", "sound on", "speak",
+        "sonar on", "sonar off", "turn off sonar", "turn the sonar on",
+        "clock mode", "zone mode",
+    ]
+
+    def test_field_noise_cannot_flip_a_setting(self):
+        for text in self.FIELD_NOISE:
+            parsed = parse_command(text)
+            if parsed is None or parsed[0] not in voice.SETTING_ACTIONS:
+                continue          # already rejected earlier in the chain
+            self.assertFalse(voice.setting_is_deliberate(parsed[0], text),
+                             f"{text!r} would flip {parsed[0]}")
+
+    def test_real_phrasings_still_work(self):
+        for text in self.REAL:
+            parsed = parse_command(text)
+            self.assertIsNotNone(parsed, text)
+            self.assertTrue(voice.setting_is_deliberate(parsed[0], text), text)
+
+    def test_every_grammar_phrase_for_a_setting_survives(self):
+        # the shipped grammar is the vocabulary the user is TRAINED on, so no
+        # phrase in it may be rejected by this floor
+        for phrase in grammar_phrases():
+            parsed = parse_command(phrase)
+            if parsed and parsed[0] in voice.SETTING_ACTIONS:
+                self.assertTrue(
+                    voice.setting_is_deliberate(parsed[0], phrase), phrase)
+
+    def test_non_settings_are_untouched(self):
+        # everything else answers out loud, so the user hears a false accept
+        # immediately and can correct it; a false REJECT is the costly error
+        for text in ["read", "read the text", "describe", "find the bottle",
+                     "how many chairs", "is there anything in front of me"]:
+            parsed = parse_command(text)
+            self.assertIsNotNone(parsed, text)
+            self.assertTrue(voice.setting_is_deliberate(parsed[0], text), text)

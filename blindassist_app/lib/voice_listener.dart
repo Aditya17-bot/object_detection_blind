@@ -88,7 +88,11 @@ bool recognitionIsUsable(Recognition r, {String? action}) {
   // "describe light left" from describing.
   if (!looksLikeOneRequest(r.text)) return false;
   if (action != null && kSettingCommands.contains(action)) {
-    return r.unknownCount == 0;
+    // Clean recognition is necessary but NOT sufficient: ambient speech can be
+    // placed on the grammar with total confidence and still contain the word.
+    // The utterance also has to be a plain request for this setting — see
+    // settingIsDeliberate.
+    return r.unknownCount == 0 && settingIsDeliberate(action, r.text);
   }
   return r.unknownRatio <= kMaxUnknownRatio;
 }
