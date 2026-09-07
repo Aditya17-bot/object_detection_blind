@@ -143,8 +143,34 @@ class TestEngineWalk(unittest.TestCase):
         e.update([chair], 0.0)
         self.assertEqual(e.update([chair], 0.1), "Chair on right, close")
         closer = info("chair", "right", proximity="very close")
-        self.assertEqual(e.update([closer], 0.3),
+        # 1.0 s later: well inside the 3 s repeat cooldown and inside the 1.5 s
+        # min_gap, but past escalation_min_gap.
+        self.assertEqual(e.update([closer], 1.1),
                          "Chair very close on right, move slightly left")
+
+    def test_escalation_does_not_speak_over_the_warning_about_itself(self):
+        # 2026-09-07 walk: "Person at 12 o'clock, close" was followed 0.9 s
+        # later by "Person very close ... move slightly right", and because
+        # "very close" is SAFETY priority the Speaker cut the first sentence
+        # off mid-word. Escalation still beats the 3 s repeat cooldown; it no
+        # longer beats escalation_min_gap.
+        e = GuidanceEngine(use_clock=False)
+        chair = info("chair", "right", proximity="close")
+        e.update([chair], 0.0)
+        self.assertEqual(e.update([chair], 0.1), "Chair on right, close")
+        closer = info("chair", "right", proximity="very close")
+        self.assertIsNone(e.update([closer], 0.5))     # 0.4 s — too soon
+        self.assertEqual(e.update([closer], 0.95),     # 0.85 s — allowed
+                         "Chair very close on right, move slightly left")
+
+    def test_escalation_is_still_faster_than_the_normal_gap(self):
+        e = GuidanceEngine(use_clock=False)
+        chair = info("chair", "right", proximity="close")
+        e.update([chair], 0.0)
+        e.update([chair], 0.1)
+        closer = info("chair", "right", proximity="very close")
+        # min_gap alone would hold this until 1.6 s
+        self.assertIsNotNone(e.update([closer], 1.0))
 
 
 class TestEngineFind(unittest.TestCase):
@@ -501,10 +527,33 @@ class TestCheckDirection(unittest.TestCase):
         self.assertEqual(check_direction([info("cup", "left")], "left"),
                          "A cup close on your left")
 
-    def test_untrusted_name_becomes_obstacle(self):
+    def test_a_solicited_answer_names_the_object_but_marks_the_doubt(self):
+        # A low-confidence label became the bare word "obstacle", which
+        # answers a question about identity with the one thing the user
+        # already knew — and contradicted describe(), which named the very
+        # same box in the very same frame. The name is kept and marked.
         scene = [info("toilet", "left", conf=0.65)]
         self.assertEqual(check_direction(scene, "left"),
-                         "An obstacle close on your left")
+                         "Possibly a toilet close on your left")
+        self.assertEqual(summarize_scene(scene),
+                         "Possibly a toilet on your left")
+
+    def test_a_trusted_name_is_stated_flatly(self):
+        scene = [info("chair", "left", conf=0.92)]
+        self.assertEqual(check_direction(scene, "left"),
+                         "A chair close on your left")
+        self.assertNotIn("possibly", summarize_scene(scene))
+
+    def test_walk_still_says_obstacle_for_the_same_box(self):
+        # Unsolicited, must stay short, and the avoidance action is identical
+        # whatever the thing is called.
+        scene = [info("toilet", "left", conf=0.65)]
+        self.assertIn("Obstacle", walk_message(scene[0], scene))
+
+    def test_one_confident_sighting_unhedges_the_group(self):
+        scene = [info("chair", "left", conf=0.60),
+                 info("chair", "left", conf=0.95)]
+        self.assertEqual(summarize_scene(scene), "2 chairs on your left")
 
     def test_unknown_direction_returns_none(self):
         self.assertIsNone(check_direction([info("chair")], "behind"))
@@ -562,3 +611,40 @@ class TestTrustedName(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNameStability(unittest.TestCase):
+    """One object must not be given two different nouns as its confidence
+    wanders across NAME_CONFIDENCE.
+
+    Field evidence, 2026-09-07 walk: the bed was detected between 0.65 and
+    0.92 against a threshold of 0.8, and the user heard "Obstacle at 12
+    o'clock, close" followed 0.9 s later by "Bed very close at 12 o'clock".
+    """
+
+    def test_a_name_once_earned_survives_a_weak_frame(self):
+        e = GuidanceEngine(use_clock=False)
+        strong = info("bed", "center", conf=0.92)
+        e.update([strong], 0.0)
+        self.assertEqual(e.update([strong], 0.1), "Bed ahead, close")
+        weak = info("bed", "center", proximity="very close", conf=0.66)
+        self.assertEqual(e.update([weak], 1.1),
+                         "Bed very close ahead, move slightly left")
+
+    def test_it_decays_so_a_stale_name_is_not_kept_forever(self):
+        e = GuidanceEngine(use_clock=False)
+        strong = info("bed", "center", conf=0.92)
+        e.update([strong], 0.0)
+        e.update([strong], 0.1)
+        weak = info("bed", "center", conf=0.60)
+        # 0.05 per frame: from 0.92 it takes three frames to fall under 0.8
+        for t in (2.0, 2.5, 3.0, 3.5, 4.0):
+            e.update([weak], t)
+        self.assertLess(e._name_conf["bed"], 0.8)
+        self.assertEqual(e.update([weak], 6.0), "Obstacle ahead, close")
+
+    def test_a_class_that_was_never_confident_is_still_hedged(self):
+        e = GuidanceEngine(use_clock=False)
+        weak = info("toilet", "center", conf=0.70)
+        e.update([weak], 0.0)
+        self.assertEqual(e.update([weak], 0.1), "Obstacle ahead, close")

@@ -147,8 +147,34 @@ void main() {
       e.update([chair], 0.0);
       expect(e.update([chair], 0.1), 'Chair on right, close');
       final closer = info('chair', hZone: 'right', proximity: 'very close');
-      expect(e.update([closer], 0.3),
+      // 1.0 s later: well inside the 3 s repeat cooldown and inside the 1.5 s
+      // minGap, but past escalationMinGap.
+      expect(e.update([closer], 1.1),
           'Chair very close on right, move slightly left');
+    });
+    test('escalation does not speak over the warning about itself', () {
+      // 2026-09-07 walk: "Person at 12 o'clock, close" was followed 0.9 s
+      // later by "Person very close ... move slightly right", and because
+      // "very close" is SAFETY priority the Speaker cut the first sentence off
+      // mid-word. Escalation still beats the 3 s repeat cooldown; it no longer
+      // beats escalationMinGap.
+      final e = GuidanceEngine(useClock: false);
+      final chair = info('chair', hZone: 'right', proximity: 'close');
+      e.update([chair], 0.0);
+      expect(e.update([chair], 0.1), 'Chair on right, close');
+      final closer = info('chair', hZone: 'right', proximity: 'very close');
+      expect(e.update([closer], 0.5), isNull);        // 0.4 s - too soon
+      expect(e.update([closer], 0.95),                // 0.85 s - allowed
+          'Chair very close on right, move slightly left');
+    });
+    test('escalation is still faster than the normal gap', () {
+      final e = GuidanceEngine(useClock: false);
+      final chair = info('chair', hZone: 'right', proximity: 'close');
+      e.update([chair], 0.0);
+      e.update([chair], 0.1);
+      final closer = info('chair', hZone: 'right', proximity: 'very close');
+      // minGap alone would hold this until 1.6 s
+      expect(e.update([closer], 1.0), isNotNull);
     });
   });
 
@@ -506,9 +532,33 @@ void main() {
       expect(checkDirection([info('cup', hZone: 'left')], 'left'),
           'A cup close on your left');
     });
-    test('untrusted name becomes obstacle', () {
-      expect(checkDirection([info('toilet', hZone: 'left', conf: 0.65)], 'left'),
-          'An obstacle close on your left');
+    test('a solicited answer names the object but marks the doubt', () {
+      // A low-confidence label became the bare word "obstacle", which answers
+      // a question about identity with the one thing the user already knew -
+      // and contradicted summarizeScene, which named the very same box in the
+      // very same frame. The name is kept and marked.
+      final scene = [info('toilet', hZone: 'left', conf: 0.65)];
+      expect(checkDirection(scene, 'left'),
+          'Possibly a toilet close on your left');
+      expect(summarizeScene(scene), 'Possibly a toilet on your left');
+    });
+    test('a trusted name is stated flatly', () {
+      final scene = [info('chair', hZone: 'left', conf: 0.92)];
+      expect(checkDirection(scene, 'left'), 'A chair close on your left');
+      expect(summarizeScene(scene), isNot(contains('possibly')));
+    });
+    test('walk still says obstacle for the same box', () {
+      // Unsolicited, must stay short, and the avoidance action is identical
+      // whatever the thing is called.
+      final scene = [info('toilet', hZone: 'left', conf: 0.65)];
+      expect(walkMessage(scene.first, scene), contains('Obstacle'));
+    });
+    test('one confident sighting unhedges the group', () {
+      final scene = [
+        info('chair', hZone: 'left', conf: 0.60),
+        info('chair', hZone: 'left', conf: 0.95),
+      ];
+      expect(summarizeScene(scene), '2 chairs on your left');
     });
     test('unknown direction returns null', () {
       expect(checkDirection([info('chair')], 'behind'), isNull);
@@ -534,6 +584,42 @@ void main() {
       expect(visible.first['zone'], 'left');
       // no leaked internals: the router reads facts, not object handles
       expect(visible.first.containsKey('_area'), isFalse);
+    });
+  });
+
+  group('name stability', () {
+    // One object must not be given two different nouns as its confidence
+    // wanders across nameConfidence. Field evidence, 2026-09-07 walk: the bed
+    // was detected between 0.65 and 0.92 against a threshold of 0.8, and the
+    // user heard "Obstacle at 12 o'clock, close" followed 0.9 s later by
+    // "Bed very close at 12 o'clock".
+    test('a name once earned survives a weak frame', () {
+      final e = GuidanceEngine(useClock: false);
+      final strong = info('bed', hZone: 'center', conf: 0.92);
+      e.update([strong], 0.0);
+      expect(e.update([strong], 0.1), 'Bed ahead, close');
+      final weak =
+          info('bed', hZone: 'center', proximity: 'very close', conf: 0.66);
+      expect(e.update([weak], 1.1), 'Bed very close ahead, move slightly left');
+    });
+
+    test('it decays so a stale name is not kept forever', () {
+      final e = GuidanceEngine(useClock: false);
+      final strong = info('bed', hZone: 'center', conf: 0.92);
+      e.update([strong], 0.0);
+      e.update([strong], 0.1);
+      final weak = info('bed', hZone: 'center', conf: 0.60);
+      for (final t in [2.0, 2.5, 3.0, 3.5, 4.0]) {
+        e.update([weak], t);
+      }
+      expect(e.update([weak], 6.0), 'Obstacle ahead, close');
+    });
+
+    test('a class that was never confident is still hedged', () {
+      final e = GuidanceEngine(useClock: false);
+      final weak = info('toilet', hZone: 'center', conf: 0.70);
+      e.update([weak], 0.0);
+      expect(e.update([weak], 0.1), 'Obstacle ahead, close');
     });
   });
 }

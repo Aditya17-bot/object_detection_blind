@@ -124,11 +124,39 @@ String _freerSide(ObjectInfo chosen, List<ObjectInfo> infos) {
 ///    threshold separates them. Kept as a weak prior against speaking a
 ///    low-confidence guess by name, not because the number means what the
 ///    original probe claimed.
-String _spokenName(ObjectInfo info) => (info.trustedName ||
-        trustedNameClasses.contains(info.name) ||
-        info.confidence >= nameConfidence)
-    ? info.name
-    : 'obstacle';
+String _spokenName(ObjectInfo info) =>
+    nameIsTrustworthy(info) ? info.name : 'obstacle';
+
+/// The three ways a class name earns the right to be stated flatly.
+bool nameIsTrustworthy(ObjectInfo info) =>
+    info.trustedName ||
+    trustedNameClasses.contains(info.name) ||
+    info.confidence >= nameConfidence;
+
+/// The name for a SOLICITED answer: stated, but marked when unsure.
+///
+/// Walk warnings replace an untrusted label with the bare word "obstacle" -
+/// right there, because the warning is unsolicited, has to be short, and the
+/// action (avoid it) is identical whatever the thing turns out to be.
+///
+/// A question is different in both directions. "An obstacle close on your
+/// left" answers a request for identity with the one thing the user already
+/// knew, and it contradicted summarizeScene, which named the very same box in
+/// the very same frame. But simply dropping the hedge would let the system
+/// assert "a toilet on your left" in a bedroom, which is the failure this
+/// project exists to avoid - measured over both field clips, 4 of the 197
+/// detections carried a COCO name wrong for the object, and 3 of those 4 sat
+/// below [nameConfidence].
+///
+/// So the name is kept and marked: "possibly a toilet". Mirror of
+/// decision.hedged_name.
+String hedgedName(ObjectInfo info) =>
+    nameIsTrustworthy(info) ? info.name : 'possibly ${info.name}';
+
+/// 'a chair' / 'possibly a chair', for a solicited answer.
+String _withArticle(ObjectInfo info) => nameIsTrustworthy(info)
+    ? '${_article(info.name)} ${info.name}'
+    : 'possibly ${_article(info.name)} ${info.name}';
 
 String walkMessage(ObjectInfo info,
     [List<ObjectInfo> allInfos = const [], bool useClock = false]) {
@@ -238,13 +266,18 @@ String? checkDirection(List<ObjectInfo> infos, String direction) {
     final r = _proxRank[b.proximity]!.compareTo(_proxRank[a.proximity]!);
     return r != 0 ? r : b.area.compareTo(a.area);
   });
-  final first = _spokenName(here.first);
+  // hedgedName, not _spokenName: a question about identity is answered with
+  // the name, marked "possibly" when the label is not trustworthy. Answering
+  // "an obstacle close on your left" told the user only what asking already
+  // implied, and contradicted summarizeScene, which names the very same box in
+  // the very same frame. Measured on the 2026-09-07 walk: 25 of 63 check
+  // answers were anonymised that way.
   final parts = <String>[
-    '${_article(first)} $first ${here.first.proximity} ${_dirWord[direction]}'
+    '${_withArticle(here.first)} ${here.first.proximity} '
+        '${_dirWord[direction]}'
   ];
   for (final extra in here.skip(1).take(_checkLimit - 1)) {
-    final name = _spokenName(extra);
-    parts.add('and ${_article(name)} $name ${extra.proximity}');
+    parts.add('and ${_withArticle(extra)} ${extra.proximity}');
   }
   return _cap(parts.join(', '));
 }
@@ -326,9 +359,10 @@ String summarizeScene(List<ObjectInfo> infos) {
     final key = '${i.name}|${i.hZone}';
     keyName[key] = i.name;
     keyZone[key] = i.hZone;
-    final entry = groups.putIfAbsent(key, () => [0, 0.0]);
+    final entry = groups.putIfAbsent(key, () => [0, 0.0, 0]);
     entry[0] = (entry[0] as int) + 1;
     if (i.area > (entry[1] as double)) entry[1] = i.area;
+    if (nameIsTrustworthy(i)) entry[2] = 1;
   }
   if (groups.isEmpty) return 'Nothing detected';
   final ordered = groups.keys.toList()
@@ -341,7 +375,12 @@ String summarizeScene(List<ObjectInfo> infos) {
   for (final key in ordered) {
     final name = keyName[key]!, zone = keyZone[key]!;
     final count = groups[key]![0] as int;
-    final what = count == 1 ? '${_article(name)} $name' : '$count ${_plural(name)}';
+    var what =
+        count == 1 ? '${_article(name)} $name' : '$count ${_plural(name)}';
+    // A group is hedged only when EVERY box in it is untrustworthy: one
+    // confident sighting of the class is enough to stop calling the whole
+    // group a guess.
+    if ((groups[key]![2] as int) == 0) what = 'possibly $what';
     parts.add('$what ${_zoneWord[zone]}');
   }
   return _cap(parts.join(', '));
@@ -359,6 +398,22 @@ String summarizeScene(List<ObjectInfo> infos) {
 class GuidanceEngine {
   final double repeatCooldown; // s before repeating same message
   final double minGap;         // s between any two messages
+
+  /// Floor for an escalation, which is allowed to jump [minGap]. Without it a
+  /// closing obstacle spoke over the warning about itself - see
+  /// [_clearToSpeak].
+  final double escalationMinGap;
+
+  /// Detector confidence for one physical object wanders frame to frame, and
+  /// [nameConfidence] is a hard edge. On the 2026-09-07 walk the bed ranged
+  /// 0.65-0.92 around a threshold of 0.8, so the SAME object was announced
+  /// "Obstacle at 12 o'clock, close" and then, 0.9 s later, "Bed very close at
+  /// 12 o'clock" - two nouns for one thing, which is the "obstacles weirdly
+  /// said" the user reported. The naming decision therefore uses a per-class
+  /// confidence that RISES instantly and falls by this much per frame, so a
+  /// name that has been earned is not lost to one weak frame. Same shape as
+  /// [missDecay], and the same reasoning as the naming head's hysteresis.
+  final double nameConfDecay;
   final int persistence;       // frames a class must persist
 
   /// Find mode is DELIBERATELY more eager than walk mode, because the errors
@@ -391,6 +446,7 @@ class GuidanceEngine {
   bool useClock;               // clock bearings vs left/center/right
 
   Map<String, double> _streaks = {};
+  final Map<String, double> _nameConf = {}; // class -> decayed peak confidence
   final Map<String, (ObjectInfo, double)> _memory = {}; // name -> (info, time)
   String? _lastMsg;
   double? _lastTime;
@@ -408,6 +464,8 @@ class GuidanceEngine {
     this.target,
     this.repeatCooldown = 3.0,
     this.minGap = 1.5,
+    this.escalationMinGap = 0.8,
+    this.nameConfDecay = 0.05,
     this.persistence = 2,
     this.findPersistence = 1,
     this.absenceGrace = 2.5,
@@ -444,7 +502,20 @@ class GuidanceEngine {
   // -- helpers --------------------------------------------------------------
 
   bool _clearToSpeak(String msg, double now, {bool urgent = false}) {
-    if (_lastTime == null || urgent) return true;
+    if (_lastTime == null) return true;
+    if (urgent) {
+      // Escalation exists to beat the 3 s repeat cooldown when the same
+      // obstacle gets closer. It used to beat minGap as well, which meant the
+      // two sentences collided: measured on the 2026-09-07 walk, "Person at 12
+      // o'clock, close" was followed 0.9 s later by "Person very close at 12
+      // o'clock, move slightly right", and since "very close" is SAFETY
+      // priority the Speaker cut the first one off mid-word. The user reported
+      // exactly that ("the voice gets interrupted by something else"). A floor
+      // of escalationMinGap keeps the warning prompt - it still arrives up to
+      // 0.7 s earlier than the normal gap would allow - while leaving the
+      // previous sentence room to be heard.
+      return now - _lastTime! >= escalationMinGap;
+    }
     final elapsed = now - _lastTime!;
     if (elapsed < minGap) return false;
     if (msg == _lastMsg && elapsed < repeatCooldown) return false;
@@ -496,8 +567,36 @@ class GuidanceEngine {
       if (score > 0) next[name] = score;
     }
     _streaks = next;
+    _updateNameConfidence(infos);
     _remember(infos, now);
     return mode == 'walk' ? _updateWalk(infos, now) : _updateFind(infos, now);
+  }
+
+  /// Per-class confidence that rises instantly and decays slowly - see
+  /// [nameConfDecay].
+  void _updateNameConfidence(List<ObjectInfo> infos) {
+    final best = <String, double>{};
+    for (final i in infos) {
+      final prev = best[i.name] ?? 0.0;
+      if (i.confidence > prev) best[i.name] = i.confidence;
+    }
+    for (final name in {..._nameConf.keys, ...best.keys}) {
+      final prev = (_nameConf[name] ?? 0.0) - nameConfDecay;
+      final seen = best[name] ?? 0.0;
+      final value = seen > prev ? seen : prev;
+      if (value > 0) {
+        _nameConf[name] = value;
+      } else {
+        _nameConf.remove(name);
+      }
+    }
+  }
+
+  /// The same detection with the class's decayed peak confidence, so the
+  /// spoken NAME does not flap across [nameConfidence].
+  ObjectInfo _steady(ObjectInfo info) {
+    final steady = _nameConf[info.name] ?? info.confidence;
+    return steady <= info.confidence ? info : info.withConfidence(steady);
   }
 
   String? _updateWalk(List<ObjectInfo> infos, double now) {
@@ -514,7 +613,7 @@ class GuidanceEngine {
     final urgent = _lastObstacleName == obstacle.name &&
         _lastObstacleRank != null &&
         rank > _lastObstacleRank!;
-    final msg = walkMessage(obstacle, infos, useClock);
+    final msg = walkMessage(_steady(obstacle), infos, useClock);
     if (!_clearToSpeak(msg, now, urgent: urgent)) return null;
     _lastObstacleName = obstacle.name;
     _lastObstacleRank = rank;

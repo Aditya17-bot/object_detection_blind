@@ -148,6 +148,23 @@ class ObjectInfo {
     this.trustedName = false,
     this.centerY = 0.5,
   });
+
+  /// The same detection with a different confidence. Used by the guidance
+  /// engine's naming hysteresis, which decides the spoken NAME from a
+  /// per-class confidence that decays slowly instead of the raw per-frame one.
+  ObjectInfo withConfidence(double value) => ObjectInfo(
+        name: name,
+        confidence: value,
+        hZone: hZone,
+        vZone: vZone,
+        proximity: proximity,
+        area: area,
+        centerX: centerX,
+        phrase: phrase,
+        distanceM: distanceM,
+        trustedName: trustedName,
+        centerY: centerY,
+      );
 }
 
 String _zone(double value, List<String> zones) {

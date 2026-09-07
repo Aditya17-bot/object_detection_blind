@@ -15,6 +15,8 @@ between messages, and an escalation override so a closing obstacle is never
 silenced by a cooldown.
 """
 
+import dataclasses
+
 from position import OBSTACLE_CLASSES, PROXIMITY_LEVELS, clock_phrase
 
 # "very close" -> 3 ... "far" -> 0
@@ -125,11 +127,46 @@ def _spoken_name(info):
        weak prior against speaking a low-confidence guess by name, not because
        the number means what the original probe claimed.
     """
-    if (info.trusted_name
-            or info.name in TRUSTED_NAME_CLASSES
-            or info.confidence >= NAME_CONFIDENCE):
+    if name_is_trustworthy(info):
         return info.name
     return "obstacle"
+
+
+def name_is_trustworthy(info):
+    """The three ways a class name earns the right to be stated flatly."""
+    return bool(info.trusted_name
+                or info.name in TRUSTED_NAME_CLASSES
+                or info.confidence >= NAME_CONFIDENCE)
+
+
+def hedged_name(info):
+    """The name for a SOLICITED answer: stated, but marked when unsure.
+
+    Walk warnings replace an untrusted label with the bare word "obstacle" —
+    right there, because the warning is unsolicited, has to be short, and the
+    action (avoid it) is identical whatever the thing turns out to be.
+
+    A question is different in both directions. "An obstacle close on your
+    left" answers a request for identity with the one thing the user already
+    knew, and it contradicted summarize_scene, which named the very same box in
+    the very same frame. But simply dropping the hedge would let the system
+    assert "a toilet on your left" in a bedroom, which is the failure this
+    project exists to avoid — measured over both field clips, 4 of the 197
+    detections carried a COCO name that is wrong for the object, and 3 of those
+    4 sat below NAME_CONFIDENCE.
+
+    So the name is kept and marked: "possibly a toilet". The user gets the
+    information and gets told how far to trust it, which is what a sighted
+    companion does when they are not sure either.
+    """
+    return info.name if name_is_trustworthy(info) else f"possibly {info.name}"
+
+
+def _with_article(info):
+    """'a chair' / 'possibly a chair', for a solicited answer."""
+    if name_is_trustworthy(info):
+        return f"{_article(info.name)} {info.name}"
+    return f"possibly {_article(info.name)} {info.name}"
 
 
 def walk_message(info, all_infos=(), use_clock=False):
@@ -221,11 +258,16 @@ def check_direction(infos, direction):
         return _cap(f"nothing {_DIR_WORD[direction]}")
     here.sort(key=lambda i: (_PROX_RANK[i.proximity], i.area), reverse=True)
     first = here[0]
-    parts = [f"{_article(_spoken_name(first))} {_spoken_name(first)} "
-             f"{first.proximity} {_DIR_WORD[direction]}"]
+    # hedged_name, not _spoken_name: a question about identity is answered
+    # with the name, marked "possibly" when the label is not trustworthy.
+    # Answering "an obstacle close on your left" told the user only what
+    # asking already implied, and contradicted summarize_scene, which named
+    # the very same box in the very same frame. Measured on the 2026-09-07
+    # walk: 25 of 63 check answers were anonymised that way.
+    parts = [f"{_with_article(first)} {first.proximity} "
+             f"{_DIR_WORD[direction]}"]
     for extra in here[1:_CHECK_LIMIT]:
-        name = _spoken_name(extra)
-        parts.append(f"and {_article(name)} {name} {extra.proximity}")
+        parts.append(f"and {_with_article(extra)} {extra.proximity}")
     return _cap(", ".join(parts))
 
 
@@ -281,18 +323,27 @@ def count_message(infos, target):
 def summarize_scene(infos):
     """One sentence grouping everything visible, center first:
     'A dining table ahead, 2 chairs on your left, a person on your right'."""
-    groups = {}  # (name, h_zone) -> [count, biggest area]
+    groups = {}  # (name, h_zone) -> [count, biggest area, any name trusted]
     for i in infos:
-        entry = groups.setdefault((i.name, i.h_zone), [0, 0.0])
+        entry = groups.setdefault((i.name, i.h_zone), [0, 0.0, False])
         entry[0] += 1
         entry[1] = max(entry[1], i.area)
+        entry[2] = entry[2] or name_is_trustworthy(i)
     if not groups:
         return "Nothing detected"
     ordered = sorted(groups.items(),
                      key=lambda kv: (_ZONE_ORDER[kv[0][1]], -kv[1][1]))
     parts = []
-    for (name, zone), (count, _) in ordered:
-        what = f"{_article(name)} {name}" if count == 1 else f"{count} {_plural(name)}"
+    for (name, zone), (count, _, trusted) in ordered:
+        if count == 1:
+            what = f"{_article(name)} {name}"
+        else:
+            what = f"{count} {_plural(name)}"
+        # A group is hedged only when EVERY box in it is untrustworthy: one
+        # confident sighting of the class is enough to stop calling the whole
+        # group a guess.
+        if not trusted:
+            what = f"possibly {what}"
         parts.append(f"{what} {_ZONE_WORD[zone]}")
     return _cap(", ".join(parts))
 
@@ -345,9 +396,26 @@ class GuidanceEngine:
     def __init__(self, mode="walk", target=None,
                  repeat_cooldown=3.0, min_gap=1.5, persistence=2,
                  reminder_interval=10.0, use_clock=True, memory_ttl=30.0,
-                 find_persistence=1, absence_grace=2.5, miss_decay=0.5):
+                 find_persistence=1, absence_grace=2.5, miss_decay=0.5,
+                 escalation_min_gap=0.8, name_conf_decay=0.05):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
+        # Floor for an escalation, which is allowed to jump min_gap. See
+        # _clear_to_speak: without it a closing obstacle spoke over the
+        # warning about itself.
+        self.escalation_min_gap = escalation_min_gap
+        # Detector confidence for one physical object wanders frame to frame,
+        # and NAME_CONFIDENCE is a hard edge. On the 2026-09-07 walk the bed
+        # ranged 0.65-0.92 around a threshold of 0.8, so the SAME object was
+        # announced "Obstacle at 12 o'clock, close" and then, 0.9 s later,
+        # "Bed very close at 12 o'clock" — two nouns for one thing, which is
+        # the "obstacles weirdly said" the user reported. The naming decision
+        # therefore uses a per-class confidence that RISES instantly and falls
+        # slowly, so a name that has been earned is not lost to one weak frame.
+        # Same shape as the streak decay above, and the same reasoning as the
+        # naming head's hysteresis.
+        self.name_conf_decay = name_conf_decay
+        self._name_conf = {}      # class name -> decayed peak confidence
         self.persistence = persistence          # frames a class must persist
         # Find mode is DELIBERATELY more eager than walk mode, because the
         # errors are not symmetric. The user ASKED for this object: announcing
@@ -406,9 +474,22 @@ class GuidanceEngine:
     # -- helpers ----------------------------------------------------------
 
     def _clear_to_speak(self, msg, now, urgent=False):
-        if self._last_time is None or urgent:
+        if self._last_time is None:
             return True
         elapsed = now - self._last_time
+        if urgent:
+            # Escalation exists to beat the 3 s repeat cooldown when the same
+            # obstacle gets closer. It used to beat min_gap as well, which
+            # meant the two sentences collided: measured on the 2026-09-07
+            # walk, "Person at 12 o'clock, close" was followed 0.9 s later by
+            # "Person very close at 12 o'clock, move slightly right", and
+            # since "very close" is SAFETY priority the Speaker cut the first
+            # one off mid-word. The user reported exactly that ("the voice
+            # gets interrupted by something else"). A floor of
+            # escalation_min_gap keeps the warning prompt — it still arrives
+            # up to 0.7 s earlier than the normal gap would allow — while
+            # leaving the previous sentence room to be heard.
+            return elapsed >= self.escalation_min_gap
         if elapsed < self.min_gap:
             return False
         if msg == self._last_msg and elapsed < self.repeat_cooldown:
@@ -454,10 +535,33 @@ class GuidanceEngine:
             if score > 0:
                 decayed[name] = score
         self._streaks = decayed
+        self._update_name_confidence(infos)
         self._remember(infos, now)
         if self.mode == "walk":
             return self._update_walk(infos, now)
         return self._update_find(infos, now)
+
+    def _update_name_confidence(self, infos):
+        """Per-class confidence that rises instantly and decays slowly — see
+        name_conf_decay."""
+        best = {}
+        for i in infos:
+            best[i.name] = max(best.get(i.name, 0.0), i.confidence)
+        for name in set(self._name_conf) | set(best):
+            prev = self._name_conf.get(name, 0.0)
+            value = max(best.get(name, 0.0), prev - self.name_conf_decay)
+            if value > 0:
+                self._name_conf[name] = value
+            else:
+                self._name_conf.pop(name, None)
+
+    def _steady(self, info):
+        """The same detection, with the class's decayed peak confidence, so
+        the spoken NAME does not flap across NAME_CONFIDENCE."""
+        steady = self._name_conf.get(info.name, info.confidence)
+        if steady <= info.confidence:
+            return info
+        return dataclasses.replace(info, confidence=steady)
 
     def _update_walk(self, infos, now):
         obstacle = pick_obstacle(infos)
@@ -472,7 +576,7 @@ class GuidanceEngine:
         urgent = (self._last_obstacle is not None
                   and self._last_obstacle[0] == obstacle.name
                   and rank > self._last_obstacle[1])
-        msg = walk_message(obstacle, infos, self.use_clock)
+        msg = walk_message(self._steady(obstacle), infos, self.use_clock)
         if not self._clear_to_speak(msg, now, urgent):
             return None
         self._last_obstacle = (obstacle.name, rank)
