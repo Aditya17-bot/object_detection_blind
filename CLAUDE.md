@@ -1858,3 +1858,64 @@ it has something to say about whatever it got.
 
 Test counts: **428 Python / 253 Dart**, `flutter analyze` clean apart from the
 3 pre-existing `avoid_print` infos.
+
+## Field video replay + four voice defects (2026-09-07, later)
+
+User filmed a 29 s walk and left the phone; video and full logcat pulled over
+adb before it went (`test_output/field_walk_20260907.mp4`,
+`logcat_20260907_walk.txt`, replay results in `field_replay_20260907.md`).
+Both halves of that clip are now a REPRODUCIBLE HARNESS: the audio replays
+through the same Vosk grammar the phone runs, and the frames replay through the
+real detector + engine at the handset's 2.2 FPS. Scripts are in the session
+scratchpad; regenerate from `field_replay_20260907.md`'s header.
+
+**The single worst defect, and it explains "it can't hear me": `unmute` is not
+in the Vosk model's vocabulary.** Vosk drops an OOV word from the grammar with a
+warning nobody reads, so the phrase is not misheard — it is UNHEARABLE. The log
+shows `"mute it" -> mute on` at 19:05:58 and then a muted app with **no spoken
+way back**; every command after that ran silently, which from the outside is
+identical to the app having gone deaf. Now: `voice on` / `sound on` / `speak`
+all un-mute (all three verified in-vocabulary), `unmute` stays in the PARSER for
+typed and agent input, and `UNHEARABLE_WORDS` / `kUnhearableWords` filters such
+phrases out of the grammar. Also OOV and now filtered: `almirah`, `almirahs`,
+`laundrys`. **`test_voice.VocabularyTest` builds the real grammar against the
+real model in a subprocess** (the warning is written by the C library to process
+stderr and cannot be captured from inside Python) and fails on any word the
+model would drop. This is the second time an unhearable capability has cost a
+walk — the first was the 2026-09-07 morning grammar drift.
+
+**Word-salad was still running capabilities.** The multi-object floor caught
+some; the log then showed `"describe light left" -> describe`, `"the clock
+summary" -> describe`, `"the many where of me is there read walk" -> read`.
+`looks_like_one_request()` / `looksLikeOneRequest()` now require all three: at
+most one object class, at most one CAPABILITY (`named_capabilities`), and at
+most `MAX_REQUEST_WORDS` 8 (the longest legitimate grammar phrase is "is there
+anything in front of me", 7). Verified both directions — all 8 field-noise
+utterances rejected, all 19 real phrasings kept, including `assistant find the
+door` (the trigger is deliberately NOT counted as a capability) and `find the
+door on my left` (a bare direction is not a capability without a question
+word).
+
+**`find` took the object named LAST.** `_match_object` matched the longest
+phrase anywhere, so `"find dustbin toilets"` searched for a *toilet*. Now
+earliest-then-longest, so `cell phone` still beats `phone` at the same position.
+
+**Tasks were interrupted mid-sentence because the hold was an ESTIMATE.**
+`_say` sized the focus hold from `message.length / 15`, clamped to 30 s, and a
+summary or a page of OCR text outruns it — so routine guidance became legal
+again while the user was still being read to. `Speaker.onDone` (the platform's
+completion handler, the only real end-of-speech signal) now releases the hold
+via `_onSpeechDone`, the hold itself is sized generously (`_holdSeconds` =
+estimate x1.5, clamped 8-60 s) as the failsafe, and Speaker's own on-demand
+guard was widened 30 s -> 90 s for the same reason. `find` keeps its open-ended
+hold. Safety still cuts through, deliberately.
+
+Frame replay of the clip: 63 frames sampled, 53 with detections, **13
+announcements in 29 s** — that cadence is the "cluster" complaint and it is not
+a bug in the anti-spam logic (3 s repeat cooldown, 1.5 s min gap, close-only);
+it is a small room where everything is genuinely close. Two of the 13 said
+"Obstacle" for a detection the namer had not renamed — the falsified
+NAME_CONFIDENCE gate, still the honest fallback for un-renamed COCO classes.
+
+Test counts: **445 Python / 271 Dart**, `flutter analyze` clean apart from the
+3 pre-existing `avoid_print` infos.

@@ -58,10 +58,18 @@ class Speaker {
   bool couldBeEcho(String heard) =>
       isEchoing && isProbablyEcho(heard, _lastSpoken);
 
+  /// Called when the platform reports the current utterance finished (or was
+  /// cancelled). The ONLY reliable end-of-speech signal there is: everything
+  /// else in this class estimates duration from character count, which is what
+  /// let a long summary outlive its focus hold and get cut off by a walk
+  /// warning. main.dart uses this to release the hold at the real end.
+  void Function()? onDone;
+
   void _finished() {
     _onDemandActive = false;
     _speaking = false;
     _quietUntil = DateTime.now().add(_echoTail);
+    onDone?.call();
   }
 
   /// Apply the configured accent. Separate from [init] so the features page
@@ -108,8 +116,12 @@ class Speaker {
     _quietUntil = DateTime.now()
         .add(Duration(milliseconds: (secs * 1000).round()) + _echoTail);
     if (onDemand) {
-      // rough speaking-time estimate at ~15 chars/s, clamped 3-30 s
-      final onDemandSecs = (message.length / 15).clamp(3, 30).toDouble();
+      // Rough speaking-time estimate at ~15 chars/s. This is ONLY a failsafe
+      // for a platform that never fires a handler — the completion handler is
+      // what normally clears the flag — so the ceiling is generous: a 900
+      // character OCR summary takes a minute to read, and the old 30 s cap
+      // meant routine guidance was free to cut into the second half of it.
+      final onDemandSecs = (message.length / 15).clamp(3, 90).toDouble();
       _onDemandUntil = DateTime.now()
           .add(Duration(milliseconds: (onDemandSecs * 1000).round()));
     }

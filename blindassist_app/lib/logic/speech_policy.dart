@@ -38,7 +38,7 @@ const Set<String> kSteering = {
 /// the user reported: individually correct, collectively noise.
 const Set<String> kInformational = {
   'colour', 'light', 'summarise',
-  'describe', 'check', 'path', 'count', 'recall', 'read', 'photo',
+  'describe', 'check', 'path', 'count', 'recall', 'read', 'photo', 'help',
 };
 
 /// Every hold expires: one that is never released would silence the app.

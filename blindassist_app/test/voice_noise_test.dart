@@ -17,11 +17,14 @@
 //
 // The threshold is therefore per command, by the cost of getting it wrong.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:blindassist/logic/voice_commands.dart';
 import 'package:blindassist/voice_listener.dart';
 
 String result(String text) => '{"text": "$text"}';
 
 void main() {
+  _oneRequestFloor();
+  _multiObjectFloor();
   group('recognizer result parsing', () {
     test('clean speech has no unplaceable tokens', () {
       final r = parseRecognizerResult(result('find the bottle'));
@@ -100,6 +103,109 @@ void main() {
         expect(recognitionIsUsable(r, action: t), isTrue,
             reason: 'deliberate "$t" must not be blocked');
       }
+    });
+  });
+}
+
+// From the 2026-09-07 field log. Every utterance here was produced by the
+// recognizer from sound the user did not intend as a command, and every one
+// arrived with ZERO [unk] tokens — words forced onto the grammar are not
+// unplaceable, so the unknown-ratio floor cannot see them. One of them
+// ("cupboard find dustbin") started a search for an object nobody named, which
+// is the "why does it randomly find something" report.
+void _multiObjectFloor() {
+  group('two object names in one utterance is noise', () {
+    test('field noise is rejected', () {
+      for (final text in [
+        'cupboard find dustbin',
+        'find dustbin toilets',
+        'mobile photo person on anything on my left dining the',
+      ]) {
+        expect(namesMultipleObjects(text), isTrue, reason: text);
+        // and the floor itself rejects it, with no unplaceable tokens at all
+        expect(recognitionIsUsable(Recognition(text, 0)), isFalse,
+            reason: text);
+      }
+    });
+
+    test('real requests survive', () {
+      for (final text in [
+        'find the door',
+        'find the cell phone',
+        'how many chairs',
+        'find the door on my left',
+        'where is the cup',
+        'take a photo of the chair',
+        'what colour is this',
+        'is there anything in front of me',
+      ]) {
+        expect(namesMultipleObjects(text), isFalse, reason: text);
+        expect(recognitionIsUsable(Recognition(text, 0)), isTrue, reason: text);
+      }
+    });
+
+    test('whole words only', () {
+      // "how many chairs" contains "man" and "cupboard" contains "cup", so a
+      // naive contains() rejects ordinary single-object requests as noise.
+      expect(namedClasses('how many chairs'), {'chair'});
+      expect(namedClasses('cupboard'), isNot(contains('cup')));
+    });
+
+    test('find takes the first object named', () {
+      expect(parseCommand('find dustbin toilets')?.target, 'dustbin');
+      expect(parseCommand('find bottle chair')?.target, 'bottle');
+      // length still breaks ties at the same position
+      expect(parseCommand('find the cell phone')?.target, 'cell phone');
+    });
+  });
+}
+
+// The second half of the 2026-09-07 log, after the multi-object floor landed.
+// Every utterance below was still accepted and RAN something the user had not
+// asked for. All of it is grammar-forced noise with zero unplaceable tokens:
+// the recognizer is certain about every word.
+void _oneRequestFloor() {
+  group('one request names one thing and asks for one capability', () {
+    test('field noise is rejected', () {
+      for (final text in [
+        'describe light left',
+        'the clock summary',
+        'the clock mans light left',
+        'the many where of me is there read walk',
+        'cupboard find dustbin',
+        'do laptops ahead laptop on my left bottle on here right',
+        'scene mobile is toilet window',
+        'clock many toilet door toilet summarize',
+      ]) {
+        expect(looksLikeOneRequest(text), isFalse, reason: text);
+        expect(recognitionIsUsable(Recognition(text, 0)), isFalse,
+            reason: text);
+      }
+    });
+
+    test('real requests survive', () {
+      for (final text in [
+        'find the door', 'how many chairs', 'what is on my left',
+        'is there anything in front of me', 'take a photo', 'read text',
+        'summarise this', 'what colour is this', 'is the light on',
+        'clear path', 'walk mode', 'say again', 'sonar off',
+        'what can you do', 'where is the cup', 'find the door on my left',
+        'mute it', 'on summarize',
+      ]) {
+        expect(looksLikeOneRequest(text), isTrue, reason: text);
+        expect(recognitionIsUsable(Recognition(text, 0)), isTrue, reason: text);
+      }
+    });
+
+    test('the dictation trigger may carry a request', () {
+      // "assistant find the door" is a trigger PLUS a request by design, so
+      // the trigger must not count as a second capability.
+      expect(looksLikeOneRequest('assistant find the door'), isTrue);
+      expect(parseCommand('assistant find the door')?.target, 'door');
+    });
+
+    test('a direction is not a second capability', () {
+      expect(namedCapabilities('find the door on my left'), {'find'});
     });
   });
 }

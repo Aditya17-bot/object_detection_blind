@@ -39,6 +39,7 @@ import time
 from dataclasses import dataclass, field
 
 from position import TARGET_CLASSES
+from voice import _hearable as _voice_hearable
 from voice import grammar_phrases as _voice_grammar_phrases
 from voice import parse_command, resolve_class
 
@@ -140,6 +141,12 @@ TOOLS = (
              examples=("stop",)),
     ToolSpec("repeat", "say the last announcement again",
              examples=("repeat", "say again")),
+    # Answered from this table rather than by the model: "what can you do" has
+    # a factual answer the registry already holds, and llama3.2:1b abstained on
+    # every phrasing of it (measured 2026-09-07). A capability list is exactly
+    # the kind of claim that must not be improvised.
+    ToolSpec("help", "list what the app can do and what to say for it",
+             examples=("what can you do", "what can this app do", "help")),
     # Selectable by the model, and the destination of every validation failure.
     ToolSpec("abstain",
              "the request is not something these tools do, or you cannot tell "
@@ -225,7 +232,30 @@ def grammar_phrases():
     phrases = set(_voice_grammar_phrases())
     for spec in TOOLS:
         phrases.update(spec.examples)
-    return sorted(phrases)
+    # An example the model cannot pronounce is not a phrase the recognizer can
+    # hear — see voice.UNHEARABLE_WORDS. "unmute" is a registry example and was
+    # silently dropped by Vosk, leaving a muted app with no spoken way back.
+    return sorted(p for p in phrases if _voice_hearable(p))
+
+
+# The user hears this, so it cannot be all seventeen capabilities. The cap is
+# here rather than in a hand-written sentence so the list still comes from the
+# registry; the features page (also generated from it) carries the rest.
+HELP_MAX_ITEMS = 8
+
+
+def help_message():
+    """What to say to the app, generated from the registry.
+
+    Speaks the first EXAMPLE of each capability rather than its description:
+    the useful answer to "what can you do" is the words that work, and the
+    descriptions are written for the model, not for a listener."""
+    phrases = [spec.examples[0] for spec in TOOLS
+               if not spec.internal and spec.name not in ("abstain", "help")
+               and spec.examples][:HELP_MAX_ITEMS]
+    return ("You can say: " + ", ".join(phrases[:-1]) + ", or " + phrases[-1] +
+            ". Swipe up for the full list, or say assistant to just ask me "
+            "something.")
 
 
 def tool_schemas():
@@ -447,6 +477,11 @@ def render_state(state):
         parts.append("Seen recently: " + ", ".join(state["remembered"]))
     if state.get("last_said"):
         parts.append(f"Last said: {state['last_said']}")
+    # Not scene content, but it is the kind of thing a user expects an
+    # assistant that greets them by name to know, and it comes from the phone's
+    # own settings rather than from the model.
+    if state.get("user_name"):
+        parts.append(f"The user's name is {state['user_name']}")
     return ". ".join(parts)
 
 
@@ -461,9 +496,13 @@ def render_state(state):
 # this app do" has a genuinely longer honest answer than a guidance phrase, and
 # "stop" already exists for a reply the user does not want to sit through.
 MAX_SAY_CHARS = 400
-# Shorter than this WITHOUT terminal punctuation reads as a truncation, not a
-# reply. "Yes." and "No." are fine; "I don" is not.
-MIN_SAY_CHARS = 12
+# There is no MIN_SAY_CHARS any more. A 12-character floor was standing in for
+# "the token budget cut this off mid-word", and it charged a real cost for the
+# guess: "Aditya" — the correct answer to "what is my name" — is six characters
+# with no full stop, so it was thrown away as a fragment. Ollama reports the
+# truncation exactly (`done_reason == "length"`), so OllamaRouter.route drops
+# the text at the point where the fact is known instead of inferring it here
+# from a shape that short honest answers share.
 
 
 def clean_say(raw):
@@ -485,12 +524,6 @@ def clean_say(raw):
         text = cut[:stop + 1] if stop > 40 else cut.rsplit(" ", 1)[0]
     text = text.strip()
     if not text:
-        return None
-    # A reply cut off mid-sentence by the token budget: Ollama's JSON mode
-    # closes the string when num_predict runs out, so the router receives a
-    # syntactically perfect `{"say": "I don"}`. Speaking half a word is worse
-    # than abstaining, and the 2026-08-01 eval run produced exactly that twice.
-    if len(text) < MIN_SAY_CHARS and text[-1] not in ".!?":
         return None
     return text
 
@@ -659,6 +692,9 @@ def execute_action(action, engine, infos, now, hooks=None):
     if tool == "abstain":
         return ASK_TEMPLATES.get(arg or DEFAULT_ASK, ASK_TEMPLATES[DEFAULT_ASK])
 
+    if tool == "help":
+        return help_message()
+
     if tool in _HOOK_TOOLS:
         fn = hooks.get(tool)
         if fn is None:
@@ -763,6 +799,8 @@ Rules:
   advice — exactly as any assistant would. Examples of correct replies:
   {{"say": "Paris."}} / {{"say": "France won it in 1998."}} /
   {{"say": "Ninety-six."}}
+  If the STATE block gives the user's name, a question about their own name
+  is answered from it.
   The camera limit below is ONLY about the room around the user. It never
   applies to a question about the wider world, and "I cannot see that" is
   never the right answer to one.
@@ -889,11 +927,21 @@ class OllamaRouter:
         })
         content = (data.get("message") or {}).get("content", "")
         try:
-            return json.loads(content)
+            reply = json.loads(content)
         except (ValueError, TypeError):
             # prose instead of JSON -> no tool call -> abstain upstream.
             # It is NEVER treated as text to speak.
             return []
+        # Ollama's JSON mode closes the string when num_predict runs out, so a
+        # reply cut off mid-word arrives as syntactically perfect JSON
+        # (`{"say": "I don"}` — twice in the 2026-08-01 eval run). done_reason
+        # says so outright, which beats inferring it from length: a short reply
+        # is usually a good one, and "Aditya" was being discarded as a fragment.
+        # Only the free text is dropped; a tool call still faces validation.
+        if data.get("done_reason") == "length" and isinstance(reply, dict):
+            reply = {k: v for k, v in reply.items()
+                     if k not in ("say", "answer")}
+        return reply
 
 
 # --------------------------------------------------------------------------

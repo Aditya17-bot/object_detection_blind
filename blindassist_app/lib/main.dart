@@ -128,6 +128,10 @@ class _AssistantScreenState extends State<AssistantScreen>
       // speaker FIRST: every later failure must be audible — the user can't
       // read the screen, so a silent error is indistinguishable from a hang.
       await _speaker.init();
+      // The only reliable end-of-speech signal. Without it the channel is held
+      // for a guess at how long the sentence takes, and a long one (a summary,
+      // a page of OCR text) loses its last half to a walk warning.
+      _speaker.onDone = _onSpeechDone;
       // the greeting IS the startup signal: a blind user has no splash screen,
       // and hearing their own name confirms it is their configured app that
       // came up. Settings load first (it is a local key-value read) so the
@@ -656,8 +660,13 @@ class _AssistantScreenState extends State<AssistantScreen>
       return;
     }
     if (_repeatedTooSoon('ask:$heard')) return;
-    final result =
-        await agent.route(heard, state: _engine.stateSummary(_infos, _now()));
+    final result = await agent.route(heard, state: {
+      ..._engine.stateSummary(_infos, _now()),
+      // The laptop has no idea who it is talking to, so "what is my name" —
+      // the first thing a user tries on a new assistant — had no answer to
+      // give. The name is already on the phone for the launch greeting.
+      'user_name': AppSettings.userName,
+    });
     if (!mounted || result == null) return; // null = no data, never a guess
     if (result.actions.isEmpty) {
       if (!solicited) return; // nobody asked — say nothing
@@ -718,6 +727,11 @@ class _AssistantScreenState extends State<AssistantScreen>
         _readText(summarise: true);
       case 'photo':
         _takePhoto();
+      case 'help':
+        // Generated from the registry, so it cannot describe a capability the
+        // app does not have — and it answers with the words that WORK, which
+        // is what the question is actually asking for.
+        _say(helpMessage(), kResponse, 'help');
       case 'count':
         _countClass(command.target!);
       case 'recall':
@@ -756,11 +770,20 @@ class _AssistantScreenState extends State<AssistantScreen>
     // user had heard the answer. Safety is exempt — it must never be delayed
     // by, nor delay, anything.
     if (priority == kResponse) {
+      // The hold has to outlast the SPEECH, and the length of the speech is
+      // not known here — _speakSeconds is a guess from character count, and a
+      // summary or a page of OCR text overruns it, which is how a walk warning
+      // ended up cutting into a task the user had asked for. So the hold is
+      // generous and the real end releases it: _onSpeechDone fires on the
+      // platform's completion handler. The estimate survives only as the
+      // failsafe for a platform that never reports completion.
+      final hold = _holdSeconds(message);
       if (_policy.activeTag(now) == tag) {
-        _policy.extend(tag, now, _speakSeconds(message));
+        _policy.extend(tag, now, hold);
       } else {
-        _policy.begin(tag, now, seconds: _speakSeconds(message));
+        _policy.begin(tag, now, seconds: hold);
       }
+      _speakingTag = tag;
     }
     _speaker.say(message,
         onDemand: priority >= kResponse, urgent: priority >= kSafety);
@@ -771,6 +794,30 @@ class _AssistantScreenState extends State<AssistantScreen>
   /// a floor so a two-word answer still gets the last word in.
   double _speakSeconds(String message) =>
       (message.length / 15).clamp(2.5, 30).toDouble();
+
+  /// How long to hold the channel for [message]: the estimate with headroom,
+  /// because being wrong LOW cuts the user off mid-sentence while being wrong
+  /// high only delays routine chatter nobody misses. Normally moot —
+  /// [_onSpeechDone] releases the hold when the speech actually ends.
+  double _holdSeconds(String message) =>
+      (_speakSeconds(message) * 1.5).clamp(8, 60).toDouble();
+
+  /// The tag whose message is being spoken right now, so a completion can only
+  /// release the hold it belongs to.
+  String? _speakingTag;
+
+  /// The platform reported the utterance finished. Release the channel now
+  /// rather than at the end of an estimate that was only ever a guess.
+  void _onSpeechDone() {
+    final tag = _speakingTag;
+    if (tag == null) return;
+    _speakingTag = null;
+    // end() is a no-op unless `tag` still holds focus, so a late completion
+    // cannot cancel the task that replaced it. find keeps its own open-ended
+    // hold: it runs until the target is located, not until it has spoken.
+    if (tag == 'find') return;
+    _policy.end(tag, _now());
+  }
 
   /// Release whatever task holds the channel. Called when a task completes and
   /// by "stop", which the user means as "that's enough".

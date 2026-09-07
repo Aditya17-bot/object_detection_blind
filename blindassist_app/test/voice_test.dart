@@ -1,9 +1,11 @@
 // Mirror of test_voice.py — voice command parser, pure logic.
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:blindassist/logic/agent_actions.dart';
 import 'package:blindassist/logic/voice_commands.dart';
 
 void main() {
+  _muteRoundTrip();
   group('parseCommand', () {
     test('walk', () {
       expect(parseCommand('walk mode'), (action: 'walk', target: null));
@@ -165,6 +167,40 @@ void main() {
 
     test('read still wins over photo', () {
       expect(parseCommand('read the text in the picture')?.action, 'read');
+    });
+  });
+}
+
+// A muted app with no spoken way back is silenced into a state the user cannot
+// talk it out of — which is what happened on the 2026-09-07 walk: "unmute" is
+// out of vocabulary in vosk-model-small-en-us-0.15, so Vosk dropped it from
+// the grammar and every command after the mute ran silently.
+void _muteRoundTrip() {
+  group('there is a spoken way back from mute', () {
+    test('the spoken forms un-mute', () {
+      for (final text in ['voice on', 'sound on', 'speak', 'unmute']) {
+        final c = parseCommand(text);
+        expect(c?.action, 'mute', reason: text);
+        expect(c?.target, 'off', reason: text);
+      }
+      expect(parseCommand('mute')?.target, 'on');
+      expect(parseCommand('mute it')?.target, 'on');
+    });
+
+    test('at least one of them is hearable', () {
+      final back = grammarPhrases()
+          .where((p) => parseCommand(p)?.target == 'off')
+          .where((p) => parseCommand(p)?.action == 'mute');
+      expect(back, isNotEmpty, reason: 'no hearable phrase un-mutes the app');
+    });
+
+    test('no grammar phrase contains an unhearable word', () {
+      for (final phrase in agentGrammarPhrases()) {
+        expect(hearable(phrase), isTrue, reason: phrase);
+      }
+      // and the words themselves still PARSE, for typed and agent input
+      expect(parseCommand('unmute')?.target, 'off');
+      expect(parseCommand('find the almirah')?.target, 'wardrobe');
     });
   });
 }

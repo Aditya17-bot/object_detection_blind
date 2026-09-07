@@ -61,7 +61,7 @@ STEERING = frozenset({"walk", "find", "stop", "mute", "sonar", "clock",
 # wait while another task holds focus.
 INFORMATIONAL = frozenset({"colour", "light", "summarise", "describe",
                            "check", "path",
-                           "count", "recall", "read", "photo"})
+                           "count", "recall", "read", "photo", "help"})
 
 # A hold that is never released would silence the app forever, so every hold
 # expires. Long enough that a real search is not cut short, short enough that a

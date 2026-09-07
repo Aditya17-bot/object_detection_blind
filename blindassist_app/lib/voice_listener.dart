@@ -81,6 +81,12 @@ Recognition parseRecognizerResult(String resultJson) {
 /// threshold depends on it: see [kSettingCommands].
 bool recognitionIsUsable(Recognition r, {String? action}) {
   if (r.text.isEmpty) return false;
+  // One request names one thing and asks for one capability, whatever the
+  // unknown ratio says — and this is precisely the case the ratio cannot see,
+  // because words forced onto the grammar are not unplaceable. This is the
+  // floor that stops "cupboard find dustbin" from starting a search and
+  // "describe light left" from describing.
+  if (!looksLikeOneRequest(r.text)) return false;
   if (action != null && kSettingCommands.contains(action)) {
     return r.unknownCount == 0;
   }
@@ -197,6 +203,18 @@ class VoiceListener {
   /// kept and weighed.
   Recognition _clean(String resultJson) => parseRecognizerResult(resultJson);
 
+  /// Log every result and its fate.
+  ///
+  /// Three field walks in a row reported "it isn't hearing me" and no log said
+  /// what the microphone had produced, so each one cost a rebuild to find out.
+  /// A dropped result is exactly as interesting as an accepted one: the whole
+  /// question is whether the words arrived and something discarded them, or
+  /// whether they never arrived at all.
+  void _log(String text, String fate) {
+    // ignore: avoid_print
+    print('BlindAssist heard: "$text" -> $fate');
+  }
+
   void _handleResult(String resultJson) {
     final heard = _clean(resultJson);
     final text = heard.text;
@@ -204,6 +222,7 @@ class VoiceListener {
     if (echoing?.call(text) ?? false) {
       // our own TTS coming back through the mic — not a request
       echoDropped++;
+      _log(text, 'dropped: echo of our own speech');
       return;
     }
     // Parse FIRST, because the noise floor depends on what was asked for: a
@@ -215,14 +234,20 @@ class VoiceListener {
     final command = parseCommand(text);
     if (!recognitionIsUsable(heard, action: command?.action)) {
       noiseDropped++;
+      _log(text,
+          'dropped: noise (${heard.unknownCount} unplaceable, '
+          '${heard.wordCount} placed, parsed ${command?.action ?? "nothing"})');
       return;
     }
     lastHeard = text;
     transcripts.add(text);
     if (transcripts.length > _transcriptCap) transcripts.removeAt(0);
     if (command != null) {
+      _log(text, '${command.action}${command.target == null ? "" : " "
+          "${command.target}"}');
       onCommand(command, text);
     } else {
+      _log(text, 'unmatched');
       onUnmatched?.call(text);
     }
   }

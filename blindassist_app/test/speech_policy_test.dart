@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:blindassist/logic/speech_policy.dart';
 
 void main() {
+  _longReadOutHold();
   group('focus', () {
     late SpeechPolicy p;
     setUp(() => p = SpeechPolicy(focusSeconds: 6.0));
@@ -227,7 +228,7 @@ void main() {
       });
       expect(kInformational, {
         'colour', 'light', 'summarise',
-        'describe', 'check', 'path', 'count', 'recall', 'read', 'photo',
+        'describe', 'check', 'path', 'count', 'recall', 'read', 'photo', 'help',
       });
     });
 
@@ -235,6 +236,49 @@ void main() {
       expect(kSafety > kResponse, isTrue);
       expect(kResponse > kConfirm, isTrue);
       expect(kConfirm > kRoutine, isTrue);
+    });
+  });
+}
+
+// "Before it completes a task, it detects something and says it" (2026-09-07).
+// The hold was sized from a CHARACTER-COUNT ESTIMATE of the speaking time, and
+// a summary or a page of OCR text overruns it — so routine guidance became
+// legal again while the user was still being read to. main.dart now holds
+// generously and releases on the platform's real completion signal; these are
+// the policy behaviours that fix depends on.
+void _longReadOutHold() {
+  group('a long read-out owns the channel until it has been said', () {
+    test('routine guidance is dropped for the whole hold', () {
+      final q = SpeechPolicy();
+      q.begin('summarise', 0, seconds: 45);
+      for (final t in [1.0, 10.0, 30.0, 44.0]) {
+        expect(q.allowSpeech(kRoutine, 'walk', t), isFalse, reason: '$t');
+      }
+      // and it is legal again once the hold really is over
+      expect(q.allowSpeech(kRoutine, 'walk', 46), isTrue);
+    });
+
+    test('safety still cuts through', () {
+      final q = SpeechPolicy();
+      q.begin('summarise', 0, seconds: 45);
+      expect(q.allowSpeech(kSafety, 'walk', 10), isTrue);
+    });
+
+    test('completion releases the channel early', () {
+      final q = SpeechPolicy();
+      q.begin('summarise', 0, seconds: 45);
+      expect(q.allowSpeech(kRoutine, 'walk', 5), isFalse);
+      q.end('summarise', 6); // what _onSpeechDone does
+      expect(q.allowSpeech(kRoutine, 'walk', 7), isTrue);
+    });
+
+    test('a late completion cannot cancel the task that replaced it', () {
+      final q = SpeechPolicy();
+      q.begin('summarise', 0, seconds: 45);
+      q.begin('read', 10, seconds: 45);
+      q.end('summarise', 11); // arrives after read took over
+      expect(q.allowSpeech(kRoutine, 'walk', 12), isFalse);
+      expect(q.activeTag(12), 'read');
     });
   });
 }

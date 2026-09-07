@@ -65,13 +65,31 @@ typedef VoiceCommand = ({String action, String? target});
 
 /// Longest findable phrase inside [rest], mapped to its COCO class, or null.
 /// Longest first so "cell phone" beats "phone".
+/// The findable phrase nearest the START of [rest], or null.
+///
+/// EARLIEST first, then longest. Longest-anywhere was the original rule and it
+/// picks the wrong object the moment a second class word is present: the field
+/// log has "find dustbin toilets" (a grammar-forced mishearing) resolving to
+/// `toilet`, which is neither what was said nor even the first thing the
+/// sentence names. The user's object is the one they said first after "find";
+/// length still breaks ties at the same position so "cell phone" beats
+/// "phone". Mirror of voice._match_object.
 String? _matchObject(String rest) {
-  final phrases = _findable.keys.toList()
-    ..sort((a, b) => b.length.compareTo(a.length));
-  for (final phrase in phrases) {
-    if (rest.contains(phrase)) return _findable[phrase];
+  String? best;
+  var bestAt = -1;
+  var bestLen = -1;
+  for (final entry in _findable.entries) {
+    final at = rest.indexOf(entry.key);
+    if (at < 0) continue;
+    if (best == null ||
+        at < bestAt ||
+        (at == bestAt && entry.key.length > bestLen)) {
+      best = entry.value;
+      bestAt = at;
+      bestLen = entry.key.length;
+    }
   }
-  return null;
+  return best;
 }
 
 /// Spoken words -> COCO class name, or null. Handles synonyms and plurals
@@ -148,7 +166,16 @@ VoiceCommand? parseCommand(String text) {
         words.contains('on') ? 'on' : (words.contains('off') ? 'off' : null);
     return (action: 'sonar', target: target);
   }
-  if (words.contains('unmute')) return (action: 'mute', target: 'off');
+  // Every way back from mute, BEFORE the mute test so "voice on" is not read
+  // as a request to mute. "unmute" is kept for typed and agent input; the
+  // spoken forms exist because the shipped model cannot pronounce it (see
+  // [kUnhearableWords]), which left a muted app with no voice route back.
+  if (words.contains('unmute') ||
+      words.contains('speak') ||
+      (words.contains('on') &&
+          (words.contains('voice') || words.contains('sound')))) {
+    return (action: 'mute', target: 'off');
+  }
   if (words.contains('mute')) return (action: 'mute', target: 'on');
   if (words.contains('describe') ||
       words.contains('scene') ||
@@ -162,6 +189,16 @@ VoiceCommand? parseCommand(String text) {
   if (words.contains('path') ||
       (words.contains('which') && words.contains('way'))) {
     return (action: 'path', target: null); // clear-path finder
+  }
+  // Help BEFORE everything that could claim one of its words: "what can you
+  // do" has "do" in it and "what can this app do" has "this". Deterministic on
+  // purpose — llama3.2:1b abstained on every phrasing of this question, and a
+  // capability list is the last thing that should be improvised.
+  if (words.contains('help') ||
+      (words.contains('what') &&
+          words.contains('can') &&
+          (words.contains('do') || words.contains('say')))) {
+    return (action: 'help', target: null);
   }
   // Summarise BEFORE read, so "summarise this" is not swallowed by a stray
   // "read". "summary" alone stays with describe, which has owned it since the
@@ -216,13 +253,127 @@ VoiceCommand? parseCommand(String text) {
   return null;
 }
 
+/// Every DISTINCT object class named anywhere in [text]. Mirror of
+/// `voice.named_classes`.
+///
+/// The signature of grammar-forced noise, and the reason it needs its own
+/// detector: Vosk emits `[unk]` only for sound it cannot place at all, so
+/// ambient noise that lands on trained words arrives with ZERO unplaceable
+/// tokens and sails through the unknown-ratio floor. The 2026-09-07 field log
+/// is full of it — "cupboard find dustbin", "find dustbin toilets" — and one
+/// of those put the app into find mode for an object nobody asked about.
+///
+/// Real requests name ONE thing. Two different objects in one utterance is
+/// evidence of a bag of force-matched words rather than a sentence.
+Set<String> namedClasses(String text) {
+  final words = text.toLowerCase().split(RegExp(r'\s+'))
+    ..removeWhere((w) => w.isEmpty);
+  final found = <String>{};
+  for (final entry in _findable.entries) {
+    final parts = entry.key.split(' ');
+    // WHOLE words only. Substring matching looks equivalent and is not: "how
+    // many chairs" contains "man" (a person synonym) and "cupboard" contains
+    // "cup", so a plain contains() reports two objects in ordinary
+    // single-object requests and would reject them as noise.
+    for (var i = 0; i + parts.length <= words.length; i++) {
+      if (words.sublist(i, i + parts.length).join(' ') == entry.key) {
+        found.add(entry.value);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/// Which capability each keyword belongs to. Mirrors the keyword tests in
+/// [parseCommand], and exists for the same reason [namedClasses] does: an
+/// utterance naming TWO capabilities is a bag of force-matched words, not a
+/// sentence. The 2026-09-07 field log ran `describe` from "describe light
+/// left" and "the clock summary", and `read` from "the many where of me is
+/// there read walk".
+///
+/// Direction words are deliberately absent: "left" is only a capability with a
+/// question word in front of it, and "find the door on my left" is one
+/// request. The dictation trigger is absent too — "assistant find the door" is
+/// a trigger plus a request BY DESIGN.
+const Map<String, String> _capabilityWords = {
+  'walk': 'walk', 'find': 'find',
+  'describe': 'describe', 'scene': 'describe', 'summary': 'describe',
+  'many': 'count', 'where': 'recall',
+  'path': 'path', 'way': 'path',
+  'read': 'read', 'picture': 'photo', 'photo': 'photo',
+  'summarise': 'summarise', 'summarize': 'summarise',
+  'colour': 'colour', 'color': 'colour',
+  'bright': 'light', 'dark': 'light', 'light': 'light',
+  'clock': 'clock', 'zone': 'zones', 'zones': 'zones',
+  'sonar': 'sonar', 'mute': 'mute', 'unmute': 'mute',
+  'stop': 'stop', 'repeat': 'repeat', 'again': 'repeat',
+  'help': 'help',
+};
+
+/// The longest phrase the grammar can legitimately produce is "is there
+/// anything in front of me" (7 words). Anything much past that is the
+/// recognizer chaining trained phrases out of room noise.
+const int kMaxRequestWords = 8;
+
+/// Every DISTINCT capability named anywhere in [text].
+Set<String> namedCapabilities(String text) => text
+    .toLowerCase()
+    .split(RegExp(r'\s+'))
+    .where(_capabilityWords.containsKey)
+    .map((w) => _capabilityWords[w]!)
+    .toSet();
+
+/// Could this recognizer output be ONE thing a person asked for?
+///
+/// Three conditions, each of which the 2026-09-07 field log broke: at most one
+/// object class ("cupboard find dustbin"), at most one capability ("describe
+/// light left"), and no longer than [kMaxRequestWords] ("do laptops ahead
+/// laptop on my left bottle on here right").
+///
+/// None of these is visible to the unknown-token ratio, because words forced
+/// onto the grammar are not unplaceable — the recognizer is certain about
+/// every one of them. Mirror of voice.looks_like_one_request.
+bool looksLikeOneRequest(String text) {
+  if (text.trim().isEmpty) return false;
+  final words = text.split(RegExp(r'\s+'))..removeWhere((w) => w.isEmpty);
+  if (words.length > kMaxRequestWords) return false;
+  if (namedClasses(text).length > 1) return false;
+  return namedCapabilities(text).length <= 1;
+}
+
+/// True when [text] names two or more different classes — see [namedClasses].
+bool namesMultipleObjects(String text) => namedClasses(text).length > 1;
+
+/// Words the shipped Vosk model has no pronunciation for. Vosk drops them from
+/// the grammar with a warning nobody reads, so a phrase built from one is not
+/// misheard — it is UNHEARABLE, exactly like one that was never added.
+///
+/// `unmute` is the one that mattered: on the 2026-09-07 walk the user said
+/// "mute it", the app muted, and there was then NO SPOKEN WAY BACK — every
+/// command after that ran silently, which is indistinguishable from the app
+/// having stopped hearing. Hence "voice on" / "sound on" / "speak".
+///
+/// The other three are Indian-English and plural synonyms; they stay in the
+/// PARSER (typed input and the agent tier still resolve them) and only leave
+/// the grammar. Mirror of voice.UNHEARABLE_WORDS, kept honest by
+/// test_voice.VocabularyTest, which builds the real grammar against the real
+/// model.
+const Set<String> kUnhearableWords = {
+  'almirah', 'almirahs', 'laundrys', 'unmute',
+};
+
+/// True when every word of [phrase] is one the model can hear.
+bool hearable(String phrase) =>
+    !phrase.split(' ').any(kUnhearableWords.contains);
+
 /// Every phrase the recognizer should be able to hear.
 List<String> grammarPhrases() {
   final phrases = ['walk mode', 'walk', 'describe', 'describe scene', 'summary',
     'clock mode', 'zone mode', 'clear path', 'which way', 'read', 'read text',
     'take a picture', 'take a photo', 'photo',
     'stop', 'repeat', 'say again', 'sonar', 'sonar on', 'sonar off',
-    'mute', 'unmute', ...triggerWords];
+    'mute', 'voice on', 'sound on', 'speak', ...triggerWords];
   for (final spoken in ['on my left', 'on my right', 'in front of me',
     'ahead']) {
     phrases.add('what is $spoken');
@@ -239,5 +390,5 @@ List<String> grammarPhrases() {
     phrases.add('where is the $name');
     phrases.add('how many $name');
   }
-  return phrases;
+  return phrases.where(hearable).toList();
 }

@@ -484,16 +484,45 @@ class ChatModeTest(unittest.TestCase):
         self.assertLessEqual(len(result.say), agent.MAX_SAY_CHARS)
         self.assertTrue(result.say.endswith("."))
 
-    def test_truncated_reply_is_rejected(self):
+    def test_truncation_is_read_off_done_reason_not_guessed_from_length(self):
         """From the 2026-08-01 eval run: Ollama's JSON mode closes the string
         when the token budget runs out, so a half-word arrives as perfectly
-        valid JSON. Speaking "I don" is worse than abstaining."""
-        result = AgentRouter(llm=FakeLLM({"say": "I don"})).route("can you")
-        self.assertEqual(result.source, "abstain")
-        # short replies that ARE complete stay allowed
-        self.assertEqual(
-            AgentRouter(llm=FakeLLM({"say": "Yes."})).route("can you").say,
-            "Yes.")
+        valid JSON. Speaking "I don" is worse than abstaining.
+
+        This used to be inferred from a 12-character floor, which discarded
+        short CORRECT answers with it — "Aditya" is the right answer to "what
+        is my name" and was thrown away as a fragment. The truncation is now
+        dropped by OllamaRouter.route, which knows it for a fact."""
+        cut = agent.OllamaRouter("fake-model")
+        cut._post = lambda *a, **k: {
+            "done_reason": "length",
+            "message": {"content": json.dumps({"say": "I don"})}}
+        self.assertEqual(cut.route("can you", "Mode: walk", ""), {})
+
+        whole = agent.OllamaRouter("fake-model")
+        whole._post = lambda *a, **k: {
+            "done_reason": "stop",
+            "message": {"content": json.dumps({"say": "Aditya"})}}
+        self.assertEqual(whole.route("what is my name", "Mode: walk", ""),
+                         {"say": "Aditya"})
+
+        # a truncated TOOL CALL still reaches validation, which is what judges
+        # it — only the free text is dropped here
+        both = agent.OllamaRouter("fake-model")
+        both._post = lambda *a, **k: {
+            "done_reason": "length",
+            "message": {"content": json.dumps(
+                {"say": "I don", "actions": [{"tool": "walk"}]})}}
+        self.assertEqual(both.route("go", "Mode: walk", ""),
+                         {"actions": [{"tool": "walk"}]})
+
+    def test_short_complete_replies_are_spoken(self):
+        """The answer to a direct question is often one word. Discarding those
+        is how the assistant looked incapable of the simplest thing asked of
+        it."""
+        for reply in ("Aditya", "Yes.", "Paris.", "Ninety-six."):
+            self.assertEqual(
+                AgentRouter(llm=FakeLLM({"say": reply})).route("q").say, reply)
 
     def test_junk_say_values_are_rejected(self):
         for junk in ("", "   ", 42, None, {"nested": 1},
@@ -580,6 +609,11 @@ class GrammarCoverageTest(unittest.TestCase):
         grammar = set(agent.grammar_phrases())
         for spec in TOOLS:
             for example in spec.examples:
+                # An example the model cannot pronounce is deliberately absent
+                # — Vosk would drop it anyway, silently. See
+                # voice.UNHEARABLE_WORDS.
+                if not voice._hearable(example):
+                    continue
                 self.assertIn(example, grammar,
                               f"{spec.name} example {example!r} is unhearable")
 
@@ -596,3 +630,53 @@ class GrammarCoverageTest(unittest.TestCase):
     def test_registry_grammar_is_a_superset_of_the_shipped_one(self):
         self.assertLessEqual(set(voice.grammar_phrases()),
                              set(agent.grammar_phrases()))
+
+
+class StateUserNameTest(unittest.TestCase):
+    """The phone greets the user by name at launch, so "what is my name" is
+    the first thing anyone tries — and the laptop had no idea who it was
+    talking to. The name travels in the state block, from the phone's own
+    settings, so the answer is still not something the model made up."""
+
+    def test_name_is_rendered_when_present(self):
+        rendered = agent.render_state({"mode": "walk", "user_name": "Aditya"})
+        self.assertIn("The user's name is Aditya", rendered)
+
+    def test_absent_name_adds_nothing(self):
+        self.assertNotIn("name is", agent.render_state({"mode": "walk"}))
+
+
+class HelpTest(unittest.TestCase):
+    """"What can you do" is a question with a factual answer the registry
+    already holds, and llama3.2:1b abstained on every phrasing of it. Answering
+    it deterministically is not a fallback — a capability list is the last
+    thing that should be improvised."""
+
+    def test_message_is_generated_from_the_registry(self):
+        message = agent.help_message()
+        spoken = [s for s in TOOLS
+                  if not s.internal and s.name not in ("abstain", "help")
+                  and s.examples]
+        for spec in spoken[:agent.HELP_MAX_ITEMS]:
+            self.assertIn(spec.examples[0], message)
+        self.assertLessEqual(len(message), 400)
+
+    def test_the_phrasings_parse(self):
+        for text in ("what can you do", "what can this app do", "help",
+                     "what can i say"):
+            self.assertEqual(voice.parse_command(text), ("help", None), text)
+
+    def test_it_steals_nothing(self):
+        # "what can you see" is a SCENE question and shares three words with
+        # the help phrasings; requiring "do" or "say" is what separates them.
+        self.assertIsNone(voice.parse_command("what can you see"))
+        for text, expected in (("read this", ("read", None)),
+                               ("find the door", ("find", "door")),
+                               ("what is on my left", ("check", "left")),
+                               ("what colour is this", ("colour", None))):
+            self.assertEqual(voice.parse_command(text), expected, text)
+
+    def test_executor_returns_it(self):
+        engine = GuidanceEngine()
+        said = agent.execute_action(Action("help", None), engine, [], 0.0)
+        self.assertEqual(said, agent.help_message())

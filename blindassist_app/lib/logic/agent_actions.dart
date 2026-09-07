@@ -89,6 +89,12 @@ const List<ToolSpec> kTools = [
   ToolSpec('mute', arg: 'onoff', required: true, examples: ['mute', 'unmute']),
   ToolSpec('stop', examples: ['stop']),
   ToolSpec('repeat', examples: ['repeat', 'say again']),
+  // Answered from this table rather than by the model: "what can you do" has a
+  // factual answer the registry already holds, and llama3.2:1b abstained on
+  // every phrasing of it (measured 2026-09-07). A capability list is exactly
+  // the kind of claim that must not be improvised.
+  ToolSpec('help',
+      examples: ['what can you do', 'what can this app do', 'help']),
   ToolSpec('abstain', arg: 'template'),
   ToolSpec('ask', internal: true, examples: ['assistant']),
 ];
@@ -173,11 +179,12 @@ class AgentRouteResult {
 /// usability property, not formatting. Mirror of agent.MAX_SAY_CHARS.
 const int maxSayChars = 240;
 
-/// Shorter than this WITHOUT terminal punctuation reads as a truncation, not a
-/// reply: the server's JSON mode closes the string when its token budget runs
-/// out, so a half-word ("I don") arrives as perfectly valid JSON. Mirror of
-/// agent.MIN_SAY_CHARS.
-const int minSayChars = 12;
+// There is no minSayChars any more, and neither has agent.py. A 12-character
+// floor was standing in for "the token budget cut this off mid-word", and it
+// discarded short honest answers to get there — "Aditya", the right answer to
+// "what is my name", is six characters with no full stop. The server now reads
+// the truncation off Ollama's own done_reason and drops the text there, where
+// the fact is known rather than guessed at from a shape short answers share.
 
 /// Server free text -> a speakable reply, or null if it is not usable.
 /// Untrusted input like any other: non-strings, empties and leaked JSON are
@@ -197,9 +204,6 @@ String? cleanSay(Object? raw) {
   }
   text = text.trim();
   if (text.isEmpty) return null;
-  if (text.length < minSayChars && !'.!?'.contains(text[text.length - 1])) {
-    return null; // a half-sentence is worse than an abstention
-  }
   return text;
 }
 
@@ -311,5 +315,33 @@ List<String> agentGrammarPhrases() {
   for (final spec in kTools) {
     phrases.addAll(spec.examples);
   }
-  return phrases.toList()..sort();
+  // An example the model cannot pronounce is not a phrase the recognizer can
+  // hear — see [kUnhearableWords]. "unmute" is a registry example and was
+  // silently dropped by Vosk, leaving a muted app with no spoken way back.
+  return phrases.where(hearable).toList()..sort();
+}
+
+/// The user hears this, so it cannot be all seventeen capabilities. Mirror of
+/// `agent.HELP_MAX_ITEMS`; the features page (also generated from [kTools])
+/// carries the rest.
+const int helpMaxItems = 8;
+
+/// What to say to the app, generated from [kTools]. Mirror of
+/// `agent.help_message()`.
+///
+/// Speaks the first EXAMPLE of each capability rather than its description:
+/// the useful answer to "what can you do" is the words that work.
+String helpMessage() {
+  final phrases = kTools
+      .where((t) =>
+          !t.internal &&
+          t.name != 'abstain' &&
+          t.name != 'help' &&
+          t.examples.isNotEmpty)
+      .map((t) => t.examples.first)
+      .take(helpMaxItems)
+      .toList();
+  return 'You can say: ${phrases.sublist(0, phrases.length - 1).join(', ')}, '
+      'or ${phrases.last}. Swipe up for the full list, or say assistant to '
+      'just ask me something.';
 }

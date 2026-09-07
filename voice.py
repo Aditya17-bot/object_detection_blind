@@ -70,12 +70,120 @@ _FINDABLE["people"] = "person"
 
 
 def _match_object(rest):
-    """Longest findable phrase inside `rest`, mapped to its COCO class, or
-    None. Longest first so 'cell phone' beats 'phone'."""
-    for phrase in sorted(_FINDABLE, key=len, reverse=True):
-        if phrase in rest:
-            return _FINDABLE[phrase]
-    return None
+    """The findable phrase nearest the START of `rest`, mapped to its COCO
+    class, or None.
+
+    EARLIEST first, then longest. Longest-anywhere was the original rule and it
+    picks the wrong object the moment a second class word is present: the field
+    log has "find dustbin toilets" (a grammar-forced mishearing) resolving to
+    `toilet`, which is neither what was said nor even the first thing the
+    sentence names. The user's object is the one they said first after "find";
+    length still breaks ties at the same position so "cell phone" beats
+    "phone"."""
+    best = None
+    for phrase, name in _FINDABLE.items():
+        at = rest.find(phrase)
+        if at < 0:
+            continue
+        if best is None or at < best[0] or (at == best[0]
+                                            and len(phrase) > best[1]):
+            best = (at, len(phrase), name)
+    return best[2] if best else None
+
+
+def named_classes(text):
+    """Every DISTINCT object class named anywhere in `text`.
+
+    The signature of grammar-forced noise, and the reason it needs its own
+    detector: Vosk emits `[unk]` only for sound it cannot place at all, so
+    ambient noise that happens to land on trained words arrives with ZERO
+    unplaceable tokens and sails through the unknown-ratio floor. The
+    2026-09-07 field log is full of it — "cupboard find dustbin",
+    "find dustbin toilets", "mobile photo person on anything on my left dining
+    the" — and one of those put the app into find mode for an object nobody
+    asked about.
+
+    Real requests name ONE thing. Two different objects in one utterance is
+    evidence of a bag of force-matched words rather than a sentence."""
+    words = text.lower().split()
+    found = set()
+    for phrase, name in _FINDABLE.items():
+        parts = phrase.split()
+        # WHOLE words only. Substring matching looks equivalent and is not:
+        # "how many chairs" contains "man" (a person synonym) and "cupboard"
+        # contains "cup", so a plain `in` test reports two objects in ordinary
+        # single-object requests and would reject them as noise.
+        for i in range(len(words) - len(parts) + 1):
+            if words[i:i + len(parts)] == parts:
+                found.add(name)
+                break
+    return found
+
+
+# Which capability each keyword belongs to. Mirrors the keyword tests in
+# parse_command, and exists for the same reason named_classes does: an
+# utterance that names TWO capabilities is a bag of force-matched words, not a
+# sentence. The 2026-09-07 field log ran `describe` from "describe light left"
+# and "the clock summary", and `read` from "the many where of me is there read
+# walk".
+#
+# Direction words are deliberately absent: "left" is only a capability with a
+# question word in front of it, and "find the door on my left" is one request.
+# The dictation trigger is absent too — "assistant find the door" is a trigger
+# plus a request BY DESIGN, and counting it would reject the documented form.
+_CAPABILITY_WORDS = {
+    "walk": "walk", "find": "find",
+    "describe": "describe", "scene": "describe", "summary": "describe",
+    "many": "count", "where": "recall",
+    "path": "path", "way": "path",
+    "read": "read", "picture": "photo", "photo": "photo",
+    "summarise": "summarise", "summarize": "summarise",
+    "colour": "colour", "color": "colour",
+    "bright": "light", "dark": "light", "light": "light",
+    "clock": "clock", "zone": "zones", "zones": "zones",
+    "sonar": "sonar", "mute": "mute", "unmute": "mute",
+    "stop": "stop", "repeat": "repeat", "again": "repeat",
+    "help": "help",
+}
+
+# The longest phrase the grammar can legitimately produce is "is there anything
+# in front of me" (7 words). Anything much past that is the recognizer chaining
+# trained phrases out of room noise, whatever else it contains.
+MAX_REQUEST_WORDS = 8
+
+
+def named_capabilities(text):
+    """Every DISTINCT capability named anywhere in `text`."""
+    return {_CAPABILITY_WORDS[w] for w in text.lower().split()
+            if w in _CAPABILITY_WORDS}
+
+
+def looks_like_one_request(text):
+    """Could this recognizer output be ONE thing a person asked for?
+
+    Three conditions, each of which the 2026-09-07 field log broke:
+      * at most one object class named ("cupboard find dustbin");
+      * at most one capability named ("describe light left");
+      * no longer than MAX_REQUEST_WORDS ("do laptops ahead laptop on my left
+        bottle on here right").
+
+    None of these can be seen by the unknown-token ratio, because words forced
+    onto the grammar are not unplaceable — the recognizer is certain about
+    every one of them. Mirror of voice_commands.dart.
+    """
+    if not text:
+        return False
+    if len(text.split()) > MAX_REQUEST_WORDS:
+        return False
+    if len(named_classes(text)) > 1:
+        return False
+    return len(named_capabilities(text)) <= 1
+
+
+def names_multiple_objects(text):
+    """True when `text` names two or more different classes — see
+    [named_classes]. Mirror of voice_commands.dart."""
+    return len(named_classes(text)) > 1
 
 
 def resolve_class(text):
@@ -137,7 +245,12 @@ def parse_command(text):
     if "sonar" in words:           # hands-free toggle for the earphone beeps
         target = "on" if "on" in words else ("off" if "off" in words else None)
         return ("sonar", target)
-    if "unmute" in words:
+    # Every way back from mute, BEFORE the mute test so "voice on" is not read
+    # as a request to mute. "unmute" is kept for typed and agent input; the
+    # spoken forms exist because the model cannot pronounce it (see
+    # UNHEARABLE_WORDS), which left a muted app with no voice route back.
+    if "unmute" in words or "speak" in words or (
+            "on" in words and ("voice" in words or "sound" in words)):
         return ("mute", "off")
     if "mute" in words:
         return ("mute", "on")
@@ -149,6 +262,14 @@ def parse_command(text):
         return ("zones", None)
     if "path" in words or ("which" in words and "way" in words):
         return ("path", None)  # clear-path finder: "which way is clear"
+    # Help BEFORE everything that could claim one of its words: "what can you
+    # do" has "do" in it and "what can this app do" has "this". Deterministic on
+    # purpose — llama3.2:1b abstained on every phrasing of this question, and a
+    # capability list is the last thing that should be improvised.
+    if "help" in words or (
+            "what" in words and "can" in words and
+            ("do" in words or "say" in words)):
+        return ("help", None)
     # Summarise BEFORE read, so "summarise this" is not swallowed by a stray
     # "read". "summary" alone stays with describe, which has owned it since
     # the scene-summary feature and is what users already say for it.
@@ -194,13 +315,34 @@ def parse_command(text):
     return None
 
 
+# Words the shipped Vosk model has no pronunciation for. Vosk drops them from
+# the grammar with a warning nobody reads, so a phrase built from one is not
+# misheard — it is UNHEARABLE, exactly like a phrase that was never added.
+#
+# `unmute` is the one that mattered: on the 2026-09-07 walk the user said "mute
+# it", the app muted, and there was then NO SPOKEN WAY BACK — every command
+# after that ran silently, which is indistinguishable from the app having
+# stopped hearing. Hence the "voice on" / "sound on" / "speak" phrasings, all
+# of which the model does know.
+#
+# The other three are Indian-English and plural synonyms; they stay in the
+# PARSER (typed input and the agent tier still resolve them) and only leave the
+# grammar. Kept honest by test_voice.VocabularyTest, which builds the real
+# grammar against the real model and fails on any word the model would drop.
+UNHEARABLE_WORDS = frozenset({"almirah", "almirahs", "laundrys", "unmute"})
+
+
+def _hearable(phrase):
+    return not any(w in UNHEARABLE_WORDS for w in phrase.split())
+
+
 def grammar_phrases():
     """Every phrase the recognizer should be able to hear."""
     phrases = ["walk mode", "walk", "describe", "describe scene", "summary",
                "clock mode", "zone mode", "clear path", "which way",
                "read", "read text",
                "stop", "repeat", "say again", "sonar", "sonar on", "sonar off",
-               "mute", "unmute", *TRIGGER_WORDS]
+               "mute", "voice on", "sound on", "speak", *TRIGGER_WORDS]
     for spoken in ("on my left", "on my right", "in front of me", "ahead"):
         phrases.append(f"what is {spoken}")
         phrases.append(f"whats {spoken}")
@@ -213,7 +355,7 @@ def grammar_phrases():
         phrases.append(f"where is {name}")
         phrases.append(f"where is the {name}")
         phrases.append(f"how many {name}")
-    return phrases
+    return [p for p in phrases if _hearable(p)]
 
 
 class VoiceListener:
@@ -292,6 +434,11 @@ class VoiceListener:
                     text = json.loads(rec.Result()).get("text", "")
                     text = text.replace("[unk]", "").strip()
                     if not text:
+                        continue
+                    # Two different object names in one utterance is noise —
+                    # see named_classes. The desktop recognizer force-matches
+                    # ambient sound exactly as the handset's does.
+                    if not looks_like_one_request(text):
                         continue
                     command = parse_command(text)
                     if not command:

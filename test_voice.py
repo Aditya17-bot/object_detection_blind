@@ -2,6 +2,7 @@
 
 import unittest
 
+import voice
 from voice import grammar_phrases, parse_command
 
 
@@ -147,3 +148,148 @@ class PhotoCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrammarForcedNoiseTest(unittest.TestCase):
+    """From the 2026-09-07 field log. Every utterance here was produced by the
+    recognizer from sound the user did not intend as a command, and every one
+    arrived with ZERO `[unk]` tokens — words forced onto the grammar are not
+    unplaceable, so the unknown-ratio floor cannot see them. One of them
+    ("cupboard find dustbin") started a search for an object nobody named,
+    which is the "why does it randomly find something" report."""
+
+    FIELD_NOISE = (
+        "cupboard find dustbin",
+        "find dustbin toilets",
+        "mobile photo person on anything on my left dining the",
+    )
+
+    def test_field_noise_is_rejected(self):
+        for text in self.FIELD_NOISE:
+            self.assertTrue(voice.names_multiple_objects(text), text)
+
+    def test_real_requests_survive(self):
+        for text in ("find the door", "find the cell phone", "how many chairs",
+                     "find the door on my left", "where is the cup",
+                     "take a photo of the chair", "what colour is this",
+                     "is there anything in front of me"):
+            self.assertFalse(voice.names_multiple_objects(text), text)
+
+    def test_whole_words_only(self):
+        """Substring matching looks equivalent and is not: "how many chairs"
+        contains "man" and "cupboard" contains "cup", so a naive `in` test
+        rejects ordinary single-object requests as noise."""
+        self.assertEqual(voice.named_classes("how many chairs"), {"chair"})
+        self.assertNotIn("cup", voice.named_classes("cupboard"))
+
+    def test_find_takes_the_first_object_named(self):
+        """"find dustbin toilets" resolved to `toilet` under longest-anywhere:
+        neither what was said nor the first thing the sentence names."""
+        self.assertEqual(voice.parse_command("find dustbin toilets"),
+                         ("find", "dustbin"))
+        self.assertEqual(voice.parse_command("find bottle chair"),
+                         ("find", "bottle"))
+        # length still breaks ties at the same position
+        self.assertEqual(voice.parse_command("find the cell phone"),
+                         ("find", "cell phone"))
+
+
+class OneRequestFloorTest(unittest.TestCase):
+    """The second half of the 2026-09-07 log, after the multi-object floor
+    landed. Every utterance below was still accepted and RAN something the user
+    had not asked for. All of them are grammar-forced noise with zero
+    unplaceable tokens: the recognizer is certain about every word."""
+
+    FIELD_NOISE = (
+        ("describe light left", "describe"),
+        ("the clock summary", "describe"),
+        ("the clock mans light left", "clock"),
+        ("the many where of me is there read walk", "read"),
+        ("cupboard find dustbin", "find"),
+        ("do laptops ahead laptop on my left bottle on here right", None),
+        ("scene mobile is toilet window", "describe"),
+        ("clock many toilet door toilet summarize", "clock"),
+    )
+
+    def test_field_noise_is_rejected(self):
+        for text, _ in self.FIELD_NOISE:
+            self.assertFalse(voice.looks_like_one_request(text), text)
+
+    def test_real_requests_survive(self):
+        for text in ("find the door", "how many chairs", "what is on my left",
+                     "is there anything in front of me", "take a photo",
+                     "read text", "summarise this", "what colour is this",
+                     "is the light on", "clear path", "walk mode",
+                     "say again", "sonar off", "what can you do",
+                     "where is the cup", "find the door on my left",
+                     "mute it", "on summarize"):
+            self.assertTrue(voice.looks_like_one_request(text), text)
+
+    def test_the_dictation_trigger_may_carry_a_request(self):
+        """"assistant find the door" is a trigger plus a request BY DESIGN
+        (voice.py parses the trigger LAST so no command loses precedence).
+        Counting the trigger as a capability would reject the documented
+        form."""
+        self.assertTrue(voice.looks_like_one_request("assistant find the door"))
+        self.assertEqual(voice.parse_command("assistant find the door"),
+                         ("find", "door"))
+
+    def test_a_direction_is_not_a_second_capability(self):
+        """"left" is only a capability with a question word in front of it."""
+        self.assertEqual(voice.named_capabilities("find the door on my left"),
+                         {"find"})
+
+
+class VocabularyTest(unittest.TestCase):
+    """Every grammar phrase must be one the shipped model can actually hear.
+
+    Vosk drops a word it has no pronunciation for and logs a warning nobody
+    reads, so the phrase is not misheard — it is unhearable, exactly like one
+    that was never added. That cost the user a walk: "unmute" is OOV in
+    vosk-model-small-en-us-0.15, so on 2026-09-07 the app muted on request and
+    had no spoken way back, and every command after that ran silently.
+
+    Skipped where vosk or the model is not present, because the unit suite must
+    run without them; it is the desktop check that keeps the list honest.
+    """
+
+    def test_no_grammar_word_is_out_of_vocabulary(self):
+        import json
+        import os
+        import subprocess
+        import sys
+        model = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "vosk-model-small-en-us-0.15")
+        if not os.path.isdir(model):
+            self.skipTest("vosk model not present")
+        try:
+            import vosk  # noqa: F401
+        except ImportError:
+            self.skipTest("vosk not installed")
+        import agent
+        # A SUBPROCESS because the warning is written by the C library to the
+        # process's stderr, which cannot be captured from inside Python.
+        script = (
+            "import json, sys;"
+            f"sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r});"
+            "import agent;"
+            "from vosk import KaldiRecognizer, Model, SetLogLevel;"
+            "SetLogLevel(-1);"
+            f"m = Model({model!r});"
+            "KaldiRecognizer(m, 16000,"
+            " json.dumps(agent.grammar_phrases() + ['[unk]']))")
+        out = subprocess.run([sys.executable, "-c", script],
+                             capture_output=True, text=True, timeout=300)
+        missing = sorted({line.rsplit("'", 2)[-2] for line in
+                          out.stderr.splitlines()
+                          if "missing in vocabulary" in line})
+        self.assertEqual(missing, [], f"unhearable grammar words: {missing}")
+        self.assertTrue(agent.grammar_phrases())
+
+    def test_there_is_a_spoken_way_back_from_mute(self):
+        """Muting by voice and un-muting by voice must both work, or the app
+        can be silenced into a state the user cannot talk it out of."""
+        self.assertEqual(parse_command("mute"), ("mute", "on"))
+        grammar = set(grammar_phrases())
+        back = [p for p in grammar if parse_command(p) == ("mute", "off")]
+        self.assertTrue(back, "no hearable phrase un-mutes the app")

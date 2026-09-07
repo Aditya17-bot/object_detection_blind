@@ -244,11 +244,15 @@ void main() {
       expect(r.actions.single.tool, 'describe');
     });
 
-    test('a truncated reply is rejected', () {
-      // from the 2026-08-01 eval run: the server's JSON mode closes the string
-      // when its token budget runs out, so "I don" arrives as valid JSON
-      expect(parseRouteResponse({'source': 'chat', 'say': 'I don'}).say, isNull);
-      expect(parseRouteResponse({'source': 'chat', 'say': 'Yes.'}).say, 'Yes.');
+    test('short complete replies are spoken', () {
+      // A 12-character floor used to stand in for "the token budget cut this
+      // off", and it took correct one-word answers with it: "Aditya" is the
+      // right answer to "what is my name". Truncation is now dropped on the
+      // server, off Ollama's own done_reason, so the phone no longer has to
+      // guess it from a shape that short honest answers share.
+      for (final reply in ['Aditya', 'Yes.', 'Paris.', 'Ninety-six.']) {
+        expect(parseRouteResponse({'source': 'chat', 'say': reply}).say, reply);
+      }
     });
 
     test('junk say values are never spoken', () {
@@ -293,6 +297,9 @@ void main() {
       final grammar = agentGrammarPhrases().toSet();
       for (final spec in kTools) {
         for (final example in spec.examples) {
+          // An example the model cannot pronounce is deliberately absent —
+          // Vosk would drop it anyway, silently. See [kUnhearableWords].
+          if (!hearable(example)) continue;
           expect(grammar, contains(example),
               reason: '${spec.name} example "$example" is not in the grammar');
         }
@@ -314,6 +321,43 @@ void main() {
     test('the registry grammar is a superset of the shipped one', () {
       expect(agentGrammarPhrases().toSet(),
           containsAll(grammarPhrases().toSet()));
+    });
+  });
+
+  // "What can you do" has a factual answer the registry already holds, and
+  // llama3.2:1b abstained on every phrasing of it. Answering it from the table
+  // is not a fallback — a capability list is the last thing that should be
+  // improvised.
+  group('help', () {
+    test('the message is generated from the registry', () {
+      final message = helpMessage();
+      final spoken = kTools
+          .where((t) =>
+              !t.internal &&
+              t.name != 'abstain' &&
+              t.name != 'help' &&
+              t.examples.isNotEmpty)
+          .take(helpMaxItems);
+      for (final spec in spoken) {
+        expect(message, contains(spec.examples.first));
+      }
+      expect(message.length, lessThanOrEqualTo(400));
+    });
+
+    test('the phrasings parse', () {
+      for (final text in ['what can you do', 'what can this app do', 'help',
+        'what can i say']) {
+        expect(parseCommand(text)?.action, 'help', reason: text);
+      }
+    });
+
+    test('it steals nothing', () {
+      // "what can you see" is a SCENE question sharing three words with the
+      // help phrasings; requiring "do" or "say" is what separates them.
+      expect(parseCommand('what can you see'), isNull);
+      expect(parseCommand('read this')?.action, 'read');
+      expect(parseCommand('what colour is this')?.action, 'colour');
+      expect(parseCommand('find the door')?.target, 'door');
     });
   });
 }

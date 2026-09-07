@@ -1246,3 +1246,39 @@ alongside it.** A capability that can be executed but not uttered is invisible
 in a way no amount of testing the executor reveals — and the user experiences
 it as the whole system being unreliable, since the fallback is a confident
 wrong action.
+
+### 2026-09-07 (later) — the input channel has its own abstention problem
+
+The 29 s field video gave the first REPRODUCIBLE harness for the input side:
+the audio replays through the same grammar recognizer the handset runs, so a
+floor can be evaluated against real room audio rather than against invented
+strings. Two results belong in the §9 argument.
+
+**1. A closed grammar cannot abstain on its own.** Vosk emits `[unk]` only for
+sound it cannot place at all; ambient noise that happens to land on trained
+words arrives with ZERO unplaceable tokens and maximal confidence. The
+unknown-ratio floor therefore cannot see the failure it most needs to see. The
+field log ran `describe` from "describe light left" and `find dustbin` from
+"cupboard find dustbin" — every word certain, the sentence meaningless.
+
+The floor that works is STRUCTURAL, not confidence-based: a request names one
+object and asks for one capability, and is no longer than the longest phrase the
+grammar can legitimately produce. This is the input-side instance of the same
+thesis as §4.9 — the useful abstention signal is a property of the decision, not
+the model's certainty about it. Measured on the field utterances: 8/8 noise
+rejected, 19/19 real phrasings kept.
+
+**2. An unhearable capability is worse than a missing one.** `unmute` is out of
+vocabulary in the shipped model, so Vosk silently dropped it from the grammar.
+The consequence was not a degraded command: it was a one-way door. The user
+muted by voice and there was no voice route back, and to someone who cannot see
+the screen an app that has been silenced is indistinguishable from an app that
+has stopped listening. Two design rules follow, both now enforced by tests:
+every capability's inverse must be reachable through the same channel that
+reached the capability, and the input vocabulary must be validated against the
+recognizer's actual lexicon rather than assumed from the phrase list.
+
+Both defects were invisible to the existing suites because both live at a seam —
+one between the parser and the recognizer's vocabulary, the other between a
+model's confidence and the structure of what it produced. Neither could be found
+by testing either side alone.
