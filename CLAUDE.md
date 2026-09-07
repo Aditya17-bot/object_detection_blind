@@ -1812,3 +1812,49 @@ pre-existing `avoid_print` infos.
   is the naming-index pattern applied to scenes. Not built. The current answer
   uses co-visible objects instead, which is grounded in what was actually seen.
 
+
+## Grammar drift made three capabilities unhearable (2026-09-07)
+
+Session started as "connect the app" and turned into a real defect. Phone and
+laptop connected over the phone hotspot (`Aditya's S21 FE`, laptop
+10.109.152.247, phone 10.109.152.50); JPEG transport confirmed live
+(`/infer 1280x720 rot90 jpeg -> N dets in ~250-450 ms`, ~2-3 FPS).
+
+⚠ **The running server was the WRONG interpreter** — system Python 3.9 with
+`torch 2.5.1+cpu`. Always `venv-gpu\Scripts\python.exe`. Health said `ok:true`
+either way, so nothing in the app or the log reveals it; check
+`torch.cuda.is_available()` if frame times look like ~750 ms.
+
+**The defect: `grammarPhrases()` in `voice_commands.dart` was hand-written and
+stale.** It had no colour, light or summarise phrasing. Vosk is
+grammar-constrained, so those words were ones the microphone could not emit:
+
+- "colour" was **unhearable**, not misheard — the parser had handled it all
+  along and nothing reached it.
+- "summarize" force-matched to "summary", which `parseCommand` routes to
+  `describe` — hence "Nothing detected" (`summarizeScene([])`) on an empty
+  scene. That is why the user's summarise complaint named the describe string.
+
+Python never drifted because `agent.grammar_phrases()` is DERIVED (base ∪ every
+registry example) and passed to `VoiceListener` at runtime; the Dart port had
+mirrored the base list but not the derivation. Fixed with
+`agentGrammarPhrases()` in `agent_actions.dart`, used by `voice_listener.dart`.
+Pinned on BOTH sides (`test_agent.GrammarCoverageTest`, `agent_test.dart`
+"grammar covers the registry"): every registry example is in the grammar, every
+spoken capability has an example that parses back to it, derived ⊇ shipped.
+**Rule: never hand-maintain the input vocabulary — generate it from `kTools`.**
+Checked first that the words are in the Vosk lexicon (colour/summarise included,
+British spellings and all) — an out-of-vocabulary grammar word is the one thing
+that could have broken recognition wholesale.
+
+**OCR capture, second finding.** The two real `/summarise` calls carried 45 and
+11 characters against `MIN_SOURCE_CHARS = 80`, so the model was never asked; a
+`read` in the same room got 906 characters. The capture, not the summariser,
+is the weak link. `_readText` now uses `_captureText(settleMs)` and, for
+summarise only, RETRIES once with a 1500 ms focus settle, then says something
+actionable ("Only a few words were visible. Hold the page steady…") instead of
+the server's description of its own state. `read` is deliberately not retried —
+it has something to say about whatever it got.
+
+Test counts: **428 Python / 253 Dart**, `flutter analyze` clean apart from the
+3 pre-existing `avoid_print` infos.

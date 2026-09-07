@@ -823,6 +823,32 @@ class _AssistantScreenState extends State<AssistantScreen>
   // stream for the one-shot capture, then resumes it.
   bool _reading = false;
 
+  /// Mirror of `text_summary.MIN_SOURCE_CHARS`: below this the server refuses
+  /// to summarise, because asking a small model about three words of menu is
+  /// how you get a confident paragraph about nothing. Known here so the phone
+  /// can retry the capture instead of spending a round trip to be told.
+  static const int kMinSummarySourceChars = 80;
+
+  /// Focus, capture a still, and OCR it. [settleMs] is how long autofocus is
+  /// given: takePicture() fired straight after stopImageStream() inherits
+  /// whatever focus the streaming path left behind, and text is exactly the
+  /// subject that needs focus — a blurred page yields no blocks at all, which
+  /// is indistinguishable from an empty one.
+  Future<String> _captureText(int settleMs) async {
+    try {
+      await _camera!.setFocusMode(FocusMode.auto);
+    } catch (_) {
+      // not every device exposes focus control; the delay still helps
+    }
+    await Future<void>.delayed(Duration(milliseconds: settleMs));
+    final shot = await _camera!.takePicture();
+    final text = await _ocr.readFile(shot.path);
+    // ignore: avoid_print
+    print('BlindAssist OCR: ${_camera!.value.previewSize} '
+        '-> ${text.length} chars');
+    return text;
+  }
+
   /// Capture a still, OCR it, and either read it out or summarise it.
   ///
   /// One method rather than two because the pause/focus/capture/resume dance
@@ -846,20 +872,26 @@ class _AssistantScreenState extends State<AssistantScreen>
       // to leave behind, and text is exactly the subject that needs focus —
       // a blurred page yields no blocks at all, which is indistinguishable
       // from an empty one.
-      try {
-        await _camera!.setFocusMode(FocusMode.auto);
-      } catch (_) {
-        // not every device exposes focus control; the delay still helps
+      var text = await _captureText(700);
+      // A summary needs a page; a capture that came back with a line of it was
+      // aimed or focused badly, and the server can only answer "not enough
+      // text", which the user hears as the feature being broken. One retry
+      // with a longer focus settle costs a second in exactly the case that was
+      // going to fail anyway. `read` is deliberately NOT retried: it has
+      // something to say about whatever it got.
+      if (summarise && text.length < kMinSummarySourceChars) {
+        _say('Hold steady', kConfirm, tag);
+        text = await _captureText(1500);
       }
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      final shot = await _camera!.takePicture();
-      final text = await _ocr.readFile(shot.path);
-      // ignore: avoid_print
-      print('BlindAssist OCR: ${_camera!.value.previewSize} '
-          '-> ${text.length} chars');
       final String msg;
       if (text.isEmpty) {
         msg = 'No text found';
+      } else if (summarise && text.length < kMinSummarySourceChars) {
+        // Say what to DO about it. "There is not enough text here" describes
+        // the server's state; the user needs to know the page was not in the
+        // frame, which is the thing only they can fix.
+        msg = 'Only a few words were visible. Hold the page steady in front of '
+            'the camera and say summarise again.';
       } else if (summarise) {
         // Only the TEXT goes to the laptop; the OCR was done here, so no
         // image leaves the phone. A null reply means the laptop was

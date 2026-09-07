@@ -294,3 +294,22 @@ AgentRouteResult parseRouteResponse(Map<String, dynamic> body,
   return AgentRouteResult(
       actions: actions, source: source, latencyMs: latency, error: error);
 }
+
+/// Every phrase the recognizer should be able to hear — mirror of
+/// `agent.grammar_phrases()`.
+///
+/// A SUPERSET of [grammarPhrases]: the hand-written list keeps recognition of
+/// the trained phrasings from regressing, and the registry adds its own
+/// examples on top. Built from [kTools] on purpose. The hand-written list had
+/// drifted — it carried no colour, light or summarise phrasing at all, and the
+/// recognizer is grammar-constrained, so those words were ones the microphone
+/// could not physically emit. The parser handled them; nothing ever reached it.
+/// Deriving the list from the registry means a capability cannot exist without
+/// being audible.
+List<String> agentGrammarPhrases() {
+  final phrases = <String>{...grammarPhrases()};
+  for (final spec in kTools) {
+    phrases.addAll(spec.examples);
+  }
+  return phrases.toList()..sort();
+}

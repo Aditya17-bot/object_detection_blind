@@ -566,3 +566,33 @@ class ResolveClassTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrammarCoverageTest(unittest.TestCase):
+    """The recognizer is grammar-constrained, so a phrase missing from the
+    grammar is not misheard — it is UNHEARABLE. The Dart half of this list had
+    drifted and carried no colour, light or summarise phrasing at all, which is
+    what made the app look deaf to those words while the parser sat ready for
+    them. These assertions keep the registry and the recognizer in step on
+    both sides; the Dart mirror is test/agent_test.dart."""
+
+    def test_every_capability_example_is_hearable(self):
+        grammar = set(agent.grammar_phrases())
+        for spec in TOOLS:
+            for example in spec.examples:
+                self.assertIn(example, grammar,
+                              f"{spec.name} example {example!r} is unhearable")
+
+    def test_every_spoken_capability_has_an_example_that_parses_to_it(self):
+        for spec in TOOLS:
+            if spec.internal or spec.name == "abstain":
+                continue
+            self.assertTrue(spec.examples, f"{spec.name} has no example")
+            parsed = [voice.parse_command(e) for e in spec.examples]
+            self.assertTrue(
+                any(p and p[0] == spec.name for p in parsed),
+                f"no example of {spec.name} parses to it: {parsed}")
+
+    def test_registry_grammar_is_a_superset_of_the_shipped_one(self):
+        self.assertLessEqual(set(voice.grammar_phrases()),
+                             set(agent.grammar_phrases()))

@@ -1206,3 +1206,43 @@ reloads what the last displaced. The summariser therefore runs CPU-only
 deliberate, stationary act with the camera paused. Any published latency figure
 for a multi-model assistive pipeline should state the residency arrangement.
 
+
+### 2026-09-07 — a capability that cannot be HEARD is not a capability
+
+Field report: "summarize isn't working, it keeps saying nothing detected", and
+"I'm shouting colour and it isn't responding". Neither was a recognition-quality
+problem, and neither was in the capability that was blamed.
+
+The handset recognizer is grammar-constrained (§4.7): it emits only words the
+grammar contains, for any audio at all. The Dart `grammarPhrases()` was
+hand-written and had drifted from the capability registry — it carried **no
+colour, light or summarise phrasing at all**. So:
+
+- "colour" was not misheard, it was **unhearable**. The parser had handled the
+  word since the day the capability shipped; nothing ever reached it.
+- "summarize" force-matched to the nearest grammar word, "summary", which the
+  parser routes to `describe` — which on an empty scene says exactly "Nothing
+  detected". The user's report named the symptom precisely and it pointed at
+  the wrong capability.
+
+This is a failure mode specific to closed-grammar input, and worth stating as
+such: **a closed grammar converts a missing phrase into a confident wrong
+action, not into silence or an error.** The nearest-match property that makes
+the grammar accurate for trained phrases is the same property that makes an
+untrained phrase dangerous. It cannot be caught by testing the parser, which is
+what the existing suites tested; it is only visible where the two lists meet.
+
+The Python side never drifted, because `agent.grammar_phrases()` is DERIVED —
+base list ∪ every registry example — and passed to the recognizer at runtime.
+The Dart port had mirrored the base list and not the derivation. Fixed by
+mirroring the derivation (`agentGrammarPhrases()` in `agent_actions.dart`), and
+pinned on both sides by three assertions: every registry example is in the
+grammar, every spoken capability has an example that parses back to it, and the
+derived grammar is a superset of the shipped one.
+
+The general design rule, which belongs with the §9 thesis: **the input
+vocabulary must be generated from the capability registry, never maintained
+alongside it.** A capability that can be executed but not uttered is invisible
+in a way no amount of testing the executor reveals — and the user experiences
+it as the whole system being unreliable, since the fallback is a confident
+wrong action.

@@ -281,4 +281,39 @@ void main() {
       expect(validateAction({'tool': 'check'}), isNull);
     });
   });
+
+  // The recognizer is grammar-constrained: a word missing from the grammar is
+  // not misheard, it is UNHEARABLE. The hand-written list had drifted away from
+  // the registry — colour, light and summarise had no phrasing in it at all, so
+  // the user shouting "colour" produced nothing while the parser sat ready for
+  // it. Deriving the grammar from kTools is what keeps that from recurring, and
+  // this group is what keeps the derivation honest.
+  group('grammar covers the registry', () {
+    test('every capability example is hearable', () {
+      final grammar = agentGrammarPhrases().toSet();
+      for (final spec in kTools) {
+        for (final example in spec.examples) {
+          expect(grammar, contains(example),
+              reason: '${spec.name} example "$example" is not in the grammar');
+        }
+      }
+    });
+
+    test('every spoken capability has an example that parses to it', () {
+      for (final spec in kTools) {
+        if (spec.internal || spec.name == 'abstain') continue;
+        expect(spec.examples, isNotEmpty, reason: '${spec.name} has no example');
+        final parsed = spec.examples
+            .map(parseCommand)
+            .where((c) => c != null && c.action == spec.name);
+        expect(parsed, isNotEmpty,
+            reason: 'no example of ${spec.name} parses to it');
+      }
+    });
+
+    test('the registry grammar is a superset of the shipped one', () {
+      expect(agentGrammarPhrases().toSet(),
+          containsAll(grammarPhrases().toSet()));
+    });
+  });
 }

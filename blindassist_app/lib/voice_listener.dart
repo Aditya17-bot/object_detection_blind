@@ -22,6 +22,7 @@ import 'dart:convert';
 
 import 'package:vosk_flutter/vosk_flutter.dart';
 
+import 'logic/agent_actions.dart';
 import 'logic/voice_commands.dart';
 
 /// Fraction of a result that may be `[unk]` before it is treated as noise
@@ -156,7 +157,7 @@ class VoiceListener {
     _recognizer = await vosk.createRecognizer(
       model: _model!,
       sampleRate: 16000,
-      grammar: [...grammarPhrases(), '[unk]'],
+      grammar: [...agentGrammarPhrases(), '[unk]'],
     );
     _speech = await _startService(_recognizer!, _handleResult);
   }
