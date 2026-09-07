@@ -1282,3 +1282,79 @@ Both defects were invisible to the existing suites because both live at a seam �
 one between the parser and the recognizer's vocabulary, the other between a
 model's confidence and the structure of what it produced. Neither could be found
 by testing either side alone.
+
+---
+
+### 2026-09-08 — replay harnesses, and four defects only a replay could find
+
+Three offline harnesses were built so the whole capability surface can be
+exercised against a recorded walk instead of against a live user:
+`tools/replay_all_features.py` (every capability at every sampled frame, with
+invariant checks), `tools/replay_timeline.py` (guidance and commands arbitrated
+by the real `SpeechPolicy`, so overlap and drops are visible), and
+`tools/replay_voice.py` (the clip's audio through the real grammar, plus static
+checks that every capability is reachable and every grammar word is in the
+recognizer's lexicon). Four defects followed, and each is an instance of a
+thesis already in this document rather than a new one.
+
+**1. A closed grammar makes ambient speech a command, and the cost is not
+symmetric across capabilities.** Replaying the 2026-09-07 walk audio, the room
+produced `is mute womans` — zero unknown tokens, one capability, three words —
+which contains "mute" and muted the app. Every existing floor passed it: the
+recognizer was *certain*, because a grammar-constrained decoder cannot say "I
+did not understand", only "the nearest trained phrase". The fix separates
+capabilities by the cost of a false accept. Everything that answers out loud is
+self-correcting — the user hears the wrong answer and repeats themselves — so
+those stay lenient. A SETTING (mute, sonar, clock, zones) changes behaviour
+persistently and leaves no trace a blind user can check, so it must BE a
+setting phrase rather than merely contain one: every word must come from that
+command's own vocabulary or a short filler list. This is the input-side
+counterpart of §4.10's solicitation typing: the same utterance is treated
+differently according to what acting on it wrongly would cost.
+
+**2. An abstention that erases the answer is not free.** The `NAME_CONFIDENCE`
+gate replaces an untrusted label with the word "obstacle". Applied to a walk
+warning that is right — unsolicited, must be short, and the avoidance action is
+identical whatever the object turns out to be. Applied to `check_direction`, it
+answered a question ABOUT identity with the one thing the user already knew
+("an obstacle close on your left"), and it contradicted `summarize_scene`,
+which named the very same box in the very same frame. Measured: 25 of 63 check
+answers on the field clip were anonymised this way. The resolution is a GRADED
+assertion rather than a binary one — "possibly a toilet" — which keeps the
+information and marks how far to trust it. §9's "say less, never mislead" is
+better served by qualifying a claim than by deleting it, wherever the channel
+can afford the extra word; the walk channel cannot, and keeps the binary form.
+
+Measurement that decided it, and that reversed an earlier intention to remove
+the gate outright: over both field clips (197 detections), 4 carried a COCO
+name wrong for the object, and 3 of those 4 sat below the threshold. The gate
+is a weak prior, not the correctness test the falsified probe claimed — but a
+weak prior with 3:1 precision against wrong names is not nothing, and deleting
+it would have let the app assert "a toilet" in a bedroom.
+
+**3. A hard threshold on a fluctuating signal produces two names for one
+object.** The bed ranged 0.65–0.92 across a threshold of 0.8, so the user heard
+"Obstacle at 12 o'clock, close" and then, 0.9 s later, "Bed very close at 12
+o'clock" — the same object, twice, under two nouns. The engine now decides the
+spoken name from a per-class confidence that rises instantly and decays slowly,
+the same hysteresis §4.9 applies to the naming head's tracks. Generalisation
+worth keeping: wherever an abstention criterion is a threshold on a per-frame
+quantity, the *stability* of the decision matters as much as its accuracy,
+because the user hears the transitions.
+
+**4. A safety override that beats every timing rule speaks over itself.** The
+escalation path bypassed the minimum gap entirely, so a closing obstacle
+announced itself 0.4 s after the warning about the same obstacle, and the
+Speaker's SAFETY preemption cut the first sentence mid-word. Escalation now
+beats the repeat cooldown, which was its stated purpose, but not a small floor.
+
+Two further guards were added to the dialogue tier, both enforced in code
+rather than in the prompt — the distinction §4.7 rests on. `walk` is the tool a
+small model reaches for when it has understood nothing (4 of 5 failures on a
+20-utterance probe of the shipped `llama3.2:1b`), so it now requires a
+grounding word in the utterance; a prompt rule forbidding the fallback was
+tried first and made the model abstain on legitimate paraphrases instead.
+And a chat reply is refused outright when the question was about the user's
+SURROUNDINGS: asked "tell me what this page says", the model answered
+`{"say": "Nothing on this page."}` — the app telling a blind user their page is
+blank, on no evidence. The prompt already forbade it. Only the code stopped it.

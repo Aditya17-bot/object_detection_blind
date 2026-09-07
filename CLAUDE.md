@@ -1919,3 +1919,118 @@ NAME_CONFIDENCE gate, still the honest fallback for un-renamed COCO classes.
 
 Test counts: **445 Python / 271 Dart**, `flutter analyze` clean apart from the
 3 pre-existing `avoid_print` infos.
+
+## Replay harnesses + four defects they found (2026-09-08)
+
+User: "use the video to test all the features ... find weaknesses in system and
+work on it", with a review in a few days. No new recording was available (phone
+was off USB, newest clip on disk is `field_walk_20260907.mp4`), so the two field
+walks were replayed through the REAL pipeline instead.
+
+**Three harnesses, all in `tools/`, all reusable:**
+- `replay_all_features.py` — runs the actual server stack (yolov8s + custom +
+  cross-model merge + naming head) over a clip at the handset's 2.2 FPS, drives
+  a real `GuidanceEngine`, and exercises **every** capability at every sampled
+  frame (walk, find per class, describe, count, check L/A/R, path, recall,
+  colour, light). Reports ANOMALIES against invariants, not just output.
+  Writes `test_output/replay_all_<clip>.md`.
+- `replay_timeline.py` — guidance AND scripted user commands on one timeline
+  through the real `SpeechPolicy`, so drops and speech collisions are visible.
+- `replay_voice.py` — static checks (every capability reachable by speech;
+  every grammar word in the model's lexicon; noise floor both directions) plus
+  the clip's AUDIO through the real Vosk grammar.
+- `crop_contact_sheets.py` — one tiled sheet per harvested guess-folder.
+
+### The four defects
+
+1. **Ambient speech muted the app.** Replayed audio produced `is mute womans` —
+   0 unknown tokens, 1 capability, 3 words — which contains "mute" and passed
+   every floor. New rule, mirrored: a SETTING (mute/sonar/clock/zones) must BE
+   a setting phrase, not merely contain one (`voice.setting_is_deliberate` /
+   `settingIsDeliberate`, wired into the listener and `recognitionIsUsable`).
+   Everything else stays lenient — it answers out loud, so a false accept is
+   self-correcting, and a false reject is the app ignoring you.
+2. **"An obstacle close on your left" answered a question about identity.**
+   25 of 63 `check` answers on the field clip were anonymised by the
+   `NAME_CONFIDENCE` gate, while `describe` named the same box in the same
+   frame. Now a graded hedge: `hedged_name` / `hedgedName` say "possibly a
+   toilet" for a solicited answer; walk warnings keep the bare "Obstacle"
+   (unsolicited, must be short, same avoidance action either way).
+   ⚠ **Measurement that kept the gate**, after an initial intent to drop it:
+   over both clips (197 detections) 4 names were wrong for the object and
+   **3 of those 4 were below 0.8**, against 13/76 walk-eligible detections
+   hedged. A weak prior with ~3:1 precision, not the correctness test the
+   falsified probe claimed.
+3. **One object, two nouns.** The bed ranged 0.65-0.92 around the 0.8
+   threshold, so the user heard "Obstacle at 12 o'clock" then "Bed very close
+   at 12 o'clock". The engine now names from a per-class confidence that rises
+   instantly and decays at `name_conf_decay` 0.05/frame (`_steady`).
+4. **Escalation spoke over itself.** It bypassed `min_gap` entirely, so a
+   closing obstacle interrupted the warning about the same obstacle 0.4 s in
+   and SAFETY preemption cut the first sentence mid-word. New
+   `escalation_min_gap` 0.8 s: still beats the 3 s repeat cooldown, no longer
+   beats everything.
+
+### Dialogue tier, both enforced in code (a prompt rule was tried and failed)
+
+- **`walk` grounding.** 4 of 5 failures on a 20-utterance probe of the shipped
+  `llama3.2:1b` were a fall back to `{"tool": "walk"}` — "the is my on", "many
+  plant", "my left", "what is the capital of japan". It speaks no perceptual
+  claim, but on the handset it CANCELS a search. `capability_is_grounded` now
+  requires a walk-ish word. A prompt rule forbidding the fallback was tried
+  FIRST and made 1b abstain on "go back to normal mode" instead — reverted.
+- **Description-as-tool-name.** 1b answers some requests with the tool's
+  DESCRIPTION in the name slot ("switch to walking" -> `{"tool": "switch to
+  continuous obstacle warnings while walking"}`), which was rejected as unknown
+  and abstained. `BY_DESCRIPTION` resolves it; a description names exactly one
+  tool, so nothing is invented.
+- **Perceptual chat refused.** Asked "tell me what this page says", 1b replied
+  `{"say": "Nothing on this page."}` — the app telling a blind user their page
+  is blank. `chat_is_allowed` refuses a chat reply when the question is about
+  the surroundings. General knowledge is untouched.
+  ⚠ This fixed a **contradiction inside the test suite**: `AuthorityBoundaryTest`
+  asserted model prose about the room reaches nobody, while `ChatModeTest`
+  asserted the same claim IS spoken when it arrives as `say`. The second test's
+  fixture was the leak; it now uses a general-knowledge question.
+
+Router probe after the changes: **13/14** (was 14/19).
+
+### Also found
+
+- ⚠ **Two stale servers from the previous session were still running**, and the
+  one holding port 5001 answered `/agent` with pre-fix behaviour. Killed. If a
+  smoke test disagrees with a local probe, check
+  `Get-NetTCPConnection -LocalPort 5001` before believing either.
+- Cold-start is a non-issue: `OllamaRouter.warmup()` is already called by
+  `infer_server`, and after it tier 1 routes in 250-500 ms. The 7.7 s first call
+  is only ever seen by an unwarmed probe script.
+- Server health after restart, at the handset's frame shape (1280x720 JPEG,
+  60 KB): **~200 ms/frame** server-side, matching the documented ~171 ms.
+- **APK rebuilt and installed** on RZCR906FDTD (release, 182.5 MB). The
+  reinstall RESET the CAMERA and RECORD_AUDIO grants — after any
+  `flutter install` the phone will show permission prompts again, and until
+  they are granted the app logs nothing at all.
+
+Anomalies remaining on both clips after the fixes: only honest first-sighting
+hedges (2 on the field walk, 1 on the room walk), where the class genuinely has
+not been seen confidently yet.
+
+Test counts: **465 Python / 284 Dart**, `flutter analyze` clean apart from the
+3 pre-existing `avoid_print` infos.
+
+### Still open — highest value first
+
+- **`LABELLING.md`** (new) is the whole brief: 351 crops are harvested and
+  waiting in `test_output/crops_room/` (196) and `test_output/crops_field0907/`
+  (155, new this session), each folder now carrying a `_sheet_*.jpg` contact
+  sheet so a folder can be judged at a glance. The naming head still makes
+  **zero renames** in both rooms, which costs the laundry basket entirely
+  (detected as `handbag`, not in TARGET_CLASSES, so dropped) and leaves stray
+  `refrigerator`/`toilet`/`tv` labels. 20-40 min of the user's time.
+- Residual, deliberately not designed away: ambient speech that matches a
+  trained INFORMATIONAL phrase still runs it. The field audio produced
+  `anything in front` -> check(ahead) and `dark here` -> light. Harmless
+  sentences, but in a demo room with people talking they will fire. Mitigation
+  on the day is the features-page buttons rather than the mic.
+- `llama3.2:1b` still answers general knowledge poorly (abstained on "who wrote
+  romeo and juliet"); `3b` is better but 6-8 s under a live frame stream.
