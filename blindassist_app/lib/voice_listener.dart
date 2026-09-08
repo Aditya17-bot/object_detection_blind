@@ -182,6 +182,39 @@ class VoiceListener {
     return service;
   }
 
+  /// True when the microphone has been switched off deliberately.
+  bool get paused => _paused;
+  bool _paused = false;
+
+  /// Release the microphone entirely, or take it back.
+  ///
+  /// A real stop, not a flag that drops results: the recognizer is
+  /// grammar-constrained, so it cannot stay silent — it force-matches ambient
+  /// sound onto a trained phrase, which on 2026-09-09 turned room noise into
+  /// `find the refrigerator`. In a room full of talking the only honest answer
+  /// is to stop listening, and a switch labelled "microphone off" that kept
+  /// the microphone open would be a false statement about a privacy-relevant
+  /// thing.
+  ///
+  /// The stop/re-init path is the same one [dictate] uses, which has run on
+  /// hardware. If the re-init fails, [error] is set and the caller says so:
+  /// silently failing to listen is indistinguishable from listening.
+  Future<void> setListening(bool on) async {
+    if (on == !_paused) return;
+    if (!on) {
+      _paused = true;
+      await _stopService();
+      return;
+    }
+    _paused = false;
+    try {
+      await _startCommandService();
+      error = null;
+    } catch (e) {
+      error = '\$e';
+    }
+  }
+
   /// Tear down whatever currently owns the microphone. Safe to call twice.
   Future<void> _stopService() async {
     await _sub?.cancel();

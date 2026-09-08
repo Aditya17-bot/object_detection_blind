@@ -58,13 +58,17 @@ void main() {
   });
 
   group('custom model classes', () {
-    test('door/dustbin are obstacles with thresholds', () {
-      for (final name in ['door', 'dustbin']) {
-        expect(obstacleClasses, contains(name));
-      }
+    test('door is an obstacle with thresholds', () {
+      expect(obstacleClasses, contains('door'));
     });
     test('stairs skipped until retrained', () {
       expect(targetClasses, isNot(contains('stairs')));
+    });
+    test('dustbin disabled until the head is retrained', () {
+      // user decision 2026-09-09, same precedent as stairs: the custom
+      // model's dustbin head fired at 0.81 on a suitcase
+      expect(obstacleClasses, isNot(contains('dustbin')));
+      expect(targetClasses, isNot(contains('dustbin')));
     });
     test('door proximity sane', () {
       expect(proximityBucket('door', 0.50), 'very close');

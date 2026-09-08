@@ -20,7 +20,6 @@
       "cup",
       "dining table",
       "door",
-      "dustbin",
       "laptop",
       "laundry basket",
       "person",
@@ -188,6 +187,17 @@
       ],
       "internal": false,
       "name": "guidance",
+      "required": false
+    },
+    {
+      "arg": "onoff",
+      "examples": [
+        "microphone off",
+        "microphone on",
+        "stop listening"
+      ],
+      "internal": false,
+      "name": "listen",
       "required": false
     },
     {

@@ -68,12 +68,21 @@ class TestProximity(unittest.TestCase):
 
 class TestCustomModelClasses(unittest.TestCase):
     def test_custom_classes_are_obstacles_with_thresholds(self):
-        # door/dustbin come from door_dustbin_stairs.pt, not COCO — they
-        # must be first-class citizens of the position logic
+        # `door` comes from door_dustbin_stairs.pt, not COCO — it must be a
+        # first-class citizen of the position logic
         from position import OBSTACLE_CLASSES, _AREA_THRESHOLDS
-        for name in ("door", "dustbin"):
-            self.assertIn(name, OBSTACLE_CLASSES)
-            self.assertIn(name, _AREA_THRESHOLDS)
+        self.assertIn("door", OBSTACLE_CLASSES)
+        self.assertIn("door", _AREA_THRESHOLDS)
+
+    def test_dustbin_disabled_until_the_head_is_retrained(self):
+        # User decision 2026-09-09, same precedent as stairs: the custom
+        # model's dustbin head fired at 0.81 on a suitcase, so a confident
+        # WRONG noun was spoken for an object that also had a right one.
+        from position import (OBSTACLE_CLASSES, TARGET_CLASSES,
+                              _AREA_THRESHOLDS, _REAL_HEIGHTS)
+        for table in (OBSTACLE_CLASSES, TARGET_CLASSES, _AREA_THRESHOLDS,
+                      _REAL_HEIGHTS):
+            self.assertNotIn("dustbin", table)
 
     def test_stairs_skipped_until_retrained(self):
         # user decision 2026-07-11: stairs class recall too low (0.072) +

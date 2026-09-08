@@ -2,9 +2,10 @@
 
 import unittest
 
-from decision import (GuidanceEngine, check_direction, clear_path,
-                      count_message, find_message, find_target, pick_obstacle,
-                      recall_message, summarize_scene, walk_message)
+from decision import (TRUSTED_NAME_CLASSES, GuidanceEngine, check_direction,
+                      clear_path, count_message, find_message, find_target,
+                      pick_obstacle, recall_message, summarize_scene,
+                      walk_message)
 from position import ObjectInfo, analyze_box, direction_phrase
 
 _CENTER_X = {"left": 0.15, "center": 0.5, "right": 0.85}
@@ -90,12 +91,13 @@ class TestWalkMessage(unittest.TestCase):
                          "Chair on right, close")
 
     def test_custom_model_classes_named_below_threshold(self):
-        # door/dustbin come from the DEDICATED model (no COCO lookalike), so
-        # they keep their name even at 0.5 conf — never spoken as "obstacle".
+        # `door` comes from the DEDICATED model (no COCO lookalike), so it
+        # keeps its name even at 0.5 conf — never spoken as "obstacle".
+        # `dustbin` was in this set until 2026-09-09; it left with the class,
+        # because a name is only trusted while the model producing it is.
         self.assertEqual(walk_message(info("door", "center", conf=0.5)),
                          "Door ahead, close")
-        self.assertEqual(walk_message(info("dustbin", "left", conf=0.55)),
-                         "Dustbin on left, close")
+        self.assertNotIn("dustbin", TRUSTED_NAME_CLASSES)
 
 
 class TestEngineWalk(unittest.TestCase):
@@ -607,6 +609,61 @@ class TestTrustedName(unittest.TestCase):
         """A caller that forgets the flag gets the old, safe behaviour."""
         info = analyze_box("wardrobe", 0.72, 0, 0, 100, 100, 1000, 1000)
         self.assertFalse(info.trusted_name)
+
+
+class FindTimeoutTest(unittest.TestCase):
+    """A search that never sees its target gives up.
+
+    2026-09-09: room noise reached the grammar as "find the refrigerator", and
+    the app then announced "still looking for refrigerator" every 10 s. The
+    mis-hear cannot be caught by content — three words, one capability, one
+    object, identical in shape to a real request — so what is bounded is its
+    PERSISTENCE. It also releases a real user who has walked away from what
+    they were looking for.
+    """
+
+    def test_a_search_that_sees_nothing_expires(self):
+        engine = GuidanceEngine(find_timeout=40.0)
+        engine.set_mode("find", "refrigerator")
+        said, t = [], 0.0
+        while t < 45:
+            msg = engine.update([], t)
+            if msg:
+                said.append(msg)
+            t += 0.5
+        self.assertIn("Stopped looking for refrigerator", said)
+        self.assertEqual(engine.mode, "walk")
+
+    def test_a_search_that_has_seen_the_target_never_expires(self):
+        """Once sighted, the search is evidently real — and losing the object
+        again is exactly the case the reminders exist for."""
+        engine = GuidanceEngine(find_timeout=10.0)
+        engine.set_mode("find", "chair")
+        seen = [info("chair", "center")]
+        # one real sighting, which also ends the search by announcing it
+        engine.update(seen, 0.0)
+        # ask again, then never show it: the reminders must keep coming
+        engine.set_mode("find", "chair")
+        engine.update(seen, 1.0)
+        said, t = [], 2.0
+        while t < 40:
+            msg = engine.update([], t)
+            if msg:
+                said.append(msg)
+            t += 0.5
+        self.assertNotIn("Stopped looking for chair", said)
+
+    def test_zero_disables_the_timeout(self):
+        engine = GuidanceEngine(find_timeout=0)
+        engine.set_mode("find", "bottle")
+        said, t = [], 0.0
+        while t < 120:
+            msg = engine.update([], t)
+            if msg:
+                said.append(msg)
+            t += 0.5
+        self.assertFalse([m for m in said if m.startswith("Stopped")])
+        self.assertEqual(engine.mode, "find")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,15 @@ OBSTACLE_CLASSES = {
     "person", "chair", "couch", "bed", "dining table", "bench",
     "toilet", "sink", "refrigerator", "tv", "potted plant",
     "suitcase", "backpack",
-    "door", "dustbin",
+    "door",
+    # "dustbin" is DISABLED (user decision 2026-09-09) — same precedent as
+    # "stairs". The custom model's dustbin head is its weak one: it fires at
+    # 0.81 on the user's suitcase (2026-09-05 device log, one frame carrying
+    # suitcase@0.91 backpack@0.70 dustbin@0.81 dustbin@0.70 dustbin@0.46), so
+    # a confident wrong noun was being spoken for an object walk mode also had
+    # a correct word for. Re-enable by listing it here and in _AREA_THRESHOLDS
+    # / _REAL_HEIGHTS, restoring it to decision.TRUSTED_NAME_CLASSES and to
+    # infer_server._CUSTOM_FLOOR, and un-commenting the voice synonyms.
     # "wardrobe" is not a COCO class and no model detects it: it exists so the
     # embedding naming head (name_index.py) has a correct word to replace the
     # forced COCO choice with. YOLO calls the user's white wardrobe
@@ -74,7 +82,7 @@ _AREA_THRESHOLDS = {
     # custom-model classes (door fills the frame like furniture;
     # dustbin is suitcase-sized)
     "door":         (0.40, 0.20, 0.08),
-    "dustbin":      (0.25, 0.10, 0.03),
+    # "dustbin": (0.25, 0.10, 0.03),   # disabled — see OBSTACLE_CLASSES
     # namer-only classes (no detector emits these; name_index.py assigns them)
     "wardrobe":     (0.40, 0.20, 0.08),   # bulk of a refrigerator
     "window":       (0.30, 0.12, 0.04),   # wall-mounted, tv-like footprint
@@ -108,7 +116,7 @@ _REAL_HEIGHTS = {
     "person": 1.7, "chair": 0.9, "couch": 0.8, "dining table": 0.75,
     "bench": 0.85, "toilet": 0.7, "sink": 0.85, "refrigerator": 1.7,
     "tv": 0.6, "potted plant": 0.6, "suitcase": 0.7, "backpack": 0.5,
-    "door": 2.0, "dustbin": 0.6, "wardrobe": 2.0, "window": 1.2,
+    "door": 2.0, "wardrobe": 2.0, "window": 1.2,   # dustbin disabled
     "laundry basket": 0.85,
     "bottle": 0.25, "cup": 0.1,
     "laptop": 0.20, "book": 0.24, "cell phone": 0.14, "toothbrush": 0.19,

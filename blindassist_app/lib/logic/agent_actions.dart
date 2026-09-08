@@ -95,6 +95,13 @@ const List<ToolSpec> kTools = [
   ToolSpec('guidance',
       arg: 'onoff',
       examples: ['guidance off', 'guidance on', 'quiet mode']),
+  // The microphone itself: a grammar-constrained recognizer cannot stay
+  // silent, so in a room full of talking the only reliable answer is to stop
+  // listening. Switching it OFF names a non-voice way back, because the way
+  // back cannot be spoken.
+  ToolSpec('listen',
+      arg: 'onoff',
+      examples: ['microphone off', 'microphone on', 'stop listening']),
   ToolSpec('clock', examples: ['clock mode']),
   ToolSpec('zones', examples: ['zone mode']),
   ToolSpec('sonar', arg: 'onoff', examples: ['sonar', 'sonar on', 'sonar off']),

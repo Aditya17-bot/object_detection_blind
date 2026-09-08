@@ -37,8 +37,13 @@ const Map<String, String> _blurbs = {
       'Earphones recommended.',
   'guidance': 'Switches the running walk commentary off — warnings, beeps '
       'and buzzes — while leaving everything you ask for working. For a '
-      'demonstration or a conversation. Three taps on the camera view does '
+      'demonstration or a conversation. The button on the camera view does '
       'the same. Resets to on when the app restarts.',
+  'listen': 'Switches the microphone off. In a room where people are talking '
+      'the recognizer mishears conversation as commands, because it can only '
+      'ever answer with a phrase it was trained on. This card is the only way '
+      'back — nothing is listening for "microphone on". Resets to on when the '
+      'app restarts.',
   'mute': 'Silence the voice, or bring it back.',
   'stop': 'Cut off whatever is being said right now.',
   'repeat': 'Say the last announcement again.',
@@ -58,6 +63,7 @@ class FeaturesPage extends StatefulWidget {
     this.agentReady = false,
     this.muted = false,
     this.guidanceOn = true,
+    this.micOn = true,
   });
 
   /// Runs a capability on the assistant screen. Same dispatcher the voice
@@ -76,6 +82,10 @@ class FeaturesPage extends StatefulWidget {
   /// Whether the continuous walk warnings are running. Shown on the card so
   /// the switch reads as a state, not as a button that might do either.
   final bool guidanceOn;
+
+  /// Whether the microphone is on. The card is the ONLY way back once it is
+  /// off — nothing is listening for "microphone on".
+  final bool micOn;
   final bool muted;
 
   @override
@@ -296,7 +306,8 @@ class _FeaturesPageState extends State<FeaturesPage> {
     final tappable = spec.arg == null ||
         spec.name == 'sonar' ||
         spec.name == 'mute' ||
-        spec.name == 'guidance';
+        spec.name == 'guidance' ||
+        spec.name == 'listen';
     return _card(
       onTap: !tappable
           ? null
@@ -307,6 +318,7 @@ class _FeaturesPageState extends State<FeaturesPage> {
                 // an explicit argument, never a toggle: the card says which
                 // way it will go, so it has to go that way
                 'guidance' => widget.guidanceOn ? 'off' : 'on',
+                'listen' => widget.micOn ? 'off' : 'on',
                 _ => null,
               }),
       child: Column(

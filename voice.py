@@ -287,6 +287,16 @@ def parse_command(text):
     words = text.lower().split()
     if not words:
         return None
+    # The microphone, FIRST of all: "stop listening" contains "stop", and the
+    # bare-stop rule below would claim it. Nothing else in the grammar uses
+    # these words, so nothing is stolen by checking them early.
+    if "microphone" in words or "listening" in words or "listen" in words:
+        if ("off" in words or "stop" in words or "pause" in words
+                or "quiet" in words):
+            return ("listen", "off")
+        if "on" in words or "start" in words or "resume" in words:
+            return ("listen", "on")
+        return ("listen", None)
     # "stop walk mode" / "stop the guidance" is a request to switch the
     # continuous warnings OFF, not to cut the current sentence — and it is what
     # a user reaches for first, so it is checked BEFORE the bare "stop". The

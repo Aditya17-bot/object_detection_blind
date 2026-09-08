@@ -107,6 +107,11 @@ class AssistantEngine:
         self._hooks = agent.Hooks(
             set_sonar=self._set_sonar,
             set_guidance=self._set_guidance,
+            # The web UI's recognizer has no pause: switching the microphone
+            # off is a handset control (a phone in a room full of talking).
+            # Left unwired ON PURPOSE — the executor then says so out loud
+            # rather than appearing to work.
+            set_listening=None,
             set_mute=lambda on: setattr(self, "muted", on),
             stop=lambda: self._speaker and self._speaker.stop(),
             repeat=lambda: self._last_spoken,

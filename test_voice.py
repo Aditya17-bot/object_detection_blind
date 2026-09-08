@@ -2,6 +2,7 @@
 
 import unittest
 
+import agent
 import voice
 from voice import grammar_phrases, parse_command
 
@@ -80,6 +81,9 @@ class TestParseCommand(unittest.TestCase):
         self.assertEqual(parse_command("find bottles"), ("find", "bottle"))
 
     def test_direction_queries(self):
+        # NOTE: the field utterances that named `dustbin` are written here with
+        # another class — dustbin left the class list on 2026-09-09, so the
+        # originals now name only one object and no longer test this floor.
         for text in ("is there anything in front of me", "what is ahead",
                      "anything in front of me", "check ahead"):
             self.assertEqual(parse_command(text), ("check", "ahead"), text)
@@ -184,6 +188,47 @@ class GuidanceSwitchTest(unittest.TestCase):
             self.assertEqual(voice.parse_command(text), expected, text)
 
 
+class MicrophoneSwitchTest(unittest.TestCase):
+    """Switching the microphone off (2026-09-09).
+
+    A grammar-constrained recognizer cannot stay silent: it force-matches
+    ambient sound onto a trained phrase, which is how room noise became
+    `find the refrigerator`. In a room where people are talking, the only
+    reliable answer is to stop listening.
+    """
+
+    def test_the_spoken_forms(self):
+        for text, expected in (("microphone off", ("listen", "off")),
+                               ("microphone on", ("listen", "on")),
+                               ("stop listening", ("listen", "off")),
+                               ("start listening", ("listen", "on")),
+                               ("listen", ("listen", None))):
+            self.assertEqual(voice.parse_command(text), expected, text)
+
+    def test_stop_listening_is_not_read_as_a_bare_stop(self):
+        # "stop listening" contains "stop"; the microphone rule runs first
+        self.assertEqual(voice.parse_command("stop listening"),
+                         ("listen", "off"))
+        self.assertEqual(voice.parse_command("stop"), ("stop", None))
+
+    def test_switching_off_names_a_route_that_does_not_need_the_microphone(self):
+        """The way back cannot be SPOKEN — nothing is listening for it. The
+        confirmation therefore has to name a touch route, or a user who cannot
+        see the screen has switched off their only input and been told
+        nothing. Same lesson as the unmute phrasings, one step worse."""
+        import agent
+        spoken = agent.execute_action(
+            agent.Action("listen", "off"), None, [], 0.0,
+            agent.Hooks(set_listening=lambda on: None))
+        self.assertIn("swipe up", spoken.lower())
+        self.assertIn("listen", spoken.lower())
+
+    def test_an_unwired_host_says_so_rather_than_pretending(self):
+        spoken = agent.execute_action(
+            agent.Action("listen", "off"), None, [], 0.0, agent.Hooks())
+        self.assertEqual(spoken, agent.ASK_TEMPLATES["unsupported"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -193,12 +238,12 @@ class GrammarForcedNoiseTest(unittest.TestCase):
     recognizer from sound the user did not intend as a command, and every one
     arrived with ZERO `[unk]` tokens — words forced onto the grammar are not
     unplaceable, so the unknown-ratio floor cannot see them. One of them
-    ("cupboard find dustbin") started a search for an object nobody named,
+    ("cupboard find toilet") started a search for an object nobody named,
     which is the "why does it randomly find something" report."""
 
     FIELD_NOISE = (
-        "cupboard find dustbin",
-        "find dustbin toilets",
+        "cupboard find toilet",
+        "find suitcase toilets",
         "mobile photo person on anything on my left dining the",
     )
 
@@ -221,10 +266,13 @@ class GrammarForcedNoiseTest(unittest.TestCase):
         self.assertNotIn("cup", voice.named_classes("cupboard"))
 
     def test_find_takes_the_first_object_named(self):
-        """"find dustbin toilets" resolved to `toilet` under longest-anywhere:
-        neither what was said nor the first thing the sentence names."""
-        self.assertEqual(voice.parse_command("find dustbin toilets"),
-                         ("find", "dustbin"))
+        """"find suitcase toilets" resolved to `toilet` under longest-anywhere:
+        neither what was said nor the first thing the sentence names.
+
+        (The field utterance was "find dustbin toilets"; dustbin left the class
+        list on 2026-09-09, so the same shape is tested with another class.)"""
+        self.assertEqual(voice.parse_command("find suitcase toilets"),
+                         ("find", "suitcase"))
         self.assertEqual(voice.parse_command("find bottle chair"),
                          ("find", "bottle"))
         # length still breaks ties at the same position
@@ -243,7 +291,7 @@ class OneRequestFloorTest(unittest.TestCase):
         ("the clock summary", "describe"),
         ("the clock mans light left", "clock"),
         ("the many where of me is there read walk", "read"),
-        ("cupboard find dustbin", "find"),
+        ("cupboard find toilet", "find"),
         ("do laptops ahead laptop on my left bottle on here right", None),
         ("scene mobile is toilet window", "describe"),
         ("clock many toilet door toilet summarize", "clock"),

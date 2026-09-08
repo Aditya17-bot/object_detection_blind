@@ -54,7 +54,7 @@ ROUTINE = 0     # walk warnings, find position updates — droppable by design
 # how an assistive device becomes frightening. Never blocked when the user
 # actually said them.
 STEERING = frozenset({"walk", "find", "stop", "mute", "sonar", "guidance",
-                      "clock", "zones", "repeat", "ask"})
+                      "listen", "clock", "zones", "repeat", "ask"})
 
 # Commands that produce a spoken read-out and nothing else. These are the
 # "cluster" the user reported: individually correct, collectively noise. They

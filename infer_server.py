@@ -49,6 +49,9 @@ CUSTOM_CONF = 0.4
 # the user knows is a suitcase. The confident false positive at 0.81 survives
 # this and is a NAMING problem, not a threshold one; only labelled crops of
 # this room fix that.
+# dustbin is disabled in position.OBSTACLE_CLASSES (2026-09-09), so its
+# detections are filtered out downstream; the floor is kept for the day it
+# comes back.
 _CUSTOM_FLOOR = {"door": 0.4, "dustbin": 0.6}
 
 # Android sensorOrientation -> cv2 rotation. Derived to MATCH detector.dart's

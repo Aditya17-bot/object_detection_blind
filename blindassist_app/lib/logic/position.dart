@@ -15,7 +15,11 @@ const Set<String> obstacleClasses = {
   'person', 'chair', 'couch', 'bed', 'dining table', 'bench',
   'toilet', 'sink', 'refrigerator', 'tv', 'potted plant',
   'suitcase', 'backpack',
-  'door', 'dustbin',
+  'door',
+  // 'dustbin' is DISABLED (2026-09-09) — the custom model's dustbin head fires
+  // at 0.81 on the user's suitcase. Same precedent as 'stairs'. Mirror of
+  // position.py; re-enable in both.
+
   // 'wardrobe' is not a COCO class and no model detects it: it exists so the
   // server's embedding naming head can replace YOLO's forced choice
   // ('refrigerator' at 0.84 for the user's white wardrobe) with the right word.
@@ -62,7 +66,7 @@ const Map<String, List<double>> _areaThresholds = {
   'potted plant': [0.20, 0.08, 0.025],
   // custom-model classes
   'door':         [0.40, 0.20, 0.08],
-  'dustbin':      [0.25, 0.10, 0.03],
+  // 'dustbin': [0.25, 0.10, 0.03],   // disabled — see obstacleClasses
   // namer-only classes (no detector emits these; the server's index assigns
   // them, and RemoteDetector passes server names through verbatim)
   'wardrobe':     [0.40, 0.20, 0.08],
@@ -95,7 +99,7 @@ const Map<String, double> _realHeights = {
   'person': 1.7, 'chair': 0.9, 'couch': 0.8, 'dining table': 0.75,
   'bench': 0.85, 'toilet': 0.7, 'sink': 0.85, 'refrigerator': 1.7,
   'tv': 0.6, 'potted plant': 0.6, 'suitcase': 0.7, 'backpack': 0.5,
-  'door': 2.0, 'dustbin': 0.6, 'wardrobe': 2.0, 'window': 1.2,
+  'door': 2.0, 'wardrobe': 2.0, 'window': 1.2, // dustbin disabled
   'laundry basket': 0.85,
   'bottle': 0.25, 'cup': 0.1,
   'laptop': 0.20, 'book': 0.24, 'cell phone': 0.14, 'toothbrush': 0.19,

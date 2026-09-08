@@ -1,11 +1,12 @@
-// Switching the continuous walk warnings off as a whole (2026-09-09), plus
-// the tap counting that gives the camera view a third gesture.
+// Switching the continuous walk warnings off, switching the microphone off,
+// and the find timeout that bounds a mis-heard search (all 2026-09-09).
 //
-// Mirror of the Python GuidanceSwitchTest; the tap half has no Python
-// equivalent because the desktop UI has no such gesture.
+// Mirror of the Python GuidanceSwitchTest / MicrophoneSwitchTest /
+// FindTimeoutTest.
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:blindassist/logic/multi_tap.dart';
+import 'package:blindassist/logic/decision.dart';
+import 'package:blindassist/logic/position.dart';
 import 'package:blindassist/logic/speech_policy.dart';
 import 'package:blindassist/logic/voice_commands.dart';
 
@@ -57,38 +58,64 @@ void main() {
     });
   });
 
-  group('multi-tap', () {
-    test('counts a burst, then starts over after the window', () {
-      final taps = MultiTap(window: 0.45);
-      expect(taps.tap(0.0), 1);
-      expect(taps.tap(0.2), 2);
-      expect(taps.tap(0.4), 3);
-      expect(taps.tap(1.5), 1); // new burst
+  group('microphone switch', () {
+    test('the spoken forms', () {
+      for (final c in [
+        ('microphone off', 'off'),
+        ('microphone on', 'on'),
+        ('stop listening', 'off'),
+        ('start listening', 'on'),
+      ]) {
+        final parsed = parseCommand(c.$1);
+        expect(parsed?.action, 'listen', reason: c.$1);
+        expect(parsed?.target, c.$2, reason: c.$1);
+      }
+      expect(parseCommand('listen')?.target, isNull);
     });
 
-    test('settles only after the window has passed', () {
-      final taps = MultiTap(window: 0.45);
-      taps.tap(0.0);
-      expect(taps.settled(0.3), isFalse);
-      expect(taps.settled(0.5), isTrue);
+    test('"stop listening" is not read as a bare stop', () {
+      expect(parseCommand('stop listening')?.action, 'listen');
+      expect(parseCommand('stop')?.action, 'stop');
     });
 
-    test('one describes, two toggle sonar, three switch guidance', () {
-      expect(tapAction(1), 'describe');
-      expect(tapAction(2), 'sonar');
-      expect(tapAction(3), 'guidance');
-      // a fumbled fourth tap must not fall through to something else
-      expect(tapAction(4), 'guidance');
-      expect(tapAction(0), isNull);
-    });
-
-    test('reset clears the burst', () {
-      final taps = MultiTap();
-      taps.tap(0.0);
-      taps.tap(0.1);
-      taps.reset();
-      expect(taps.count, 0);
-      expect(taps.tap(0.2), 1);
+    test('it steals nothing', () {
+      expect(parseCommand('stop walk mode')?.action, 'guidance');
+      expect(parseCommand('find the door')?.target, 'door');
+      expect(parseCommand('mute')?.action, 'mute');
     });
   });
+
+  group('find timeout', () {
+    test('a search that sees nothing gives up and returns to walk', () {
+      // room noise reached the grammar as "find the refrigerator" on
+      // 2026-09-09 and the app reminded the user about it every 10 s
+      final engine = GuidanceEngine(findTimeout: 40);
+      engine.setMode('find', 'refrigerator');
+      final said = <String>[];
+      for (var t = 0.0; t < 45; t += 0.5) {
+        final msg = engine.update(const [], t);
+        if (msg != null) said.add(msg);
+      }
+      expect(said, contains('Stopped looking for refrigerator'));
+      expect(engine.mode, 'walk');
+    });
+
+    test('a search that has seen its target never expires', () {
+      final engine = GuidanceEngine(findTimeout: 10);
+      final seen = [_chair()];
+      engine.setMode('find', 'chair');
+      engine.update(seen, 0.0); // announced, auto-returns to walk
+      engine.setMode('find', 'chair');
+      engine.update(seen, 1.0);
+      final said = <String>[];
+      for (var t = 2.0; t < 40; t += 0.5) {
+        final msg = engine.update(const [], t);
+        if (msg != null) said.add(msg);
+      }
+      expect(said.where((m) => m.startsWith('Stopped')), isEmpty);
+    });
+  });
+
 }
+
+ObjectInfo _chair() => analyzeBox('chair', 0.9, 0.4, 0.4, 0.6, 0.9, 1, 1);

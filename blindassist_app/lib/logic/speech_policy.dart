@@ -31,8 +31,8 @@ const int kRoutine = 0; // walk warnings, find updates — droppable by design
 /// them: being unable to interrupt is how an assistive device becomes
 /// frightening.
 const Set<String> kSteering = {
-  'walk', 'find', 'stop', 'mute', 'sonar', 'guidance', 'clock', 'zones',
-  'repeat', 'ask',
+  'walk', 'find', 'stop', 'mute', 'sonar', 'guidance', 'listen', 'clock',
+  'zones', 'repeat', 'ask',
 };
 
 /// Commands that produce a spoken read-out and nothing else — the "cluster"

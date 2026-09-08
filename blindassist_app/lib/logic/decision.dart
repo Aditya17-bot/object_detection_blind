@@ -441,6 +441,22 @@ class GuidanceEngine {
   final double missDecay;
 
   final double reminderInterval; // s between "still looking" reminders
+
+  /// A search that has never once seen its target gives up after this long.
+  ///
+  /// Two reasons, and the second is the one that matters. A real user who has
+  /// walked away from what they were looking for should not be reminded about
+  /// it forever — and a grammar-constrained recognizer cannot report "I did
+  /// not understand": it force-matches ambient sound onto a trained phrase,
+  /// and `find the <class>` is a trained phrase. On 2026-09-09 room noise
+  /// became `find refrigerator` and the app announced "still looking for
+  /// refrigerator" every 10 s. The mis-hear itself cannot be prevented — by
+  /// content it is identical to a real request — but its PERSISTENCE can.
+  ///
+  /// Only a search that has seen NOTHING expires: once the target has been
+  /// sighted the search is evidently real, and losing it again is exactly the
+  /// case the reminders exist for.
+  final double findTimeout;
   final double memoryTtl;      // s before a sighting goes stale
 
   bool useClock;               // clock bearings vs left/center/right
@@ -453,6 +469,8 @@ class GuidanceEngine {
   String? _lastObstacleName; // of last walk warning
   int? _lastObstacleRank;
   double? _absentSince;      // find mode: when the target went missing
+  double? _findStarted;      // when the current search began
+  bool _findSeen = false;    // has the target been sighted in it at all
   bool _saidNotVisible = false;
   double? _notVisibleTime;   // when "not visible"/reminder last said
 
@@ -471,6 +489,7 @@ class GuidanceEngine {
     this.absenceGrace = 2.5,
     this.missDecay = 0.5,
     this.reminderInterval = 10.0,
+    this.findTimeout = 40.0,
     this.memoryTtl = 30.0,
     this.useClock = true,
   }) {
@@ -497,6 +516,8 @@ class GuidanceEngine {
     _absentSince = null;
     _saidNotVisible = false;
     _notVisibleTime = null;
+    _findStarted = null;
+    _findSeen = false;
   }
 
   // -- helpers --------------------------------------------------------------
@@ -621,8 +642,17 @@ class GuidanceEngine {
   }
 
   String? _updateFind(List<ObjectInfo> infos, double now) {
+    _findStarted ??= now;
     final match = findTarget(infos, target!);
     if (match == null) {
+      // A search that has never seen its target expires. See findTimeout for
+      // why: it bounds a mis-heard request, which the input layer cannot
+      // detect, and releases a user who has moved on.
+      if (!_findSeen && findTimeout > 0 && now - _findStarted! >= findTimeout) {
+        final gone = target;
+        setMode('walk');
+        return _speak(_cap('stopped looking for $gone'), now);
+      }
       _absentSince ??= now;
       // Not "gone" until it has been continuously missing for a while. One
       // dropped frame - or one flicker in the detector - is not evidence of
@@ -656,6 +686,7 @@ class GuidanceEngine {
       return _speak(msg, now);
     }
     _absentSince = null;
+    _findSeen = true;          // a real sighting: the search never expires
     if ((_streaks[target!] ?? 0) < findPersistence) return null;
     _saidNotVisible = false;
     final msg = findMessage(match, target!, useClock);

@@ -155,6 +155,25 @@ VoiceCommand? parseCommand(String text) {
   final words = text.toLowerCase().split(RegExp(r'\s+'))
     ..removeWhere((w) => w.isEmpty);
   if (words.isEmpty) return null;
+  // The microphone, FIRST of all: "stop listening" contains "stop", and the
+  // bare-stop rule below would claim it. Nothing else in the grammar uses
+  // these words, so nothing is stolen by checking them early.
+  if (words.contains('microphone') ||
+      words.contains('listening') ||
+      words.contains('listen')) {
+    if (words.contains('off') ||
+        words.contains('stop') ||
+        words.contains('pause') ||
+        words.contains('quiet')) {
+      return (action: 'listen', target: 'off');
+    }
+    if (words.contains('on') ||
+        words.contains('start') ||
+        words.contains('resume')) {
+      return (action: 'listen', target: 'on');
+    }
+    return (action: 'listen', target: null);
+  }
   // "stop walk mode" / "stop the guidance" switches the continuous warnings
   // OFF; it is not a request to cut the current sentence, and it is what a
   // user reaches for first. The conjunction keeps bare "stop" instant.

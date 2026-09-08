@@ -31,7 +31,6 @@ import 'logic/colour_naming.dart';
 import 'logic/decision.dart';
 import 'logic/object_memory.dart';
 import 'logic/position.dart';
-import 'logic/multi_tap.dart';
 import 'logic/speech_policy.dart';
 import 'logic/voice_commands.dart';
 import 'ocr.dart';
@@ -751,6 +750,9 @@ class _AssistantScreenState extends State<AssistantScreen>
         _say(_banner, kResponse, 'repeat');
       case 'guidance':
         _setGuidance(command.target == null ? null : command.target == 'on');
+      case 'listen':
+        unawaited(_setListening(
+            command.target == null ? null : command.target == 'on'));
       case 'sonar':
         if (command.target == 'on') {
           if (!_sonar.enabled) _toggleSonar();
@@ -1081,28 +1083,36 @@ class _AssistantScreenState extends State<AssistantScreen>
     _say(summary, kResponse, 'describe');
   }
 
-  // --- tap gestures -------------------------------------------------------
-  // One surface, three actions. The burst is counted and dispatched once it
-  // has settled, because onTap + onDoubleTap cannot see a third tap: a triple
-  // tap reaches them as a double plus a single and would run two capabilities.
-  final MultiTap _taps = MultiTap();
-  Timer? _tapTimer;
+  // --- the microphone -------------------------------------------------------
+  // A grammar-constrained recognizer cannot report "I did not understand": it
+  // returns its best match over the trained phrases for ANY audio. On
+  // 2026-09-09 room noise arrived as "find the refrigerator" and the app went
+  // looking for one. That mis-hear is not detectable by content — it is
+  // three words, one capability, one object, exactly like a real request — so
+  // in a room full of talking the only reliable answer is to stop listening.
+  //
+  // Not persisted, like the guidance switch: an app that starts deaf because
+  // of yesterday's setting is worse than one that starts noisy.
+  bool _micOn = true;
 
-  void _onTap() {
-    final count = _taps.tap(_now());
-    _tapTimer?.cancel();
-    _tapTimer = Timer(
-        Duration(milliseconds: (kMultiTapWindow * 1000).round() + 20), () {
-      _taps.reset();
-      switch (tapAction(count)) {
-        case 'describe':
-          _describe();
-        case 'sonar':
-          _toggleSonar();
-        case 'guidance':
-          _setGuidance(null);
-      }
-    });
+  Future<void> _setListening(bool? on) async {
+    final next = on ?? !_micOn;
+    if (next == _micOn) return;
+    setState(() => _micOn = next);
+    if (!next) {
+      // Said BEFORE the microphone goes, and it names a route that does not
+      // need the microphone — this is the one control whose way back cannot
+      // be spoken.
+      _say('Microphone off. Swipe up and tap listen to turn it back on.',
+          kResponse, 'listen');
+    }
+    await _voice.setListening(next);
+    if (!mounted) return;
+    setState(() => _voiceActive = _voice.active);
+    if (next) {
+      _say(_voice.error == null ? 'Microphone on' : 'Voice commands unavailable',
+          kResponse, 'listen');
+    }
   }
 
   // --- continuous guidance on/off ------------------------------------------
@@ -1126,7 +1136,7 @@ class _AssistantScreenState extends State<AssistantScreen>
       // The way back is spoken with the switch-off, for the same reason the
       // mute confirmations exist: a user who cannot see the screen has no
       // other way to discover that the warnings stopped on purpose.
-      _say('Walk guidance off. Say guidance on, or tap three times, to '
+      _say('Walk guidance off. Say guidance on, or use the button, to '
           'restore it.', kResponse, 'guidance');
     } else {
       _say('Walk guidance on', kResponse, 'guidance');
@@ -1177,6 +1187,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => FeaturesPage(
         guidanceOn: _guidanceOn,
+        micOn: _micOn,
         onCommand: _dispatch,
         speaker: _speaker,
         onNameChanged: (name) async {
@@ -1195,7 +1206,6 @@ class _AssistantScreenState extends State<AssistantScreen>
 
   @override
   void dispose() {
-    _tapTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
     _camera?.dispose();
@@ -1241,11 +1251,8 @@ class _AssistantScreenState extends State<AssistantScreen>
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          // One tap describes, two toggle the beeps, three switch the
-          // continuous warnings off or on. Counted rather than handled by
-          // onTap/onDoubleTap, which cannot see a third tap — see
-          // logic/multi_tap.dart.
-          onTap: _onTap,
+          onTap: _describe,
+          onDoubleTap: _toggleSonar,
           onLongPress: () => _speaker.say(_banner, onDemand: true),
           // Swipe up replaces the control row: the features page is sighted
           // chrome (demo, setup, learning the phrases), so it gets a gesture
@@ -1275,6 +1282,8 @@ class _AssistantScreenState extends State<AssistantScreen>
                       children: [
                         _announcementCard(),
                         const SizedBox(height: 12),
+                        _guidanceButton(),
+                        const SizedBox(height: 12),
                         _swipeHint(),
                       ],
                     ),
@@ -1303,12 +1312,59 @@ class _AssistantScreenState extends State<AssistantScreen>
           children: [
             _modeChip(),
             const Spacer(),
+            if (!_micOn) _miniChip(Icons.mic_off, 'mic off'),
             if (!_guidanceOn) _miniChip(Icons.notifications_off, 'quiet'),
             if (_sonar.enabled) _miniChip(Icons.graphic_eq, 'sonar'),
             if (_speaker.muted) _miniChip(Icons.volume_off, 'muted'),
             _miniChip(_voiceActive ? Icons.mic : Icons.mic_off,
                 _fps.toStringAsFixed(1)),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// The one control back on the main screen (2026-09-09).
+  ///
+  /// The screen was deliberately stripped of buttons — a blind user cannot
+  /// find them and the gestures serve better. This one earned its place for
+  /// the opposite user: whoever is DEMONSTRATING the app, or the sighted
+  /// person helping, needs to stop the running commentary instantly and see
+  /// that it stopped. It was a triple tap first, and counting a tap burst
+  /// delayed every single tap by 450 ms, which made the whole surface feel
+  /// broken.
+  ///
+  /// Full width and tall on purpose: it is also the way back from a switch-off
+  /// that a user may have made by accident.
+  Widget _guidanceButton() {
+    final off = !_guidanceOn;
+    return Semantics(
+      button: true,
+      label: off ? 'Turn walk guidance on' : 'Turn walk guidance off',
+      child: SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: Material(
+          color: (off ? _accent : Colors.white).withValues(alpha: off ? 0.9 : 0.14),
+          borderRadius: BorderRadius.circular(16),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => _setGuidance(null),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(off ? Icons.notifications_off : Icons.notifications_active,
+                    size: 22,
+                    color: off ? Colors.black : Colors.white),
+                const SizedBox(width: 10),
+                Text(off ? 'Walk guidance OFF' : 'Walk guidance on',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: off ? Colors.black : Colors.white)),
+              ],
+            ),
+          ),
         ),
       ),
     );

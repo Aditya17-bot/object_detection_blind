@@ -118,8 +118,8 @@ void _multiObjectFloor() {
   group('two object names in one utterance is noise', () {
     test('field noise is rejected', () {
       for (final text in [
-        'cupboard find dustbin',
-        'find dustbin toilets',
+        'cupboard find toilet',
+        'find suitcase toilets',
         'mobile photo person on anything on my left dining the',
       ]) {
         expect(namesMultipleObjects(text), isTrue, reason: text);
@@ -153,7 +153,7 @@ void _multiObjectFloor() {
     });
 
     test('find takes the first object named', () {
-      expect(parseCommand('find dustbin toilets')?.target, 'dustbin');
+      expect(parseCommand('find suitcase toilets')?.target, 'suitcase');
       expect(parseCommand('find bottle chair')?.target, 'bottle');
       // length still breaks ties at the same position
       expect(parseCommand('find the cell phone')?.target, 'cell phone');
@@ -173,7 +173,7 @@ void _oneRequestFloor() {
         'the clock summary',
         'the clock mans light left',
         'the many where of me is there read walk',
-        'cupboard find dustbin',
+        'cupboard find toilet',
         'do laptops ahead laptop on my left bottle on here right',
         'scene mobile is toilet window',
         'clock many toilet door toilet summarize',

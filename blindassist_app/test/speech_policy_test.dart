@@ -223,8 +223,8 @@ void main() {
       // The two tables are hand-mirrored; a divergence would mean the phone
       // and the laptop disagree about what may interrupt what.
       expect(kSteering, {
-        'walk', 'find', 'stop', 'mute', 'sonar', 'guidance', 'clock', 'zones',
-        'repeat', 'ask',
+        'walk', 'find', 'stop', 'mute', 'sonar', 'guidance', 'listen',
+        'clock', 'zones', 'repeat', 'ask',
       });
       expect(kInformational, {
         'colour', 'light', 'summarise',

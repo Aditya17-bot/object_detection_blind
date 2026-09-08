@@ -54,7 +54,9 @@ NAME_CONFIDENCE = 0.8
 # no lookalike to confuse, so their name is always trustworthy and bypasses the
 # gate — otherwise a real door at 0.5-0.79 conf is spoken as generic "obstacle"
 # and the user thinks door detection failed.
-TRUSTED_NAME_CLASSES = {"door", "dustbin"}
+# "dustbin" left this set on 2026-09-09 with the class itself; a name is only
+# trusted while the model that produces it is.
+TRUSTED_NAME_CLASSES = {"door"}
 
 
 def _cap(text):
@@ -397,7 +399,8 @@ class GuidanceEngine:
                  repeat_cooldown=3.0, min_gap=1.5, persistence=2,
                  reminder_interval=10.0, use_clock=True, memory_ttl=30.0,
                  find_persistence=1, absence_grace=2.5, miss_decay=0.5,
-                 escalation_min_gap=0.8, name_conf_decay=0.05):
+                 escalation_min_gap=0.8, name_conf_decay=0.05,
+                 find_timeout=40.0):
         self.repeat_cooldown = repeat_cooldown  # s before repeating same message
         self.min_gap = min_gap                  # s between any two messages
         # Floor for an escalation, which is allowed to jump min_gap. See
@@ -440,6 +443,21 @@ class GuidanceEngine:
         # more likely by this.
         self.miss_decay = miss_decay
         self.reminder_interval = reminder_interval  # s between "still looking"
+        # A search that has never once seen its target gives up after this
+        # long. Two reasons, and the second is the one that matters:
+        #   * a real user who has walked away from the thing they were looking
+        #     for should not be reminded about it forever;
+        #   * a grammar-constrained recognizer cannot report "I did not
+        #     understand" — it force-matches ambient sound onto a trained
+        #     phrase, and "find the <class>" is a trained phrase. On
+        #     2026-09-09 room noise became `find refrigerator` and the app
+        #     then announced "still looking for refrigerator" every 10 s.
+        #     The mis-hear itself cannot be prevented (by content it is
+        #     identical to a real request); its PERSISTENCE can.
+        # Only a search that has seen NOTHING expires: once the target has been
+        # sighted the search is evidently real, and losing it again is exactly
+        # the case the reminders exist for.
+        self.find_timeout = find_timeout
         self.use_clock = use_clock              # clock bearings vs left/right
         self.memory_ttl = memory_ttl            # s before a sighting goes stale
         self._streaks = {}        # class name -> consecutive frames seen
@@ -448,6 +466,8 @@ class GuidanceEngine:
         self._last_time = None
         self._last_obstacle = None  # (name, prox rank) of last walk warning
         self._absent_since = None   # find mode: when the target went missing
+        self._find_started = None   # when the current search began
+        self._find_seen = False     # has the target been sighted in it at all
         self._said_not_visible = False
         self._not_visible_time = None  # when "not visible"/reminder last said
         self.set_mode(mode, target)
@@ -470,6 +490,8 @@ class GuidanceEngine:
         self._absent_since = None
         self._said_not_visible = False
         self._not_visible_time = None
+        self._find_started = None
+        self._find_seen = False
 
     # -- helpers ----------------------------------------------------------
 
@@ -583,8 +605,18 @@ class GuidanceEngine:
         return self._speak(msg, now)
 
     def _update_find(self, infos, now):
+        if self._find_started is None:
+            self._find_started = now
         match = find_target(infos, self.target)
         if match is None:
+            # A search that has never seen its target expires. See find_timeout
+            # for why: it bounds a mis-heard request, which the input layer
+            # cannot detect, and releases a user who has moved on.
+            if (not self._find_seen and self.find_timeout
+                    and now - self._find_started >= self.find_timeout):
+                target = self.target
+                self.set_mode("walk")
+                return self._speak(_cap(f"stopped looking for {target}"), now)
             if self._absent_since is None:
                 self._absent_since = now
             # Not "gone" until it has been continuously missing for a while.
@@ -620,6 +652,7 @@ class GuidanceEngine:
             self._not_visible_time = now
             return self._speak(msg, now)
         self._absent_since = None
+        self._find_seen = True      # a real sighting: the search never expires
         if self._streaks.get(self.target, 0) < self.find_persistence:
             return None
         self._said_not_visible = False

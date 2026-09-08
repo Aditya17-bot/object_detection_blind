@@ -142,6 +142,15 @@ TOOLS = (
              "the continuous walk warnings; argument on or off, omit to toggle",
              arg="onoff",
              examples=("guidance off", "guidance on", "quiet mode")),
+    # The microphone itself. Needed because a grammar-constrained recognizer
+    # cannot stay silent: it force-matches ambient sound onto a trained phrase
+    # (2026-09-09, room noise -> "find the refrigerator"), so in a room full of
+    # talking the only reliable answer is to stop listening. Asymmetric on
+    # purpose — see the executor: switching it OFF says how to get back,
+    # because the way back cannot be spoken.
+    ToolSpec("listen", "the microphone; argument on or off, omit to toggle",
+             arg="onoff",
+             examples=("microphone off", "microphone on", "stop listening")),
     ToolSpec("clock", "speak directions as clock bearings, e.g. 2 o'clock",
              examples=("clock mode",)),
     ToolSpec("zones", "speak directions as left, ahead and right",
@@ -206,8 +215,8 @@ _ARG_KEYS = ("object", "value", "target", "class", "arg", "name", "template",
 # Tools whose effect lives OUTSIDE the guidance engine and therefore needs a
 # hook. If the host does not supply one, the capability is genuinely absent and
 # we say so instead of silently doing nothing (the bug this table replaces).
-_HOOK_TOOLS = {"sonar", "guidance", "mute", "stop", "repeat", "read",
-               "photo", "ask"}
+_HOOK_TOOLS = {"sonar", "guidance", "listen", "mute", "stop", "repeat",
+               "read", "photo", "ask"}
 
 
 @dataclass(frozen=True)
@@ -808,6 +817,7 @@ class Hooks:
     executor says so out loud rather than doing nothing."""
     set_sonar: object = None      # (bool | None) -> None; None means toggle
     set_guidance: object = None   # (bool | None) -> None; None means toggle
+    set_listening: object = None  # (bool | None) -> None; None means toggle
     set_mute: object = None       # (bool) -> None
     stop: object = None           # () -> None
     repeat: object = None         # () -> str | None  (the text to say again)
@@ -817,6 +827,7 @@ class Hooks:
 
     def get(self, tool):
         return {"sonar": self.set_sonar, "guidance": self.set_guidance,
+                "listen": self.set_listening,
                 "mute": self.set_mute,
                 "stop": self.stop, "repeat": self.repeat,
                 "read": self.read_text, "photo": self.take_photo,
@@ -854,8 +865,21 @@ def execute_action(action, engine, infos, now, hooks=None):
             if arg == "on":
                 return "Walk guidance on"
             if arg == "off":
-                return "Walk guidance off. Say guidance on to restore it."
+                return ("Walk guidance off. Say guidance on, or use the "
+                        "button, to restore it.")
             return None               # toggled: the host knows which way it went
+        if tool == "listen":
+            fn(None if arg is None else arg == "on")
+            if arg == "off":
+                # The way back CANNOT be spoken — nothing is listening. This
+                # is the one control whose confirmation has to name a
+                # non-voice route out, or a user who cannot see the screen has
+                # switched off their only input and been told nothing.
+                return ("Microphone off. Swipe up and tap listen to turn it "
+                        "back on.")
+            if arg == "on":
+                return "Microphone on"
+            return None
         if tool == "mute":
             fn(arg == "on")
             # nothing is spoken when muting: the confirmation would be the last
