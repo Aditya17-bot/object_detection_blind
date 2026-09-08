@@ -434,6 +434,44 @@ prior art. Ranked by perceived strength of the novelty case.
   *provenance*, and neither drops rather than queues on the grounds that late
   guidance is unsafe.
 
+#### 4.10a Preemption with resumption: safety interrupts a read-out without destroying it *(added 2026-09-08)*
+- **The gap the first version left.** §4.10 typed messages and decided *whose
+  turn it is*. It said nothing about what happens to a task that loses its turn.
+  In the implementation the answer was: it dies. A summary or a page of OCR text
+  cut off by one "very close" warning was gone — the user had asked a question,
+  heard half an answer, and got no signal that the rest existed. Reported from
+  the 2026-09-08 class walk as the app not finishing one thing before starting
+  the next.
+- **What:** an on-demand read-out is emitted as a sequence of **chunks split at
+  sentence boundaries**, and the position in that sequence is state that
+  survives preemption. Safety still interrupts immediately and unconditionally;
+  when it finishes, the read-out **resumes**, repeating the interrupted chunk
+  from its start rather than from the word where it was cut, because half a
+  sentence is not information. A resumption whose read-out is older than a
+  staleness bound is **dropped rather than spoken late** — the same rule that
+  governs guidance, applied to the system's own deferred output.
+- **Why the boundary is the sentence.** Resuming mid-token is unintelligible;
+  restarting the whole read-out wastes the listener's time and, for a page of
+  text, is worse than losing it. The sentence is the smallest unit that is
+  independently meaningful to a listener who cannot see the text, so it is the
+  natural resumption point — and it also bounds how much is repeated.
+- **A second, subtler defect the same work fixed — self-cancellation.** The
+  platform TTS fires a *cancel* callback when an utterance is stopped, and the
+  system stops the current utterance in order to start the next one. The
+  release-on-completion signal therefore fired on the system's own interruption,
+  releasing the focus hold that had just been taken for the new message — so
+  every answer spoken while any utterance was still in flight (in continuous
+  guidance, most of them) ran **unprotected**, which is the mechanism behind the
+  originally reported symptom. The fix distinguishes a cancellation the system
+  caused, recognised by a replacement utterance following within a short window,
+  from a genuine end. Worth recording as prior-art-relevant: a completion signal
+  that cannot distinguish "finished" from "replaced" silently defeats any
+  focus-based arbitration built on top of it.
+- **Evidence:** `speech_queue.py` + `lib/logic/speech_queue.dart` (mirrored,
+  12 tests each); `speaker.dart` for the cancellation discrimination.
+  `tools/replay_timeline.py` models the channel including resumption, and
+  reports read-outs that survived an interruption.
+
 ## 5. Candidate independent claim (illustrative, non-final)
 
 > A method for assisting a visually impaired user, comprising: capturing frames
@@ -1358,3 +1396,42 @@ And a chat reply is refused outright when the question was about the user's
 SURROUNDINGS: asked "tell me what this page says", the model answered
 `{"say": "Nothing on this page."}` — the app telling a blind user their page is
 blank, on no evidence. The prompt already forbade it. Only the code stopped it.
+
+### 2026-09-08 — Preemption without loss, and a completion signal that lied
+
+Filmed a class-room walk, replayed it through the harnesses, and fixed what the
+user's own account of it named: *"in the summarize, before it finishes it says
+object detected"*. New **§4.10a** covers the result; the two findings are worth
+separating in the log because only one of them was the feature gap.
+
+**The feature gap** was that preemption had no resumption. Safety interrupting a
+read-out is correct and stays; destroying it is not. On-demand speech is now
+chunked at sentence boundaries with the position held across the interruption,
+and a resumption older than 90 s is dropped rather than spoken late.
+
+**The defect underneath it** is the one to remember. The platform's
+end-of-speech callback fires on *cancellation* as well as completion, and the
+system cancels the current utterance in order to start the next one. So every
+answer spoken while an utterance was still in flight released its own focus hold
+a few milliseconds after taking it, and then played unprotected. Continuous
+guidance speaks every few seconds, so this was the common case, not the rare
+one. Any focus-based arbitration standing on a completion signal that cannot
+tell "finished" from "replaced" is arbitrating nothing.
+
+Two dialogue-tier findings from probing the shipped `llama3.2:1b` against the
+live server the same day:
+
+- **"hello how are you" routed to `read`.** Grounding (§4.7's
+  `capability_is_grounded`, previously applied to `walk` alone) now also covers
+  `read`, `summarise` and `photo`. The justification is stronger than walk's:
+  those three **seize the camera** — they stop the detection stream and take a
+  still — so a capability invented from small talk blinds the guidance loop for
+  a couple of seconds. It is not a wrong sentence, it is a gap in perception.
+  The paraphrasable capabilities remain deliberately ungrounded.
+- **"what is around me" abstained.** A tier-0 gap, not a model failure: it is
+  one of the two phrasings people reach for before learning the word
+  "describe". Answering it deterministically costs nothing and works with the
+  laptop off. The general lesson is the one §4.7 already states from the other
+  direction — the boundary between the tiers is a *design* choice about which
+  phrasings deserve a guarantee, not a residue of what the parser happened to
+  cover.

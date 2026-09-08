@@ -2034,3 +2034,82 @@ Test counts: **465 Python / 284 Dart**, `flutter analyze` clean apart from the
   on the day is the features-page buttons rather than the mic.
 - `llama3.2:1b` still answers general knowledge poorly (abstained on "who wrote
   romeo and juliet"); `3b` is better but 6-8 s under a live frame stream.
+
+## Class-walk video + the speech defect it named (2026-09-08, later)
+
+User filmed the review room and asked for a thorough pass, singling out one
+symptom: *"in the summarize, before it finishes it says object detected ... it
+needs to be graceful"*. Clip pulled over USB to
+`test_output/class_walk_20260908.mp4` (16.8 s, 1080x1920).
+
+**The clip itself is clean.** `replay_all_features.py`: 37 frames at the
+handset's 2.2 FPS, 28 carry detections, **no anomalies**. Classes seen: chair,
+bottle, dining table, door, dustbin, person, bench, laptop — a good demo room.
+Audio through the real Vosk grammar: 1 utterance, correctly dropped as `[unk]`.
+Naming head made **0 renames** (not labelled for this room — the standing
+`LABELLING.md` job).
+
+### The defect: the focus hold released itself, every time
+
+`_say` set `_speakingTag` and then called `Speaker.say`, which begins with
+`_tts.stop()`. flutter_tts fires its **cancel** handler when a speaking
+utterance is stopped (`FlutterTtsPlugin.kt` `onStop` -> `speak.onCancel`), and
+that handler called `onDone` -> `_onSpeechDone` -> released the hold `_say` had
+just taken. In walk mode something is nearly always still speaking, so **most
+answers played with no focus protection at all** and the next routine warning
+cut into them. Speaker now tells a cancellation it CAUSED (a replacement
+utterance follows within 300 ms) from a real end, and only a real end reports
+done.
+
+⚠ Rule worth keeping: a completion signal that cannot distinguish "finished"
+from "replaced" silently defeats any arbitration built on it.
+
+### The feature gap: preemption with no resumption
+
+Safety interrupting a read-out is correct. Destroying it is not — a summary cut
+by one "very close" warning was simply gone. New `speech_queue.py` /
+`lib/logic/speech_queue.dart` (mirrored, 12 tests each): on-demand speech is
+spoken as **chunks split at sentence boundaries**, the position survives the
+interruption, and the cut chunk is repeated from its START (half a sentence is
+not information). A read-out interrupted more than 90 s ago is DROPPED rather
+than spoken late — the same rule that governs guidance.
+
+Also: summarise now says "One moment" before the server call. Measured 7.4 s
+warm / 15.5 s cold, because the summariser deliberately runs the 3b model on
+CPU (1b fabricated content — see the 09-05 note). Silence that long after a
+request reads as a dead feature.
+
+### Two dialogue-tier defects, found by probing the live server
+
+- **`hello how are you` -> `{"tool": "read"}`.** On the handset that STOPS the
+  detection stream and takes a still, so small talk blinded the guidance loop.
+  `capability_is_grounded` now covers `read`, `summarise` and `photo` as well
+  as `walk`; find/describe/check/count/recall/path stay ungrounded on purpose
+  (grounding those deletes what tier 1 is for).
+- **`what is around me` -> abstain.** Now tier 0, along with `what do you see`
+  — the two phrasings people use before they learn the word "describe". Added
+  to the registry examples so the Vosk grammar carries them; `VocabularyTest`
+  confirms every new word is in the model's lexicon.
+
+### `replay_timeline.py` now models the speech channel properly
+
+It scored find answers as ROUTINE and never released a hold before its
+estimate expired, so it over-reported drops. Now: find answers speak at
+RESPONSE under `find:<target>`, the hold ends when speech ends (mirroring
+`_onSpeechDone`), Speaker's own drop rule is reproduced, and read-outs that
+survive an interruption are reported. Room walk went from 5 reported drops to
+1 — the number the handset actually has.
+
+### State at the end of the session
+
+- Server running detached from `venv-gpu`, `--agent-model llama3.2:1b
+  --summary-model llama3.2:3b`; `/health` ok, `/infer` ~165-200 ms/frame,
+  `/agent` 0 ms grammar / ~250-530 ms tier 1. ⚠ A STALE server from the
+  previous session was found on port 5001 running **system Python with CPU
+  torch** — killed. Check the interpreter, not just `/health`.
+- APK rebuilt and installed on RZCR906FDTD. ⚠ The reinstall resets CAMERA and
+  RECORD_AUDIO grants — the phone will prompt on first launch.
+- Not yet verified ON THE HANDSET: the resumption behaviour (needs a walk where
+  a "very close" lands mid-summary) and the "One moment" line.
+- Test counts: **480 Python / 296 Dart**, `flutter analyze` clean apart from
+  the 3 pre-existing `avoid_print` infos.
