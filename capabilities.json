@@ -78,7 +78,9 @@
       "examples": [
         "describe",
         "describe scene",
-        "summary"
+        "summary",
+        "what is around me",
+        "what do you see"
       ],
       "internal": false,
       "name": "describe",

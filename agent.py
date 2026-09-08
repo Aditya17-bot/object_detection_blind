@@ -35,6 +35,7 @@ webapp.py:_on_voice_command). route() catches everything and abstains.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -96,7 +97,8 @@ TOOLS = (
              arg="class", required=True,
              examples=("find bottle", "find the door")),
     ToolSpec("describe", "one-sentence summary of everything visible now",
-             examples=("describe", "describe scene", "summary")),
+             examples=("describe", "describe scene", "summary",
+                       "what is around me", "what do you see")),
     ToolSpec("count", "how many of one object class are visible right now",
              arg="class", required=True, examples=("how many chairs",)),
     ToolSpec("recall", "where an object was last seen, after it left the view",
@@ -391,19 +393,59 @@ _WALK_GROUNDING = frozenset({
     "regular", "usual", "default",
 })
 
+# The camera capabilities are grounded for a different reason than `walk`, and
+# it is a stronger one: they SEIZE THE CAMERA. `read`, `summarise` and `photo`
+# stop the detection stream, take a still, and hold the speech channel — so a
+# capability invented from a greeting does not merely say a wrong sentence, it
+# blinds the guidance system for a couple of seconds. Measured 2026-09-08 on
+# the shipped llama3.2:1b: "hello how are you" routed to `read`.
+#
+# The paraphrase space here is small and closed, like walk's: there is no way
+# to ask for a page to be read that avoids every one of these words.
+_READ_GROUNDING = frozenset({
+    "read", "reads", "reading", "text", "say", "says", "said", "written",
+    "write", "writing", "wrote", "page", "sign", "label", "letter", "note",
+    "document", "paper", "board", "menu", "screen", "print", "printed",
+    "words", "writ",
+})
+
+_SUMMARY_GROUNDING = _READ_GROUNDING | {
+    "summarise", "summarize", "summarised", "summarized", "summary",
+    "summarising", "summarizing", "gist", "short", "shorten", "shorter",
+    "brief", "briefly", "overview", "outline", "points", "tldr", "about",
+}
+
+_PHOTO_GROUNDING = frozenset({
+    "photo", "photos", "photograph", "picture", "pictures", "pic", "snap",
+    "snapshot", "shot", "camera", "capture", "image", "selfie",
+})
+
+_GROUNDED_CAPABILITIES = {
+    "walk": _WALK_GROUNDING,
+    "read": _READ_GROUNDING,
+    "summarise": _SUMMARY_GROUNDING,
+    "photo": _PHOTO_GROUNDING,
+}
+
 
 def capability_is_grounded(spec, utterance):
     """Did the user say anything that asks for this capability at all?
 
-    Applied to `walk` only, and deliberately so. Tier 1 exists for paraphrase,
-    so demanding a shared word from every capability would delete the thing it
-    is for. `walk` is the exception on evidence, not on principle: it is the
-    model's dustbin for unintelligible input, and the set of ways to ask to go
-    back to normal is small and closed.
+    Applied to four capabilities, not to all of them, and the exclusion is the
+    design. Tier 1 exists for paraphrase, so demanding a shared word from every
+    capability would delete the thing it is for: "where is the exit" must still
+    reach `find`, and "what's around me" must still reach `describe`.
+
+    The four listed are exceptions on evidence. `walk` is the model's dustbin
+    for unintelligible input (2026-09-08 probe: four of five failures), and
+    `read`/`summarise`/`photo` take the camera away from the guidance loop, so
+    a guess costs more than a wrong sentence. All four are also cheap to
+    ground: each is asked for with a small closed set of words.
     """
-    if spec.name != "walk" or not utterance:
+    words = _GROUNDED_CAPABILITIES.get(spec.name)
+    if words is None or not utterance:
         return True
-    return any(w in _WALK_GROUNDING for w in utterance.lower().split())
+    return any(w in words for w in re.findall(r"[a-z']+", utterance.lower()))
 
 
 def validate_action(raw, utterance=None):

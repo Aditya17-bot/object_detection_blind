@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import decision
 import speech_policy
+from speech_queue import SpeechQueue
 from decision import GuidanceEngine
 from speech_policy import (CONFIRM, RESPONSE, ROUTINE, SAFETY, SpeechPolicy)
 from tools.replay_all_features import (detect, infos_from, load_models)
@@ -65,17 +66,87 @@ def run(path, fps, imgsz, name_index, out_md):
     dropped = []         # (t, reason, tag, msg)
     pending = list(SCRIPT)
 
+    # The speech CHANNEL, modelled the way Speaker actually behaves since
+    # 2026-09-08: an answer the user asked for is spoken in chunks, and safety
+    # interrupts it without destroying it — the interrupted chunk is said again
+    # when the warning is done. Before that, one warning lost a whole summary.
+    channel = {"busy_until": -1.0, "tag": None, "on_demand": False,
+               "cut": False, "queue_tag": None}
+    queue = SpeechQueue()
+    resumed = []         # (t, tag, chunk) — read-outs that survived a warning
+
+    def emit(t, msg, priority, tag, on_demand):
+        seconds = _speech_seconds(msg)
+        spoken.append((t, priority, tag, msg, seconds))
+        channel["busy_until"] = t + seconds
+        channel["tag"] = tag
+        channel["on_demand"] = on_demand
+        if priority >= RESPONSE:
+            policy.extend(tag, t, seconds * 1.5)
+        return seconds
+
+    def release_when_done(t):
+        """Mirror main.dart._onSpeechDone: the focus hold ends when the speech
+        actually ENDS, not when an estimate runs out. Without this the model
+        holds the channel for the 8 s floor after every short answer and
+        reports walk warnings as dropped that the handset would speak."""
+        if t < channel["busy_until"] or queue.has_more:
+            return
+        tag = channel["queue_tag"]
+        # find keeps its own open-ended hold: it runs until the target is
+        # located, not until it has spoken once
+        if tag and not tag.startswith("find"):
+            policy.end(tag, t)
+            channel["queue_tag"] = None
+
+    def pump(t):
+        """Speak the next chunk of a read-out once the channel is free.
+
+        The tag is the READ-OUT's, not whatever spoke last: a safety warning
+        borrows the channel, it does not take ownership of the task."""
+        if t < channel["busy_until"] or not queue.has_more:
+            return
+        chunk = queue.resume_or_drop(t)
+        if chunk is None:
+            return
+        tag = channel["queue_tag"]
+        # only a chunk that follows an INTERRUPTION is a resumption; the rest
+        # are just the next sentence of a long answer
+        if channel["cut"]:
+            resumed.append((t, tag, chunk))
+            channel["cut"] = False
+        emit(t, chunk, RESPONSE, tag, True)
+
     def say(t, msg, priority, tag, solicited):
         if not policy.allow_speech(priority, tag, t, solicited=solicited):
             dropped.append((t, f"speech gated (focus={policy.active_tag(t)})",
                             tag, msg))
             return False
-        seconds = _speech_seconds(msg)
-        # An answer owns the channel for as long as it takes to say it —
-        # main.dart._say extends the hold for exactly this reason.
+        speaking = t < channel["busy_until"]
+        if priority >= SAFETY:
+            # never gated, never delayed — but what it cuts into comes back
+            if speaking and channel["on_demand"]:
+                queue.rewind()
+                channel["cut"] = True
+            emit(t, msg, priority, tag, False)
+            return True
         if priority >= RESPONSE:
-            policy.extend(tag, t, seconds * 1.5)
-        spoken.append((t, priority, tag, msg, seconds))
+            queue.load(msg, now=t)
+            channel["queue_tag"] = tag
+            first = queue.take()
+            if first is None:
+                return False
+            emit(t, first, priority, tag, True)
+            return True
+        # Speaker's own rule: anything that is not on-demand and not urgent is
+        # dropped ONLY while a read-out the user asked for is playing. It is
+        # not queued behind a warning — it replaces it, because a confirmation
+        # the user just triggered arriving after the fact is worse than late.
+        if speaking and channel["on_demand"] or queue.has_more:
+            dropped.append((t, "read-out in progress", tag, msg))
+            return False
+        queue.clear()
+        emit(t, msg, priority, tag, False)
         return True
 
     idx = -1
@@ -89,6 +160,8 @@ def run(path, fps, imgsz, name_index, out_md):
         t = idx / src_fps
         h, w = frame.shape[:2]
         infos = infos_from(detect(frame, coco, custom, namer, imgsz), w, h)
+
+        release_when_done(t)
 
         # -- the user speaks -------------------------------------------
         while pending and pending[0][0] <= t:
@@ -117,11 +190,20 @@ def run(path, fps, imgsz, name_index, out_md):
                 say(t, "Reading. " + "word " * 40, RESPONSE, action, True)
 
         # -- guidance --------------------------------------------------
+        was_finding = engine.mode == "find"
+        find_tag = f"find:{engine.target}" if was_finding else None
         msg = engine.update(infos, t)
         if msg:
-            priority = SAFETY if "very close" in msg else ROUTINE
-            tag = "walk" if engine.mode == "walk" else "find"
-            say(t, msg, priority, tag, False)
+            if "very close" in msg:
+                say(t, msg, SAFETY, "walk", False)
+            elif was_finding:
+                # the engine's output IS the answer to the user's request, so
+                # it speaks at RESPONSE under the find task's own focus
+                say(t, msg, RESPONSE, find_tag, True)
+            else:
+                say(t, msg, ROUTINE, "walk", False)
+        pump(t)
+        release_when_done(t)
 
     cap.release()
 
@@ -149,6 +231,14 @@ def run(path, fps, imgsz, name_index, out_md):
     for t, reason, tag, msg in dropped:
         short = msg if len(msg) < 80 else msg[:77] + "..."
         a(f"- {t:6.1f}s  {reason:38} {tag:9} {short}")
+    a("")
+
+    a(f"## Read-outs that survived an interruption ({len(resumed)})\n")
+    if not resumed:
+        a("- none needed resuming in this clip")
+    for t, tag, chunk in resumed:
+        short = chunk if len(chunk) < 70 else chunk[:67] + "..."
+        a(f"- {t:6.1f}s  {tag:9} {short}")
     a("")
 
     a(f"## Collisions — speech starting before the previous finished "

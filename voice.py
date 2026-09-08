@@ -303,7 +303,14 @@ def parse_command(text):
         return ("mute", "off")
     if "mute" in words:
         return ("mute", "on")
-    if "describe" in words or "scene" in words or "summary" in words:
+    # "what is around me" and "what do you see" are the two phrasings people
+    # reach for before they learn the word "describe" — and tier 1 got them
+    # wrong (llama3.2:1b abstained on the first and had to be asked twice for
+    # the second), so they are answered deterministically here. No direction
+    # word, so `check` cannot claim them.
+    if ("describe" in words or "scene" in words or "summary" in words
+            or "around" in words
+            or ("see" in words and ("you" in words or "what" in words))):
         return ("describe", None)
     if "clock" in words:
         return ("clock", None)

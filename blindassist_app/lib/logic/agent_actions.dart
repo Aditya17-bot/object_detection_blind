@@ -53,7 +53,13 @@ const List<ToolSpec> kTools = [
   ToolSpec('walk', examples: ['walk mode', 'walk']),
   ToolSpec('find',
       arg: 'class', required: true, examples: ['find bottle', 'find the door']),
-  ToolSpec('describe', examples: ['describe', 'describe scene', 'summary']),
+  ToolSpec('describe', examples: [
+    'describe',
+    'describe scene',
+    'summary',
+    'what is around me',
+    'what do you see'
+  ]),
   ToolSpec('count', arg: 'class', required: true, examples: ['how many chairs']),
   ToolSpec('recall',
       arg: 'class', required: true, examples: ['where is the cup']),

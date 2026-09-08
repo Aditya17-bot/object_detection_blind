@@ -205,6 +205,47 @@ class RouterTierZeroTest(unittest.TestCase):
         self.assertEqual(result.actions, [Action("find", "bottle")])
 
 
+class CameraGroundingTest(unittest.TestCase):
+    """A capability that seizes the camera has to be NAMED, not guessed.
+
+    `read`, `summarise` and `photo` stop the detection stream and take a still,
+    so a capability invented from small talk does not merely say a wrong
+    sentence — it blinds the guidance loop for a couple of seconds. Measured on
+    the shipped llama3.2:1b (2026-09-08): "hello how are you" routed to `read`.
+
+    `walk` is grounded for the older reason: it is the model's fallback for
+    unintelligible input, and on the handset it CANCELS a search in progress.
+    """
+
+    def _route(self, tool, utterance):
+        llm = FakeLLM({"actions": [{"tool": tool}]})
+        return AgentRouter(llm=llm).route(utterance)
+
+    def test_small_talk_cannot_reach_the_camera_capabilities(self):
+        for tool in ("read", "summarise", "photo", "walk"):
+            result = self._route(tool, "hello how are you")
+            self.assertEqual(result.actions, [], tool)
+            self.assertEqual(result.source, "abstain", tool)
+
+    def test_the_real_requests_still_route(self):
+        for tool, utterance in (
+                ("read", "what does this page say"),
+                ("read", "read the label for me"),
+                ("summarise", "give me the gist of this letter"),
+                ("summarise", "summarise this"),
+                ("photo", "take a picture of this"),
+                ("photo", "grab a snapshot"),
+                ("walk", "go back to normal")):
+            result = self._route(tool, utterance)
+            self.assertEqual([a.tool for a in result.actions], [tool], utterance)
+
+    def test_no_utterance_means_no_grounding_check(self):
+        # typed input from the web UI arrives without a spoken utterance
+        for tool in ("read", "photo", "walk"):
+            self.assertTrue(
+                agent.capability_is_grounded(agent.BY_NAME[tool], None), tool)
+
+
 class ArgumentGroundingTest(unittest.TestCase):
     """The model may CHOOSE a capability. It may not INVENT its argument.
 
@@ -303,7 +344,7 @@ class RouterTierOneTest(unittest.TestCase):
         spoken when the model deliberately used the `say` channel. Loose prose
         where a tool call belongs is still an abstention."""
         llm = FakeLLM("Sure! There is a chair to your left.")
-        result = AgentRouter(llm=llm).route("what's around me")
+        result = AgentRouter(llm=llm).route("tell me what is over there")
         self.assertEqual(result.source, "abstain")
         self.assertEqual(result.actions, [])
         self.assertEqual(result.message, ASK_TEMPLATES["unknown"])
@@ -317,7 +358,7 @@ class RouterTierOneTest(unittest.TestCase):
     def test_llm_exception_abstains_and_never_propagates(self):
         # an exception here would kill the voice thread for the whole session
         llm = FakeLLM(RuntimeError("connection refused"))
-        result = AgentRouter(llm=llm).route("what's around me")
+        result = AgentRouter(llm=llm).route("tell me what is over there")
         self.assertEqual(result.source, "abstain")
         self.assertIn("unavailable", result.error)
 
@@ -330,7 +371,7 @@ class RouterTierOneTest(unittest.TestCase):
     def test_state_is_passed_to_the_model(self):
         llm = FakeLLM({"actions": [{"tool": "describe"}]})
         state = state_summary([box("chair")], GuidanceEngine(), 0.0)
-        AgentRouter(llm=llm).route("what's around", state)
+        AgentRouter(llm=llm).route("tell me what is over there", state)
         self.assertIn("chair", llm.calls[0][1])
 
 
@@ -443,7 +484,7 @@ class ExecuteResultTest(unittest.TestCase):
         find, path, check, distance) still comes from decision.py. Only a
         deliberate `say` reply is model-authored — see ChatModeTest."""
         llm = FakeLLM("There are three chairs and a large dog to your left.")
-        result = AgentRouter(llm=llm).route("what can you see")
+        result = AgentRouter(llm=llm).route("tell me what is over there")
         spoken = execute(result, GuidanceEngine(), [], 0.0, RecordingHooks())
         self.assertEqual(spoken, [ASK_TEMPLATES["unknown"]])
         self.assertNotIn("dog", " ".join(spoken))
@@ -706,7 +747,9 @@ class HelpTest(unittest.TestCase):
     def test_it_steals_nothing(self):
         # "what can you see" is a SCENE question and shares three words with
         # the help phrasings; requiring "do" or "say" is what separates them.
-        self.assertIsNone(voice.parse_command("what can you see"))
+        # It reaches describe (2026-09-08) rather than help or nothing.
+        self.assertEqual(voice.parse_command("what can you see"),
+                         ("describe", None))
         for text, expected in (("read this", ("read", None)),
                                ("find the door", ("find", "door")),
                                ("what is on my left", ("check", "left")),
@@ -719,7 +762,7 @@ class HelpTest(unittest.TestCase):
         self.assertEqual(said, agent.help_message())
 
 
-class CapabilityGroundingTest(unittest.TestCase):
+class WalkGroundingTest(unittest.TestCase):
     """`walk` is the tool a small model reaches for when it understood nothing.
 
     Measured 2026-09-08 with the shipped llama3.2:1b: four of five failures on
@@ -750,10 +793,10 @@ class CapabilityGroundingTest(unittest.TestCase):
             result = AgentRouter(llm=llm).route(text)
             self.assertEqual([a.tool for a in result.actions], ["walk"], text)
 
-    def test_only_walk_is_grounded_this_way(self):
-        # tier 1 exists FOR paraphrase, so no other capability may demand a
-        # shared word — "is the way clear" names neither "path" nor "clear
-        # path" and must still route
+    def test_paraphrasable_capabilities_are_not_grounded(self):
+        # tier 1 exists FOR paraphrase, so only walk and the three camera
+        # capabilities may demand a shared word — "am i blocked" names neither
+        # "path" nor "clear path" and must still route
         llm = FakeLLM({"actions": [{"tool": "path"}]})
         self.assertEqual(
             [a.tool for a in AgentRouter(llm=llm).route("am i blocked").actions],

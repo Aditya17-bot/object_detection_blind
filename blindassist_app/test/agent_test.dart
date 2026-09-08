@@ -353,8 +353,9 @@ void main() {
 
     test('it steals nothing', () {
       // "what can you see" is a SCENE question sharing three words with the
-      // help phrasings; requiring "do" or "say" is what separates them.
-      expect(parseCommand('what can you see'), isNull);
+      // help phrasings; requiring "do" or "say" is what separates them. It
+      // reaches describe (2026-09-08), not help and not nothing.
+      expect(parseCommand('what can you see')?.action, 'describe');
       expect(parseCommand('read this')?.action, 'read');
       expect(parseCommand('what colour is this')?.action, 'colour');
       expect(parseCommand('find the door')?.target, 'door');

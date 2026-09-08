@@ -177,9 +177,16 @@ VoiceCommand? parseCommand(String text) {
     return (action: 'mute', target: 'off');
   }
   if (words.contains('mute')) return (action: 'mute', target: 'on');
+  // "what is around me" and "what do you see" are the two phrasings people
+  // reach for before they learn the word "describe" — and tier 1 got them
+  // wrong (llama3.2:1b abstained on the first), so they are answered
+  // deterministically here. No direction word, so `check` cannot claim them.
   if (words.contains('describe') ||
       words.contains('scene') ||
-      words.contains('summary')) {
+      words.contains('summary') ||
+      words.contains('around') ||
+      (words.contains('see') &&
+          (words.contains('you') || words.contains('what')))) {
     return (action: 'describe', target: null);
   }
   if (words.contains('clock')) return (action: 'clock', target: null);
