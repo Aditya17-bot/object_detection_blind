@@ -35,6 +35,10 @@ const Map<String, String> _blurbs = {
   'zones': 'Directions as left, ahead and right.',
   'sonar': 'Beeps that pan left and right and speed up as things get closer. '
       'Earphones recommended.',
+  'guidance': 'Switches the running walk commentary off — warnings, beeps '
+      'and buzzes — while leaving everything you ask for working. For a '
+      'demonstration or a conversation. Three taps on the camera view does '
+      'the same. Resets to on when the app restarts.',
   'mute': 'Silence the voice, or bring it back.',
   'stop': 'Cut off whatever is being said right now.',
   'repeat': 'Say the last announcement again.',
@@ -53,6 +57,7 @@ class FeaturesPage extends StatefulWidget {
     this.voiceActive = false,
     this.agentReady = false,
     this.muted = false,
+    this.guidanceOn = true,
   });
 
   /// Runs a capability on the assistant screen. Same dispatcher the voice
@@ -67,6 +72,10 @@ class FeaturesPage extends StatefulWidget {
 
   final bool voiceActive;
   final bool agentReady;
+
+  /// Whether the continuous walk warnings are running. Shown on the card so
+  /// the switch reads as a state, not as a button that might do either.
+  final bool guidanceOn;
   final bool muted;
 
   @override
@@ -284,13 +293,22 @@ class _FeaturesPageState extends State<FeaturesPage> {
     // tapping them cannot run anything on its own — they read as reference.
     // `mute` does have an argument but is the one control a user must be able
     // to reach without speaking (you cannot say "unmute" over your own TTS).
-    final tappable =
-        spec.arg == null || spec.name == 'sonar' || spec.name == 'mute';
+    final tappable = spec.arg == null ||
+        spec.name == 'sonar' ||
+        spec.name == 'mute' ||
+        spec.name == 'guidance';
     return _card(
       onTap: !tappable
           ? null
-          : () => _run(spec.name,
-              spec.name == 'mute' ? (widget.muted ? 'off' : 'on') : null),
+          : () => _run(
+              spec.name,
+              switch (spec.name) {
+                'mute' => widget.muted ? 'off' : 'on',
+                // an explicit argument, never a toggle: the card says which
+                // way it will go, so it has to go that way
+                'guidance' => widget.guidanceOn ? 'off' : 'on',
+                _ => null,
+              }),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -53,8 +53,8 @@ ROUTINE = 0     # walk warnings, find position updates — droppable by design
 # stop a long read-out, or mute, even mid-task — being unable to interrupt is
 # how an assistive device becomes frightening. Never blocked when the user
 # actually said them.
-STEERING = frozenset({"walk", "find", "stop", "mute", "sonar", "clock",
-                      "zones", "repeat", "ask"})
+STEERING = frozenset({"walk", "find", "stop", "mute", "sonar", "guidance",
+                      "clock", "zones", "repeat", "ask"})
 
 # Commands that produce a spoken read-out and nothing else. These are the
 # "cluster" the user reported: individually correct, collectively noise. They

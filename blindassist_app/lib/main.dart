@@ -31,6 +31,7 @@ import 'logic/colour_naming.dart';
 import 'logic/decision.dart';
 import 'logic/object_memory.dart';
 import 'logic/position.dart';
+import 'logic/multi_tap.dart';
 import 'logic/speech_policy.dart';
 import 'logic/voice_commands.dart';
 import 'ocr.dart';
@@ -452,8 +453,12 @@ class _AssistantScreenState extends State<AssistantScreen>
       final msg = _engine.update(infos, _now());
       if (msg != null) {
         if (msg.contains('very close')) {
-          // safety: never gated, never delayed, whatever else is happening
-          _say(msg, kSafety, 'walk');
+          // Safety: never gated, never delayed, whatever else is happening —
+          // except by the guidance switch itself, because "very close" IS
+          // walk guidance. Turning the commentary off and still being shouted
+          // at would make the control useless, and the switch-off is spoken
+          // explicitly, so the user knows what they gave up.
+          if (_guidanceOn) _say(msg, kSafety, 'walk');
         } else if (wasFinding) {
           // In find mode the engine's output IS the answer to the request the
           // user made, so it speaks under the find task's own focus.
@@ -468,7 +473,7 @@ class _AssistantScreenState extends State<AssistantScreen>
           final resolved = _engine.mode != 'find';
           if (resolved) _policy.begin(findTag!, _now(), seconds: 0.1);
           _say(msg, kResponse, findTag!);
-        } else {
+        } else if (_guidanceOn) {
           _say(msg, kRoutine, 'walk');
         }
       } else if (wasFinding && _engine.mode != 'find') {
@@ -478,9 +483,12 @@ class _AssistantScreenState extends State<AssistantScreen>
 
       // sonar tracks the walking obstacle — or the searched object in find
       // mode, so the beeps lead the user to it (same rule as webapp.py)
+      // With the continuous warnings off, the beeps and buzzes go with them:
+      // they are the same commentary in another modality. Find is exempt —
+      // the user asked for that one, and the beeps are how they home in on it.
       final tracked = _engine.mode == 'find'
           ? findTarget(infos, _engine.target!)
-          : pickObstacle(infos);
+          : (_guidanceOn ? pickObstacle(infos) : null);
       if (tracked != null) {
         var level = _sonarLevel[tracked.proximity]!;
         if (_engine.mode == 'find') level = math.max(level, 1);
@@ -741,6 +749,8 @@ class _AssistantScreenState extends State<AssistantScreen>
         _speaker.stop();
       case 'repeat':
         _say(_banner, kResponse, 'repeat');
+      case 'guidance':
+        _setGuidance(command.target == null ? null : command.target == 'on');
       case 'sonar':
         if (command.target == 'on') {
           if (!_sonar.enabled) _toggleSonar();
@@ -1071,6 +1081,58 @@ class _AssistantScreenState extends State<AssistantScreen>
     _say(summary, kResponse, 'describe');
   }
 
+  // --- tap gestures -------------------------------------------------------
+  // One surface, three actions. The burst is counted and dispatched once it
+  // has settled, because onTap + onDoubleTap cannot see a third tap: a triple
+  // tap reaches them as a double plus a single and would run two capabilities.
+  final MultiTap _taps = MultiTap();
+  Timer? _tapTimer;
+
+  void _onTap() {
+    final count = _taps.tap(_now());
+    _tapTimer?.cancel();
+    _tapTimer = Timer(
+        Duration(milliseconds: (kMultiTapWindow * 1000).round() + 20), () {
+      _taps.reset();
+      switch (tapAction(count)) {
+        case 'describe':
+          _describe();
+        case 'sonar':
+          _toggleSonar();
+        case 'guidance':
+          _setGuidance(null);
+      }
+    });
+  }
+
+  // --- continuous guidance on/off ------------------------------------------
+  // Not mute: the answers to questions still speak. Not walk-vs-find: those
+  // choose WHICH continuous guidance runs. This switches the running
+  // commentary off as a whole, for a demonstration, a conversation, or sitting
+  // down — the situations where it is noise and everything on-demand is still
+  // wanted.
+  //
+  // Deliberately NOT persisted. A user who cannot see the screen must never
+  // start the app silently un-guarded because of a setting they made
+  // yesterday, so it resets to ON at every launch.
+  bool _guidanceOn = true;
+
+  void _setGuidance(bool? on) {
+    final next = on ?? !_guidanceOn;
+    if (next == _guidanceOn) return;
+    setState(() => _guidanceOn = next);
+    if (!next) {
+      _sonar.update(0, 0); // beeps are continuous guidance too
+      // The way back is spoken with the switch-off, for the same reason the
+      // mute confirmations exist: a user who cannot see the screen has no
+      // other way to discover that the warnings stopped on purpose.
+      _say('Walk guidance off. Say guidance on, or tap three times, to '
+          'restore it.', kResponse, 'guidance');
+    } else {
+      _say('Walk guidance on', kResponse, 'guidance');
+    }
+  }
+
   void _toggleSonar() {
     _sonar.toggle();
     _speaker.say(_sonar.enabled ? 'Sonar on' : 'Sonar off');
@@ -1114,6 +1176,7 @@ class _AssistantScreenState extends State<AssistantScreen>
     if (sonarWasOn) _sonar.setEnabled(false);
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => FeaturesPage(
+        guidanceOn: _guidanceOn,
         onCommand: _dispatch,
         speaker: _speaker,
         onNameChanged: (name) async {
@@ -1132,6 +1195,7 @@ class _AssistantScreenState extends State<AssistantScreen>
 
   @override
   void dispose() {
+    _tapTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     WakelockPlus.disable();
     _camera?.dispose();
@@ -1172,11 +1236,16 @@ class _AssistantScreenState extends State<AssistantScreen>
               _speaker.say(_banner, onDemand: true),
           const CustomSemanticsAction(label: 'Open the features page'):
               _openFeatures,
+          const CustomSemanticsAction(label: 'Turn walk guidance off or on'):
+              () => _setGuidance(null),
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: _describe,
-          onDoubleTap: _toggleSonar,
+          // One tap describes, two toggle the beeps, three switch the
+          // continuous warnings off or on. Counted rather than handled by
+          // onTap/onDoubleTap, which cannot see a third tap — see
+          // logic/multi_tap.dart.
+          onTap: _onTap,
           onLongPress: () => _speaker.say(_banner, onDemand: true),
           // Swipe up replaces the control row: the features page is sighted
           // chrome (demo, setup, learning the phrases), so it gets a gesture
@@ -1234,6 +1303,7 @@ class _AssistantScreenState extends State<AssistantScreen>
           children: [
             _modeChip(),
             const Spacer(),
+            if (!_guidanceOn) _miniChip(Icons.notifications_off, 'quiet'),
             if (_sonar.enabled) _miniChip(Icons.graphic_eq, 'sonar'),
             if (_speaker.muted) _miniChip(Icons.volume_off, 'muted'),
             _miniChip(_voiceActive ? Icons.mic : Icons.mic_off,

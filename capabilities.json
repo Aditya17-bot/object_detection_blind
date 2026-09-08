@@ -180,6 +180,17 @@
       "required": false
     },
     {
+      "arg": "onoff",
+      "examples": [
+        "guidance off",
+        "guidance on",
+        "quiet mode"
+      ],
+      "internal": false,
+      "name": "guidance",
+      "required": false
+    },
+    {
       "arg": null,
       "examples": [
         "clock mode"

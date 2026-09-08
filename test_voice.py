@@ -146,6 +146,44 @@ class PhotoCommandTest(unittest.TestCase):
         self.assertEqual(parse_command("read the text in the picture"),
                          ("read", None))
 
+class GuidanceSwitchTest(unittest.TestCase):
+    """Switching the continuous walk warnings off as a whole.
+
+    Added 2026-09-09 for the review demo: the running commentary is noise while
+    the user is talking to someone, and every on-demand capability is still
+    wanted. Distinct from mute (which silences the answers too).
+    """
+
+    def test_the_spoken_forms(self):
+        for text, expected in (
+                ("guidance off", ("guidance", "off")),
+                ("guidance on", ("guidance", "on")),
+                ("quiet mode", ("guidance", "off")),
+                ("pause guidance", ("guidance", "off")),
+                ("resume guidance", ("guidance", "on")),
+                ("guidance", ("guidance", None))):
+            self.assertEqual(voice.parse_command(text), expected, text)
+
+    def test_stop_walk_mode_switches_it_off_rather_than_cutting_a_sentence(self):
+        # what a user reaches for first, and it used to hit the bare "stop"
+        for text in ("stop walk mode", "stop the guidance", "stop walking"):
+            self.assertEqual(voice.parse_command(text), ("guidance", "off"),
+                             text)
+
+    def test_bare_stop_is_untouched(self):
+        # "stop" must stay instant: it is how a long OCR read is cut off
+        self.assertEqual(voice.parse_command("stop"), ("stop", None))
+        self.assertEqual(voice.parse_command("stop it"), ("stop", None))
+
+    def test_it_steals_nothing(self):
+        for text, expected in (("walk mode", ("walk", None)),
+                               ("find the door", ("find", "door")),
+                               ("mute", ("mute", "on")),
+                               ("sonar off", ("sonar", "off")),
+                               ("describe", ("describe", None))):
+            self.assertEqual(voice.parse_command(text), expected, text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

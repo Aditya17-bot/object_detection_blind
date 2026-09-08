@@ -89,6 +89,12 @@ const List<ToolSpec> kTools = [
       examples: ['what colour is this', 'what color is this', 'colour']),
   ToolSpec('light',
       examples: ['is the light on', 'how bright is it', 'is it dark here']),
+  // Continuous walk warnings, switched off as a whole. Distinct from `mute`
+  // (which silences the answers too) and from walk/find (which choose WHICH
+  // continuous guidance runs).
+  ToolSpec('guidance',
+      arg: 'onoff',
+      examples: ['guidance off', 'guidance on', 'quiet mode']),
   ToolSpec('clock', examples: ['clock mode']),
   ToolSpec('zones', examples: ['zone mode']),
   ToolSpec('sonar', arg: 'onoff', examples: ['sonar', 'sonar on', 'sonar off']),

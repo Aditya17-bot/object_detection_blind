@@ -155,8 +155,33 @@ VoiceCommand? parseCommand(String text) {
   final words = text.toLowerCase().split(RegExp(r'\s+'))
     ..removeWhere((w) => w.isEmpty);
   if (words.isEmpty) return null;
+  // "stop walk mode" / "stop the guidance" switches the continuous warnings
+  // OFF; it is not a request to cut the current sentence, and it is what a
+  // user reaches for first. The conjunction keeps bare "stop" instant.
+  if (words.contains('stop') &&
+      (words.contains('guidance') ||
+          words.contains('walk') ||
+          words.contains('walking'))) {
+    return (action: 'guidance', target: 'off');
+  }
   if (words.contains('stop')) {
     return (action: 'stop', target: null); // halt current speech
+  }
+  // The continuous warnings as a whole, BEFORE walk/find/describe: "quiet
+  // mode" and "guidance off" name no other capability, and putting it here
+  // means "guidance on" cannot be dragged elsewhere by its "on".
+  if (words.contains('guidance') || words.contains('quiet')) {
+    if (words.contains('quiet') ||
+        words.contains('off') ||
+        words.contains('pause')) {
+      return (action: 'guidance', target: 'off');
+    }
+    if (words.contains('on') ||
+        words.contains('resume') ||
+        words.contains('start')) {
+      return (action: 'guidance', target: 'on');
+    }
+    return (action: 'guidance', target: null);
   }
   if (words.contains('repeat') || words.contains('again')) {
     return (action: 'repeat', target: null); // last announcement again

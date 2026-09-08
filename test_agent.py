@@ -778,8 +778,11 @@ class WalkGroundingTest(unittest.TestCase):
     # "start walking again" is deliberately absent: "again" is a trained
     # synonym for , which tier 0 claims first. That precedence predates
     # this guard and is left alone — "again" far more often means repeat.
+    # "resume guidance" left this list on 2026-09-09: the `guidance` capability
+    # now claims it at tier 0, and that is the better reading — it restores the
+    # continuous warnings, which is what the phrase asks for.
     REAL = ["walk mode", "walk", "go back to normal mode", "switch to walking",
-            "resume guidance", "back to normal"]
+            "back to normal"]
 
     def test_junk_cannot_become_walk(self):
         for text in self.FIELD_JUNK:

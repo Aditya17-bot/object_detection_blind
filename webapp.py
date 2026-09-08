@@ -91,6 +91,7 @@ class AssistantEngine:
         # FALSE to match the page's own default — otherwise the first poll
         # would switch the beeps on for a user who never asked.
         self.sonar_on = False
+        self.guidance_on = True
         self._last_spoken = None     # for the "repeat" capability
         self.last_route = None       # which tier answered, for the status pill
         self.last_dictation = None   # last free-form utterance heard
@@ -105,6 +106,7 @@ class AssistantEngine:
             self._transcriber = Transcriber(whisper_model)
         self._hooks = agent.Hooks(
             set_sonar=self._set_sonar,
+            set_guidance=self._set_guidance,
             set_mute=lambda on: setattr(self, "muted", on),
             stop=lambda: self._speaker and self._speaker.stop(),
             repeat=lambda: self._last_spoken,
@@ -190,6 +192,13 @@ class AssistantEngine:
             self._thread.join(2.0)
         if self._speaker:
             self._speaker.close()
+
+    def _set_guidance(self, on):
+        """The continuous walk warnings as a whole. Not mute — answers to
+        questions still speak — and not walk-vs-find, which choose WHICH
+        continuous guidance runs. Deliberately not persisted: the app must
+        never start un-guarded because of yesterday's setting."""
+        self.guidance_on = (not self.guidance_on) if on is None else bool(on)
 
     def _set_sonar(self, on):
         # the beeps are synthesized in the BROWSER; the server only publishes
@@ -314,7 +323,9 @@ class AssistantEngine:
                 msg = self._engine.update(infos, t)
                 self._last_infos = infos
                 mode, target = self._engine.mode, self._engine.target
-            if msg:
+            if msg and (self.guidance_on or mode == "find"):
+                # find is exempt: the user asked for that answer. Walk warnings
+                # are the running commentary the switch exists to stop.
                 self._announce(msg, t, "guidance")
                 banner = msg
             draw_banner(frame, banner, fresh=bool(msg))

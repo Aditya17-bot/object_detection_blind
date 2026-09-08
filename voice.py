@@ -287,8 +287,24 @@ def parse_command(text):
     words = text.lower().split()
     if not words:
         return None
+    # "stop walk mode" / "stop the guidance" is a request to switch the
+    # continuous warnings OFF, not to cut the current sentence — and it is what
+    # a user reaches for first, so it is checked BEFORE the bare "stop". The
+    # conjunction keeps plain "stop" instant, which is what it is for.
+    if "stop" in words and ("guidance" in words or "walk" in words
+                            or "walking" in words):
+        return ("guidance", "off")
     if "stop" in words:            # halt current speech (e.g. a long OCR read)
         return ("stop", None)
+    # The continuous warnings as a whole. BEFORE walk/find/describe: "quiet
+    # mode" and "guidance off" name no other capability, and putting it here
+    # means "guidance on" cannot be dragged into anything else by its "on".
+    if "guidance" in words or "quiet" in words:
+        if "quiet" in words or "off" in words or "pause" in words:
+            return ("guidance", "off")
+        if "on" in words or "resume" in words or "start" in words:
+            return ("guidance", "on")
+        return ("guidance", None)
     if "repeat" in words or "again" in words:
         return ("repeat", None)    # say the last announcement again
     if "sonar" in words:           # hands-free toggle for the earphone beeps
