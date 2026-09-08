@@ -944,6 +944,12 @@ class _AssistantScreenState extends State<AssistantScreen>
         // image leaves the phone. A null reply means the laptop was
         // unreachable, and the user must be told that rather than left with
         // silence after asking for a summary.
+        // The laptop takes several seconds over a summary (the summariser
+        // deliberately runs the LARGER model, on CPU, because the small one
+        // fabricated content). Silence for that long, right after the user
+        // asked for something, reads as the feature having died — so say that
+        // work is happening. A fixed template, not a written sentence.
+        _say(askTemplates['working']!, kConfirm, tag);
         final short = await _agent?.summarise(text);
         msg = short ?? 'I could not reach the laptop to summarise it. '
             'Say read for the full text.';
