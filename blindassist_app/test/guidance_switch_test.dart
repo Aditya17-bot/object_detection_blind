@@ -70,7 +70,14 @@ void main() {
         expect(parsed?.action, 'listen', reason: c.$1);
         expect(parsed?.target, c.$2, reason: c.$1);
       }
-      expect(parseCommand('listen')?.target, isNull);
+      // A bare form turns the microphone ON, it never toggles: switching it
+      // off is the one change with no spoken way back, so it has to be asked
+      // for by name. Ambient noise force-matching the single word "listening"
+      // is what left the app deaf on the 2026-09-09 walk.
+      for (final bare in ['listen', 'listening', 'microphone']) {
+        expect(parseCommand(bare)?.action, 'listen', reason: bare);
+        expect(parseCommand(bare)?.target, 'on', reason: bare);
+      }
     });
 
     test('"stop listening" is not read as a bare stop', () {

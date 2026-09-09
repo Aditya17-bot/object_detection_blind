@@ -35,13 +35,23 @@ const double kMaxUnknownRatio = 0.5;
 
 /// Commands whose spurious activation silently changes how the app BEHAVES,
 /// with nothing a blind user could notice until the behaviour surprises them.
-/// These demand a clean recognition — no unplaceable tokens at all.
+/// Every one of these must also BE a request for that setting rather than
+/// merely contain the word — see `settingIsDeliberate`.
 ///
 /// Everything else is an action the user hears the result of immediately and
 /// can simply repeat, so the cost of a false accept is low and the cost of a
 /// false REJECT (an app that ignores you) is high. The floor is set per
 /// command for exactly that reason.
-const Set<String> kSettingCommands = {'clock', 'zones', 'sonar', 'mute'};
+///
+/// Aliased rather than re-listed: the same set is what the parser's
+/// deliberateness check reads, and a second copy is a second thing to forget.
+const Set<String> kSettingCommands = kSettingActions;
+
+/// Unplaceable tokens a REVERSIBLE setting may carry. One is a breath or a
+/// click; two means the recognizer placed only half of what it heard, which is
+/// how `[unk] [unk] clock mode` reached the toggle on the 2026-09-05 walk.
+/// Settings in [kIrreversibleSettings] allow none at all.
+const int kMaxSettingUnknowns = 1;
 
 /// One recognizer result: the words it placed in the grammar, and how many
 /// tokens it could not place at all.
@@ -77,9 +87,10 @@ Recognition parseRecognizerResult(String resultJson) {
 
 /// Should this recognizer result be acted on at all?
 ///
-/// [action] is what the parser made of it, or null if it made nothing. The
-/// threshold depends on it: see [kSettingCommands].
-bool recognitionIsUsable(Recognition r, {String? action}) {
+/// [action] and [target] are what the parser made of it, or null if it made
+/// nothing. The threshold depends on both: see [kSettingCommands] and
+/// [kIrreversibleSettings].
+bool recognitionIsUsable(Recognition r, {String? action, String? target}) {
   if (r.text.isEmpty) return false;
   // One request names one thing and asks for one capability, whatever the
   // unknown ratio says — and this is precisely the case the ratio cannot see,
@@ -88,11 +99,25 @@ bool recognitionIsUsable(Recognition r, {String? action}) {
   // "describe light left" from describing.
   if (!looksLikeOneRequest(r.text)) return false;
   if (action != null && kSettingCommands.contains(action)) {
-    // Clean recognition is necessary but NOT sufficient: ambient speech can be
+    // A clean recognition is not sufficient on its own: ambient speech can be
     // placed on the grammar with total confidence and still contain the word.
     // The utterance also has to be a plain request for this setting — see
-    // settingIsDeliberate.
-    return r.unknownCount == 0 && settingIsDeliberate(action, r.text);
+    // settingIsDeliberate, which is the guard that actually rejects
+    // "is mute womans" and "clock plants".
+    if (!settingIsDeliberate(action, r.text)) return false;
+    // A setting the user can simply say again tolerates ONE stray token — a
+    // breath or a click at the edge of the utterance. It does not tolerate
+    // two: `[unk] [unk] clock mode` is the recognizer placing half of what it
+    // heard, and that exact result is the "randomly says clock mode" of the
+    // 2026-09-05 walk. Demanding zero, which is what shipped, went too far the
+    // other way: Vosk attaches a stray token to most short utterances, so on
+    // the 2026-09-09 walk a deliberate "sonar on" was dropped for "1
+    // unplaceable, 2 placed" and the toggles were unusable by voice.
+    final allowed =
+        target != null && kIrreversibleSettings.contains((action, target))
+            ? 0
+            : kMaxSettingUnknowns;
+    return r.unknownCount <= allowed;
   }
   return r.unknownRatio <= kMaxUnknownRatio;
 }
@@ -269,7 +294,8 @@ class VoiceListener {
     // MATCHED command went straight to execution, and with a grammar-
     // constrained recognizer a match is not evidence that anyone spoke.
     final command = parseCommand(text);
-    if (!recognitionIsUsable(heard, action: command?.action)) {
+    if (!recognitionIsUsable(heard,
+        action: command?.action, target: command?.target)) {
       noiseDropped++;
       _log(text,
           'dropped: noise (${heard.unknownCount} unplaceable, '

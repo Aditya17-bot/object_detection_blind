@@ -91,10 +91,12 @@ void main() {
       expect(recognitionIsUsable(r, action: 'clock'), isFalse);
     });
 
-    test('one stray token is enough to reject a toggle', () {
+    test('one stray token does NOT reject a reversible toggle', () {
+      // The 2026-09-09 walk: a deliberate "sonar on" was dropped for "1
+      // unplaceable, 2 placed". Vosk attaches a stray token to most short
+      // utterances, so demanding zero made the toggles unusable by voice.
       final r = parseRecognizerResult(result('[unk] sonar on'));
-      expect(recognitionIsUsable(r, action: 'sonar'), isFalse);
-      // ...while the same shape is fine for an action
+      expect(recognitionIsUsable(r, action: 'sonar', target: 'on'), isTrue);
       expect(recognitionIsUsable(r, action: 'find'), isTrue);
     });
 
@@ -104,6 +106,30 @@ void main() {
         expect(recognitionIsUsable(r, action: t), isTrue,
             reason: 'deliberate "$t" must not be blocked');
       }
+    });
+
+    test('the settings that cannot be undone by voice allow no stray token',
+        () {
+      // With the microphone off nothing is listening for the way back, and
+      // over the app's own TTS "unmute" cannot be said at all.
+      for (final c in [('listen', 'off'), ('mute', 'on')]) {
+        final dirty = parseRecognizerResult(result('[unk] microphone ${c.$2}'));
+        expect(recognitionIsUsable(dirty, action: c.$1, target: c.$2), isFalse,
+            reason: '${c.$1} ${c.$2}');
+      }
+      final clean = parseRecognizerResult(result('microphone off'));
+      expect(recognitionIsUsable(clean, action: 'listen', target: 'off'),
+          isTrue);
+    });
+
+    test('the field failure: a lone forced "listening" cannot switch the '
+        'microphone off', () {
+      // 2026-09-09, 20:33:02 — ambient noise placed the single word
+      // "listening" and the bare form toggled the microphone off. The app was
+      // deaf for the rest of the session and there was no spoken way back.
+      final parsed = parseCommand('listening');
+      expect(parsed?.action, 'listen');
+      expect(parsed?.target, 'on', reason: 'never off, and never a toggle');
     });
   });
 }

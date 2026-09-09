@@ -202,8 +202,34 @@ class MicrophoneSwitchTest(unittest.TestCase):
                                ("microphone on", ("listen", "on")),
                                ("stop listening", ("listen", "off")),
                                ("start listening", ("listen", "on")),
-                               ("listen", ("listen", None))):
+                               # A bare form turns the microphone ON, it never
+                               # toggles: switching it off is the one change
+                               # with no spoken way back, so it has to be asked
+                               # for by name. Ambient noise force-matching the
+                               # single word "listening" is what left the app
+                               # deaf on the 2026-09-09 walk.
+                               ("listen", ("listen", "on")),
+                               ("listening", ("listen", "on")),
+                               ("microphone", ("listen", "on"))):
             self.assertEqual(voice.parse_command(text), expected, text)
+
+    def test_the_microphone_is_a_setting_and_must_be_deliberate(self):
+        # It was not one until 2026-09-09, which is how a lone force-matched
+        # "listening" reached the switch — the most destructive control in the
+        # app was the only one skipping the deliberateness check.
+        self.assertIn("listen", voice.SETTING_ACTIONS)
+        self.assertTrue(voice.setting_is_deliberate("listen", "microphone off"))
+        self.assertTrue(voice.setting_is_deliberate("listen", "stop listening"))
+        for noise in ("chair listening bed", "listening to the door",
+                      "many plant microphone"):
+            self.assertFalse(voice.setting_is_deliberate("listen", noise),
+                             noise)
+
+    def test_switching_the_microphone_off_is_irreversible_by_voice(self):
+        self.assertIn(("listen", "off"), voice.IRREVERSIBLE_SETTINGS)
+        self.assertIn(("mute", "on"), voice.IRREVERSIBLE_SETTINGS)
+        # ...and the way back is not, so it must never carry that flag
+        self.assertNotIn(("listen", "on"), voice.IRREVERSIBLE_SETTINGS)
 
     def test_stop_listening_is_not_read_as_a_bare_stop(self):
         # "stop listening" contains "stop"; the microphone rule runs first

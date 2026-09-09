@@ -167,12 +167,13 @@ VoiceCommand? parseCommand(String text) {
         words.contains('quiet')) {
       return (action: 'listen', target: 'off');
     }
-    if (words.contains('on') ||
-        words.contains('start') ||
-        words.contains('resume')) {
-      return (action: 'listen', target: 'on');
-    }
-    return (action: 'listen', target: null);
+    // A bare "listen" / "listening" / "microphone" turns the microphone ON, it
+    // never toggles. Switching it off is the one change with no spoken way
+    // back, so it has to be ASKED for by name: on the 2026-09-09 walk ambient
+    // noise force-matched the single word "listening", the bare form toggled,
+    // and the app was deaf for the rest of the session with nothing in its own
+    // logs after the toggle. Turning on something already on costs nothing.
+    return (action: 'listen', target: 'on');
   }
   // "stop walk mode" / "stop the guidance" switches the continuous warnings
   // OFF; it is not a request to cut the current sentence, and it is what a
@@ -411,13 +412,28 @@ bool namesMultipleObjects(String text) => namedClasses(text).length > 1;
 ///
 /// So a setting command must BE a setting phrase, not merely contain one.
 /// Mirror of voice.setting_is_deliberate.
-const Set<String> kSettingActions = {'mute', 'sonar', 'clock', 'zones'};
+const Set<String> kSettingActions = {
+  'mute', 'sonar', 'clock', 'zones', 'listen'
+};
 
 const Map<String, Set<String>> _settingVocab = {
   'mute': {'mute', 'unmute', 'voice', 'sound', 'speak', 'on', 'off', 'mode'},
   'sonar': {'sonar', 'on', 'off', 'mode'},
   'clock': {'clock', 'mode', 'on', 'off'},
   'zones': {'zone', 'zones', 'mode', 'on', 'off'},
+  'listen': {'microphone', 'listen', 'listening', 'mic', 'on', 'off', 'stop',
+    'start', 'pause', 'resume', 'quiet', 'mode'},
+};
+
+/// The settings above are all reversible by voice, so a false accept costs one
+/// repeated sentence. These two are not: with the microphone off nothing is
+/// listening for the way back, and over the app's own TTS "unmute" cannot be
+/// said (it is not even in the model's vocabulary — see [kUnhearableWords]).
+/// They get the strictest floor the recognizer can offer — see
+/// `recognitionIsUsable`. Mirror of voice.IRREVERSIBLE_SETTINGS.
+const Set<(String, String)> kIrreversibleSettings = {
+  ('listen', 'off'),
+  ('mute', 'on'),
 };
 
 /// Politeness and articles a person really does put around a bare command.

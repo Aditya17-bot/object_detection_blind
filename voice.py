@@ -201,7 +201,7 @@ def names_multiple_objects(text):
 #
 # So a setting command must BE a setting phrase, not merely contain one: every
 # word has to come from that command's own vocabulary or this filler list.
-SETTING_ACTIONS = frozenset({"mute", "sonar", "clock", "zones"})
+SETTING_ACTIONS = frozenset({"mute", "sonar", "clock", "zones", "listen"})
 
 _SETTING_VOCAB = {
     "mute": frozenset({"mute", "unmute", "voice", "sound", "speak", "on",
@@ -209,7 +209,17 @@ _SETTING_VOCAB = {
     "sonar": frozenset({"sonar", "on", "off", "mode"}),
     "clock": frozenset({"clock", "mode", "on", "off"}),
     "zones": frozenset({"zone", "zones", "mode", "on", "off"}),
+    "listen": frozenset({"microphone", "listen", "listening", "mic", "on",
+                         "off", "stop", "start", "pause", "resume", "quiet",
+                         "mode"}),
 }
+
+# The settings above are all reversible by voice, so a false accept costs one
+# repeated sentence. These two are not: with the microphone off nothing is
+# listening for the way back, and over the app's own TTS "unmute" cannot be
+# said (it is not even in the model's vocabulary — see UNHEARABLE_WORDS).
+# They get the strictest floor the recognizer can offer.
+IRREVERSIBLE_SETTINGS = frozenset({("listen", "off"), ("mute", "on")})
 
 # Politeness and articles a person really does put around a bare command.
 # Deliberately short: every word added here is a word ambient speech is
@@ -294,9 +304,14 @@ def parse_command(text):
         if ("off" in words or "stop" in words or "pause" in words
                 or "quiet" in words):
             return ("listen", "off")
-        if "on" in words or "start" in words or "resume" in words:
-            return ("listen", "on")
-        return ("listen", None)
+        # A bare "listen" / "listening" / "microphone" turns the microphone ON,
+        # it never toggles. Switching it off is the one change with no spoken
+        # way back, so it has to be ASKED for by name: on the 2026-09-09 walk
+        # ambient noise force-matched the single word "listening", the bare
+        # form toggled, and the app was deaf for the rest of the session with
+        # nothing in its own logs after the toggle. Turning on something that
+        # is already on costs nothing.
+        return ("listen", "on")
     # "stop walk mode" / "stop the guidance" is a request to switch the
     # continuous warnings OFF, not to cut the current sentence — and it is what
     # a user reaches for first, so it is checked BEFORE the bare "stop". The
