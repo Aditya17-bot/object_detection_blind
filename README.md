@@ -15,6 +15,21 @@ We worked together to build an assistive object-detection system designed to hel
 
 Everything runs on the machine. No cloud, no API keys, no account. Speech recognition, object detection and the language model that handles free-form questions are all local.
 
+**[Try it in your browser](https://huggingface.co/spaces/aditya34587654/blindassist)**: the phone app's two models and decision rules, running locally in the page (`space/`). Nothing is uploaded.
+
+## Screenshots
+
+The Android app (`blindassist_app/`). The yellow card is what it says out loud; boxes are coloured by proximity.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/walk_suitcase.jpg" width="200" alt="Walk mode warning: suitcase very close at 12 o'clock, move slightly right"><br><sub><b>Walk</b>: warns and says which side is freer</sub></td>
+    <td align="center"><img src="docs/screenshots/walk_desk.jpg" width="200" alt="Desk with laptop, bottle and potted plant boxed with direction and proximity"><br><sub><b>Walk</b>: direction and proximity per object</sub></td>
+    <td align="center"><img src="docs/screenshots/colour_book.jpg" width="200" alt="Colour check naming a blue book cover"><br><sub><b>Colour</b>: names the colour in front of the camera</sub></td>
+    <td align="center"><img src="docs/screenshots/read_handwriting.jpg" width="200" alt="Read mode on the handwriting 'My Name is Adi'"><br><sub><b>Read</b>: on-device OCR, even on handwriting</sub></td>
+  </tr>
+</table>
+
 ---
 
 ## What it does

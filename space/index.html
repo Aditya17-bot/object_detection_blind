@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="BlindAssist: a camera that says which obstacle matters and where. Runs in your browser; nothing is uploaded.">
+  <title>BlindAssist</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#say">Skip to what BlindAssist says</a>
+
+  <header class="top">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="5" fill="currentColor"/><path d="M16 4a12 12 0 0 1 12 12M16 9a7 7 0 0 1 7 7M16 28A12 12 0 0 1 4 16M16 23a7 7 0 0 1-7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <span>BlindAssist</span>
+    </div>
+    <a class="gh" href="https://github.com/Aditya17-bot/object_detection_blind" target="_blank" rel="noopener">Source on GitHub</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>A camera that says <em>what matters</em>.</h1>
+      <p>Point it at a room. Two YOLO models find obstacles, work out which way they are and how close, and the same decision rules as the Android app pick the one sentence worth saying aloud. Everything runs in this browser tab. No photo leaves your device.</p>
+    </section>
+
+    <section class="workspace">
+      <div class="stage-col">
+        <div class="stage" id="stage" tabindex="0" aria-label="Photo. Drop an image here, or use the buttons below.">
+          <canvas id="canvas" aria-hidden="true"></canvas>
+          <video id="video" playsinline muted aria-hidden="true"></video>
+          <div class="placeholder" id="placeholder">
+            <p class="ph-title">Drop a photo here</p>
+            <p class="ph-sub">or choose one of the examples below</p>
+          </div>
+          <div class="loading" id="loading" role="status">
+            <p id="loading-text">Loading models…</p>
+            <div class="bar"><div class="fill" id="loading-fill"></div></div>
+          </div>
+        </div>
+
+        <div class="inputs">
+          <label class="btn">
+            <input type="file" id="file" accept="image/*" hidden>
+            <span>Upload photo</span>
+          </label>
+          <button class="btn" id="camera" type="button" aria-pressed="false">Live camera</button>
+        </div>
+
+        <div class="examples" role="group" aria-label="Example photos">
+          <button type="button" class="ex" data-src="examples/classroom_desks.jpg" data-mode="find" data-target="bottle"><img src="examples/classroom_desks.jpg" alt="Classroom desks with a bottle"><span>Find a bottle</span></button>
+          <button type="button" class="ex" data-src="examples/wardrobe_close.jpg" data-mode="walk"><img src="examples/wardrobe_close.jpg" alt="A wooden wardrobe door filling the view"><span>Walk: very close</span></button>
+          <button type="button" class="ex" data-src="examples/classroom_door.jpg" data-mode="walk"><img src="examples/classroom_door.jpg" alt="Classroom with an open door on the left"><span>Walk: path clear</span></button>
+          <button type="button" class="ex" data-src="examples/hostel_doors.jpg" data-mode="describe"><img src="examples/hostel_doors.jpg" alt="Hostel room with a wardrobe and a door"><span>Describe</span></button>
+        </div>
+      </div>
+
+      <div class="panel-col">
+        <div class="say-card">
+          <p class="say-label">BlindAssist says</p>
+          <p class="say" id="say" aria-live="assertive" aria-atomic="true">—</p>
+          <div class="say-meta">
+            <span id="timing"></span>
+            <label class="toggle"><input type="checkbox" id="speak" checked> Speak aloud</label>
+          </div>
+        </div>
+
+        <fieldset class="modes">
+          <legend>Mode</legend>
+          <label><input type="radio" name="mode" value="walk" checked><span><b>Walk</b>Warn about what is in the way</span></label>
+          <label><input type="radio" name="mode" value="find"><span><b>Find</b>Locate one object</span></label>
+          <label><input type="radio" name="mode" value="describe"><span><b>Describe</b>Everything in view</span></label>
+        </fieldset>
+
+        <label class="target" id="target-wrap" hidden>
+          <span>Find what?</span>
+          <select id="target"></select>
+        </label>
+
+        <div class="dets">
+          <p class="dets-head">Detections <span id="det-count"></span></p>
+          <ol id="det-list"></ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="how">
+      <div>
+        <h2>Position</h2>
+        <p>Each box becomes a clock bearing (12 o'clock is straight ahead) and a proximity bucket. Thresholds are per class, so a "close" bottle is a far smaller box than a "close" person.</p>
+      </div>
+      <div>
+        <h2>Decision</h2>
+        <p>Walk mode only speaks about obstacles that are close or very close, and says which side is freer. Low-confidence names are spoken as "obstacle" rather than risk a wrong noun.</p>
+      </div>
+      <div>
+        <h2>Two models, one answer</h2>
+        <p>A COCO YOLOv8n plus a fine-tune for doors, which COCO lacks. Overlapping boxes from the two are merged by IoU, so one object is never announced under two names.</p>
+      </div>
+    </section>
+
+    <p class="fine">A still-image demo of the Android app's pipeline; the app adds persistence and cooldown across frames, offline voice commands, sonar and OCR. Distances are rough estimates from box height. Not a safety device.</p>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
